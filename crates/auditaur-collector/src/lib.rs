@@ -3,4 +3,4 @@ pub mod exporter_sqlite;
 pub mod receiver;
 pub mod retention;
 
-pub const SQLITE_SCHEMA_VERSION: i64 = 1;
+pub use exporter_sqlite::SQLITE_SCHEMA_VERSION;

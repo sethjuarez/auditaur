@@ -83,4 +83,14 @@ impl TelemetrySource {
             Self::ThirdPartyOtel => "third_party_otel",
         }
     }
+
+    pub fn from_storage(value: &str) -> Self {
+        match value {
+            "frontend" => Self::Frontend,
+            "backend" => Self::Backend,
+            "plugin" => Self::Plugin,
+            "third_party_otel" => Self::ThirdPartyOtel,
+            _ => Self::ThirdPartyOtel,
+        }
+    }
 }

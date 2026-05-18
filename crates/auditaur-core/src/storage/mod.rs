@@ -13,3 +13,22 @@ pub trait TelemetryStore {
     fn insert_span(&self, span: &SpanRecord) -> Result<(), StorageError>;
     fn insert_frontend_error(&self, error: &FrontendError) -> Result<(), StorageError>;
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogQuery {
+    pub session_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpanQuery {
+    pub session_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrontendErrorQuery {
+    pub session_id: Option<String>,
+    pub limit: Option<usize>,
+}
