@@ -5,6 +5,7 @@ import { instrumentErrors } from './errors';
 import { instrumentedEmit, instrumentedEmitTo, instrumentedListen } from './events';
 import { AuditaurExporter } from './exporter';
 import { instrumentedInvoke } from './invoke';
+import { createAuditaurSpanExporter } from './otel';
 import type { AuditaurClient, AuditaurFrontendConfig } from './types';
 
 export type { AuditaurClient, AuditaurFrontendConfig } from './types';
@@ -50,6 +51,9 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
         return instrumentedListen<T>(exporter, event, handler, maxPayloadBytes, captureFullPayloads);
       }
       return tauriListen<T>(event, handler);
+    },
+    createOpenTelemetrySpanExporter() {
+      return createAuditaurSpanExporter({ exporter });
     },
     flush() {
       return exporter.flush();

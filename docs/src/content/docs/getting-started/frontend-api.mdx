@@ -35,9 +35,31 @@ The returned client exposes:
 | `invoke(command, args)` | Wraps Tauri command calls in client spans. |
 | `emit(event, payload)` / `emitTo(target, event, payload)` | Records event emit spans. |
 | `listen(event, handler)` | Records event receive spans. |
+| `createOpenTelemetrySpanExporter()` | Returns a span exporter that can be attached to an existing OpenTelemetry JS tracer provider. |
 | `flush()` | Writes the current batch immediately. |
 | `shutdown()` | Removes console/error hooks and flushes pending telemetry. |
 
 Console and error instrumentation are enabled by default. Full payload capture is disabled by default; payload summaries and recursive key-based redaction help reduce accidental secret capture.
 
-The current package emits Auditaur's OTEL-shaped records directly. It preserves trace/span ids and maps frontend invokes/events into SQLite spans plus Tauri-specific rows, but it does not yet use `@opentelemetry/api` internally.
+The frontend invoke/event wrappers emit Auditaur's OTEL-shaped records directly and map them into SQLite spans plus Tauri-specific rows.
+
+To sink spans emitted through an existing OpenTelemetry JS tracer provider, attach the Auditaur exporter as another span processor:
+
+```powershell
+npm install @opentelemetry/api @opentelemetry/sdk-trace-base
+```
+
+```ts
+import { BasicTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { initAuditaur } from '@auditaur/api';
+
+const auditaur = await initAuditaur({ serviceName: 'my-tauri-app' });
+
+const provider = new BasicTracerProvider({
+  spanProcessors: [
+    new SimpleSpanProcessor(auditaur.createOpenTelemetrySpanExporter()),
+  ],
+});
+```
+
+If your app already creates a provider, add the span processor to that existing provider configuration instead of installing another global provider. `SimpleSpanProcessor` is usually enough because Auditaur batches before calling the Tauri plugin. The exporter preserves OpenTelemetry trace/span ids, span kind/status, instrumentation scope, resource attributes, events, and links in the existing SQLite span mapping. Metrics, logs from the OpenTelemetry logs SDK, and automatic instrumentation setup are still planned.

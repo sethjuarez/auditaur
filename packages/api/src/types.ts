@@ -1,3 +1,5 @@
+import type { OpenTelemetrySpanExporter } from './otel';
+
 export interface AuditaurFrontendConfig {
   serviceName: string;
   serviceVersion?: string;
@@ -16,6 +18,7 @@ export interface AuditaurClient {
   emit(event: string, payload?: unknown): Promise<void>;
   emitTo(target: string, event: string, payload?: unknown): Promise<void>;
   listen<T>(event: string, handler: (event: AuditaurEvent<T>) => void): Promise<() => void>;
+  createOpenTelemetrySpanExporter(): OpenTelemetrySpanExporter;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
 }
