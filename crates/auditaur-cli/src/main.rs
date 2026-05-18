@@ -76,6 +76,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Mcp,
 }
 
 fn main() -> Result<()> {
@@ -110,5 +111,6 @@ fn main() -> Result<()> {
             session,
             json,
         } => commands::read::trace(&db, session, trace_id, json),
+        Command::Mcp => mcp::run(),
     }
 }
