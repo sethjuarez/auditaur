@@ -66,6 +66,7 @@ dependencies = [
  "auditaur-collector",
  "auditaur-core",
  "clap",
+ "serde",
  "serde_json",
  "tempfile",
 ]

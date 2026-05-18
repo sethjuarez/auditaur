@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
     pub service_name: String,
@@ -15,6 +16,7 @@ pub struct Session {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LogRecord {
     pub session_id: String,
     pub timestamp_unix_nanos: i64,
@@ -32,6 +34,7 @@ pub struct LogRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SpanRecord {
     pub session_id: String,
     pub trace_id: String,
@@ -50,6 +53,7 @@ pub struct SpanRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendError {
     pub session_id: String,
     pub timestamp_unix_nanos: i64,

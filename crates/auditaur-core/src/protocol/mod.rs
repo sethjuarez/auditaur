@@ -14,3 +14,15 @@ pub struct DoctorCheck {
     pub ok: bool,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceSummary {
+    pub trace_id: String,
+    pub root_span_name: Option<String>,
+    pub start_time_unix_nanos: Option<i64>,
+    pub duration_unix_nanos: Option<i64>,
+    pub status_code: Option<String>,
+    pub span_count: usize,
+    pub error_count: usize,
+}

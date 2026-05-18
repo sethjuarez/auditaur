@@ -17,6 +17,7 @@ pub trait TelemetryStore {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LogQuery {
     pub session_id: Option<String>,
+    pub trace_id: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -30,5 +31,6 @@ pub struct SpanQuery {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FrontendErrorQuery {
     pub session_id: Option<String>,
+    pub trace_id: Option<String>,
     pub limit: Option<usize>,
 }

@@ -1,5 +1,6 @@
 use auditaur_core::{
     model::{FrontendError, LogRecord, Session, SpanRecord, TelemetrySource},
+    protocol::TraceSummary,
     storage::{FrontendErrorQuery, LogQuery, SpanQuery, TelemetryStore},
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -224,14 +225,28 @@ impl SqliteStore {
 
     pub fn list_logs(&self, query: &LogQuery) -> Result<Vec<LogRecord>> {
         let limit = bounded_limit(query.limit, 200);
-        if let Some(session_id) = &query.session_id {
-            let mut stmt = self.conn.prepare(LOGS_SELECT_WITH_SESSION)?;
-            let logs = collect_rows(stmt.query_map(params![session_id, limit], map_log)?);
-            logs
-        } else {
-            let mut stmt = self.conn.prepare(LOGS_SELECT)?;
-            let logs = collect_rows(stmt.query_map(params![limit], map_log)?);
-            logs
+        match (&query.session_id, &query.trace_id) {
+            (Some(session_id), Some(trace_id)) => {
+                let mut stmt = self.conn.prepare(LOGS_SELECT_WITH_SESSION_AND_TRACE)?;
+                let logs =
+                    collect_rows(stmt.query_map(params![session_id, trace_id, limit], map_log)?);
+                logs
+            }
+            (Some(session_id), None) => {
+                let mut stmt = self.conn.prepare(LOGS_SELECT_WITH_SESSION)?;
+                let logs = collect_rows(stmt.query_map(params![session_id, limit], map_log)?);
+                logs
+            }
+            (None, Some(trace_id)) => {
+                let mut stmt = self.conn.prepare(LOGS_SELECT_WITH_TRACE)?;
+                let logs = collect_rows(stmt.query_map(params![trace_id, limit], map_log)?);
+                logs
+            }
+            (None, None) => {
+                let mut stmt = self.conn.prepare(LOGS_SELECT)?;
+                let logs = collect_rows(stmt.query_map(params![limit], map_log)?);
+                logs
+            }
         }
     }
 
@@ -262,17 +277,53 @@ impl SqliteStore {
         }
     }
 
+    pub fn list_trace_summaries(
+        &self,
+        session_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<TraceSummary>> {
+        let limit = bounded_limit(limit, 100);
+        if let Some(session_id) = session_id {
+            let mut stmt = self.conn.prepare(TRACE_SUMMARIES_WITH_SESSION)?;
+            let summaries =
+                collect_rows(stmt.query_map(params![session_id, limit], map_trace_summary)?);
+            summaries
+        } else {
+            let mut stmt = self.conn.prepare(TRACE_SUMMARIES)?;
+            let summaries = collect_rows(stmt.query_map(params![limit], map_trace_summary)?);
+            summaries
+        }
+    }
+
     pub fn list_frontend_errors(&self, query: &FrontendErrorQuery) -> Result<Vec<FrontendError>> {
         let limit = bounded_limit(query.limit, 200);
-        if let Some(session_id) = &query.session_id {
-            let mut stmt = self.conn.prepare(FRONTEND_ERRORS_SELECT_WITH_SESSION)?;
-            let errors =
-                collect_rows(stmt.query_map(params![session_id, limit], map_frontend_error)?);
-            errors
-        } else {
-            let mut stmt = self.conn.prepare(FRONTEND_ERRORS_SELECT)?;
-            let errors = collect_rows(stmt.query_map(params![limit], map_frontend_error)?);
-            errors
+        match (&query.session_id, &query.trace_id) {
+            (Some(session_id), Some(trace_id)) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(FRONTEND_ERRORS_SELECT_WITH_SESSION_AND_TRACE)?;
+                let errors = collect_rows(
+                    stmt.query_map(params![session_id, trace_id, limit], map_frontend_error)?,
+                );
+                errors
+            }
+            (Some(session_id), None) => {
+                let mut stmt = self.conn.prepare(FRONTEND_ERRORS_SELECT_WITH_SESSION)?;
+                let errors =
+                    collect_rows(stmt.query_map(params![session_id, limit], map_frontend_error)?);
+                errors
+            }
+            (None, Some(trace_id)) => {
+                let mut stmt = self.conn.prepare(FRONTEND_ERRORS_SELECT_WITH_TRACE)?;
+                let errors =
+                    collect_rows(stmt.query_map(params![trace_id, limit], map_frontend_error)?);
+                errors
+            }
+            (None, None) => {
+                let mut stmt = self.conn.prepare(FRONTEND_ERRORS_SELECT)?;
+                let errors = collect_rows(stmt.query_map(params![limit], map_frontend_error)?);
+                errors
+            }
         }
     }
 }
@@ -351,7 +402,7 @@ fn parse_optional_json(value: Option<String>) -> rusqlite::Result<Option<Value>>
 
 fn bounded_limit(limit: Option<usize>, default_limit: i64) -> i64 {
     limit
-        .map(|limit| limit.min(1_000) as i64)
+        .map(|limit| i64::try_from(limit).unwrap_or(i64::MAX))
         .unwrap_or(default_limit)
 }
 
@@ -431,6 +482,26 @@ fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     })
 }
 
+fn map_trace_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TraceSummary> {
+    let start_time_unix_nanos: Option<i64> = row.get(2)?;
+    let end_time_unix_nanos: Option<i64> = row.get(3)?;
+    let duration_unix_nanos = start_time_unix_nanos
+        .zip(end_time_unix_nanos)
+        .map(|(start, end)| end.saturating_sub(start).max(0));
+    let span_count: i64 = row.get(4)?;
+    let error_count: i64 = row.get(5)?;
+
+    Ok(TraceSummary {
+        trace_id: row.get(0)?,
+        root_span_name: row.get(1)?,
+        start_time_unix_nanos,
+        duration_unix_nanos,
+        status_code: row.get(6)?,
+        span_count: span_count.max(0) as usize,
+        error_count: error_count.max(0) as usize,
+    })
+}
+
 const REQUIRED_TABLES: &[&str] = &[
     "schema_migrations",
     "sessions",
@@ -463,6 +534,16 @@ const LOGS_SELECT_WITH_SESSION: &str = "SELECT session_id, timestamp_unix_nanos,
     span_id, scope_name, scope_version, attributes_json, source FROM logs WHERE session_id = ?1
     ORDER BY timestamp_unix_nanos DESC LIMIT ?2";
 
+const LOGS_SELECT_WITH_TRACE: &str = "SELECT session_id, timestamp_unix_nanos,
+    observed_timestamp_unix_nanos, severity_text, severity_number, body, body_json, trace_id,
+    span_id, scope_name, scope_version, attributes_json, source FROM logs WHERE trace_id = ?1
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?2";
+
+const LOGS_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, timestamp_unix_nanos,
+    observed_timestamp_unix_nanos, severity_text, severity_number, body, body_json, trace_id,
+    span_id, scope_name, scope_version, attributes_json, source FROM logs
+    WHERE session_id = ?1 AND trace_id = ?2 ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
+
 const SPANS_SELECT: &str = "SELECT session_id, trace_id, span_id, parent_span_id, name, kind,
     start_time_unix_nanos, end_time_unix_nanos, status_code, status_message, scope_name,
     scope_version, attributes_json, source FROM spans ORDER BY start_time_unix_nanos DESC LIMIT ?1";
@@ -490,6 +571,76 @@ const FRONTEND_ERRORS_SELECT_WITH_SESSION: &str = "SELECT session_id, timestamp_
     message, stack, filename, line_number, column_number, error_type, trace_id, span_id,
     window_label, attributes_json FROM frontend_errors WHERE session_id = ?1
     ORDER BY timestamp_unix_nanos DESC LIMIT ?2";
+
+const FRONTEND_ERRORS_SELECT_WITH_TRACE: &str = "SELECT session_id, timestamp_unix_nanos,
+    message, stack, filename, line_number, column_number, error_type, trace_id, span_id,
+    window_label, attributes_json FROM frontend_errors WHERE trace_id = ?1
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?2";
+
+const FRONTEND_ERRORS_SELECT_WITH_SESSION_AND_TRACE: &str =
+    "SELECT session_id, timestamp_unix_nanos,
+    message, stack, filename, line_number, column_number, error_type, trace_id, span_id,
+    window_label, attributes_json FROM frontend_errors WHERE session_id = ?1 AND trace_id = ?2
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
+
+const TRACE_SUMMARIES: &str = "SELECT
+    grouped.trace_id,
+    root.name,
+    grouped.start_time_unix_nanos,
+    grouped.end_time_unix_nanos,
+    grouped.span_count,
+    grouped.error_count,
+    CASE WHEN grouped.error_count > 0 THEN 'ERROR' ELSE root.status_code END
+FROM (
+    SELECT trace_id,
+           MIN(start_time_unix_nanos) AS start_time_unix_nanos,
+           MAX(COALESCE(end_time_unix_nanos, start_time_unix_nanos)) AS end_time_unix_nanos,
+           COUNT(*) AS span_count,
+           SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) AS error_count,
+           MAX(start_time_unix_nanos) AS latest_start_time_unix_nanos
+    FROM spans
+    GROUP BY trace_id
+) grouped
+LEFT JOIN spans root ON root.id = (
+    SELECT id FROM spans candidate
+    WHERE candidate.trace_id = grouped.trace_id
+    ORDER BY CASE WHEN candidate.parent_span_id IS NULL THEN 0 ELSE 1 END,
+             candidate.start_time_unix_nanos ASC,
+             candidate.span_id ASC
+    LIMIT 1
+)
+ORDER BY grouped.latest_start_time_unix_nanos DESC, grouped.trace_id ASC
+LIMIT ?1";
+
+const TRACE_SUMMARIES_WITH_SESSION: &str = "SELECT
+    grouped.trace_id,
+    root.name,
+    grouped.start_time_unix_nanos,
+    grouped.end_time_unix_nanos,
+    grouped.span_count,
+    grouped.error_count,
+    CASE WHEN grouped.error_count > 0 THEN 'ERROR' ELSE root.status_code END
+FROM (
+    SELECT trace_id,
+           MIN(start_time_unix_nanos) AS start_time_unix_nanos,
+           MAX(COALESCE(end_time_unix_nanos, start_time_unix_nanos)) AS end_time_unix_nanos,
+           COUNT(*) AS span_count,
+           SUM(CASE WHEN status_code = 'ERROR' THEN 1 ELSE 0 END) AS error_count,
+           MAX(start_time_unix_nanos) AS latest_start_time_unix_nanos
+    FROM spans
+    WHERE session_id = ?1
+    GROUP BY trace_id
+) grouped
+LEFT JOIN spans root ON root.id = (
+    SELECT id FROM spans candidate
+    WHERE candidate.session_id = ?1 AND candidate.trace_id = grouped.trace_id
+    ORDER BY CASE WHEN candidate.parent_span_id IS NULL THEN 0 ELSE 1 END,
+             candidate.start_time_unix_nanos ASC,
+             candidate.span_id ASC
+    LIMIT 1
+)
+ORDER BY grouped.latest_start_time_unix_nanos DESC, grouped.trace_id ASC
+LIMIT ?2";
 
 const MIGRATION_1: &str = include_str!("schema_v1.sql");
 
@@ -577,6 +728,7 @@ mod tests {
         let logs = store
             .list_logs(&LogQuery {
                 session_id: Some(session.id.clone()),
+                trace_id: None,
                 limit: Some(10),
             })
             .unwrap();
@@ -598,6 +750,7 @@ mod tests {
         let errors = store
             .list_frontend_errors(&FrontendErrorQuery {
                 session_id: Some(session.id),
+                trace_id: None,
                 limit: Some(10),
             })
             .unwrap();
@@ -651,6 +804,51 @@ mod tests {
         let sessions = reader.list_sessions(Some(10)).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "session-1");
+    }
+
+    #[test]
+    fn trace_summary_counts_more_than_default_row_limit() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let session = sample_session();
+        store.create_session(&session).unwrap();
+
+        for index in 0..1_050 {
+            store
+                .insert_span(&SpanRecord {
+                    session_id: session.id.clone(),
+                    trace_id: "large-trace".to_string(),
+                    span_id: format!("span-{index}"),
+                    parent_span_id: if index == 0 {
+                        None
+                    } else {
+                        Some("span-0".to_string())
+                    },
+                    name: if index == 0 {
+                        "root".to_string()
+                    } else {
+                        format!("child-{index}")
+                    },
+                    kind: Some("internal".to_string()),
+                    start_time_unix_nanos: index,
+                    end_time_unix_nanos: Some(index + 1),
+                    status_code: Some("OK".to_string()),
+                    status_message: None,
+                    scope_name: Some("bulk".to_string()),
+                    scope_version: None,
+                    attributes: json!({}),
+                    source: TelemetrySource::ThirdPartyOtel,
+                })
+                .unwrap();
+        }
+
+        let summaries = store
+            .list_trace_summaries(Some(&session.id), Some(10))
+            .unwrap();
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].root_span_name.as_deref(), Some("root"));
+        assert_eq!(summaries[0].span_count, 1_050);
     }
 
     fn sample_session() -> Session {
