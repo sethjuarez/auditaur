@@ -25,7 +25,14 @@ export function maybePayload(value: unknown, captureFullPayloads: boolean, maxBy
   if (!captureFullPayloads) {
     return undefined;
   }
-  return JSON.parse(safeJson(value, maxBytes));
+  try {
+    return JSON.parse(safeJson(value, maxBytes));
+  } catch {
+    return {
+      auditaurTruncated: true,
+      summary: summarizePayload(value, maxBytes),
+    };
+  }
 }
 
 export function errorRecordFields(error: unknown): {

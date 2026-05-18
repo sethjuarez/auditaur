@@ -30,6 +30,8 @@ export interface OTelBatch {
   spans: SpanRecord[];
   logs: LogRecord[];
   frontendErrors: FrontendErrorRecord[];
+  tauriIpcCalls: TauriIpcCallRecord[];
+  tauriEvents: TauriEventRecord[];
 }
 
 export interface LogRecord {
@@ -78,4 +80,33 @@ export interface FrontendErrorRecord {
   spanId?: string;
   windowLabel?: string;
   attributes: Record<string, unknown>;
+}
+
+export interface TauriIpcCallRecord {
+  sessionId: string;
+  timestampUnixNanos: number;
+  durationMs?: number;
+  command: string;
+  status: 'OK' | 'ERROR' | string;
+  errorMessage?: string;
+  traceId?: string;
+  spanId?: string;
+  windowLabel?: string;
+  argsJson?: unknown;
+  argsRedacted: boolean;
+  resultSummary?: string;
+}
+
+export interface TauriEventRecord {
+  sessionId: string;
+  timestampUnixNanos: number;
+  eventName: string;
+  direction: 'emit' | 'receive' | string;
+  target?: string;
+  traceId?: string;
+  spanId?: string;
+  windowLabel?: string;
+  payloadSummary?: string;
+  payloadJson?: unknown;
+  payloadRedacted: boolean;
 }

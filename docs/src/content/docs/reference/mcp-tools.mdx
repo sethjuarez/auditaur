@@ -14,14 +14,14 @@ The server speaks stdio JSON-RPC and does not write non-MCP content to stdout. T
 | Tool | Required arguments | Notes |
 | --- | --- | --- |
 | `doctor` | none | Accepts optional `db`. |
-| `list_sessions` | `db` | Lists sessions in a SQLite database. |
-| `list_logs` | `db` | Optional `sessionId`, `traceId`, `limit`. |
-| `list_errors` | `db` | Optional `sessionId`, `traceId`, `limit`. |
-| `list_traces` | `db` | Optional `sessionId`, `limit`. |
-| `get_trace` | `db`, `traceId` | Returns spans, logs, and frontend errors for a trace. |
-| `list_apps` | none | Currently returns an empty list until discovery reads are wired. |
-| `list_ipc_calls` | none | Currently returns an empty list until IPC reads are wired. |
-| `list_events` | none | Currently returns an empty list until event reads are wired. |
-| `list_windows` | none | Currently returns an empty list until window reads are wired. |
+| `list_sessions` | none | Optional `db`; uses discovery when omitted. |
+| `list_logs` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
+| `list_errors` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
+| `list_traces` | none | Optional `db`, `sessionId`, `limit`. |
+| `get_trace` | `traceId` | Optional `db`; returns spans, logs, frontend errors, IPC calls, and events. |
+| `list_apps` | none | Reads local discovery files. |
+| `list_ipc_calls` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
+| `list_events` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
+| `list_windows` | none | Optional `db`, `sessionId`, `limit`; returns latest stored window states. |
 
-For the dogfood app, copy `databasePath` from the discovery file and pass it as the `db` argument when calling tools.
+For the dogfood app, tools can use discovery automatically while exactly one active readable session is present. Pass `db` when multiple sessions are active.

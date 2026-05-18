@@ -7,3 +7,4 @@ pub mod redaction;
 pub mod storage;
 
 pub use config::AuditaurConfig;
+pub use config::{resolve_data_dir, AUDITAUR_DATA_DIR_ENV};

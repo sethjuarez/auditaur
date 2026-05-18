@@ -39,3 +39,5 @@ The returned client exposes:
 | `shutdown()` | Removes console/error hooks and flushes pending telemetry. |
 
 Console and error instrumentation are enabled by default. Full payload capture is disabled by default; payload summaries and recursive key-based redaction help reduce accidental secret capture.
+
+The current package emits Auditaur's OTEL-shaped records directly. It preserves trace/span ids and maps frontend invokes/events into SQLite spans plus Tauri-specific rows, but it does not yet use `@opentelemetry/api` internally.

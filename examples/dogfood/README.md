@@ -15,7 +15,7 @@ Click the buttons to emit a console log, throw a frontend error, call successful
 
 ## Find the session database
 
-Auditaur writes a discovery file while the app is running. Open the latest JSON file and copy `databasePath`.
+Auditaur writes a discovery file while the app is running. The CLI and MCP server use this automatically when exactly one active readable session is present. You can also open the latest JSON file and copy `databasePath`.
 
 | OS | Discovery directory |
 | --- | --- |
@@ -31,6 +31,17 @@ cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
 cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
 cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
 cargo run -p auditaur-cli -- trace --db "<databasePath>" "<traceId>" --json
+cargo run -p auditaur-cli -- ipc --db "<databasePath>" --json
+cargo run -p auditaur-cli -- events --db "<databasePath>" --json
+```
+
+With discovery:
+
+```powershell
+cargo run -p auditaur-cli -- apps --json
+cargo run -p auditaur-cli -- logs --json
+cargo run -p auditaur-cli -- ipc --json
+cargo run -p auditaur-cli -- events --json
 ```
 
 The failing-command button should produce a frontend `tauri.invoke failing_command` span with `ERROR` status and backend tracing records containing `Intentional dogfood backend failure`.
@@ -43,4 +54,4 @@ Start the MCP server with:
 cargo run -p auditaur-cli -- mcp
 ```
 
-Then call tools with the copied `databasePath`, for example `list_errors`, `list_traces`, and `get_trace`. An agent should be able to answer what failed by reading the `failing_command` frontend span and the backend error log/span in the same SQLite session.
+Then call tools such as `list_apps`, `list_errors`, `list_traces`, `list_ipc_calls`, `list_events`, and `get_trace`. An agent should be able to answer what failed by reading the `failing_command` frontend IPC/span records and the backend error log/span in the same SQLite session.

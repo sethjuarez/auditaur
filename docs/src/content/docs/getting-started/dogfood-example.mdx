@@ -35,9 +35,20 @@ Copy `databasePath` from the latest discovery file under:
 Then run:
 
 ```powershell
+cargo run -p auditaur-cli -- apps --json
+cargo run -p auditaur-cli -- logs --json
+cargo run -p auditaur-cli -- ipc --json
+cargo run -p auditaur-cli -- events --json
+```
+
+Or pass the copied path explicitly:
+
+```powershell
 cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
 cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
 cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
+cargo run -p auditaur-cli -- ipc --db "<databasePath>" --json
+cargo run -p auditaur-cli -- events --db "<databasePath>" --json
 ```
 
 For MCP, start:

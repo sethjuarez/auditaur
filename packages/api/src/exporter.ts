@@ -1,10 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { FrontendErrorRecord, LogRecord, OTelBatch, SpanRecord } from './types';
+import type { FrontendErrorRecord, LogRecord, OTelBatch, SpanRecord, TauriEventRecord, TauriIpcCallRecord } from './types';
 
 const EXPORT_COMMAND = 'plugin:auditaur|export_otel_batch';
 
 export class AuditaurExporter {
-  private batch: OTelBatch = { spans: [], logs: [], frontendErrors: [] };
+  private batch: OTelBatch = emptyBatch();
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
@@ -34,12 +34,22 @@ export class AuditaurExporter {
     void this.flushIfFull();
   }
 
+  addTauriIpcCall(record: TauriIpcCallRecord): void {
+    this.batch.tauriIpcCalls.push(record);
+    void this.flushIfFull();
+  }
+
+  addTauriEvent(record: TauriEventRecord): void {
+    this.batch.tauriEvents.push(record);
+    void this.flushIfFull();
+  }
+
   async flush(): Promise<void> {
     if (this.size === 0) {
       return;
     }
     const batch = this.batch;
-    this.batch = { spans: [], logs: [], frontendErrors: [] };
+    this.batch = emptyBatch();
     try {
       await invoke(this.command, { batch });
     } catch (error) {
@@ -57,7 +67,11 @@ export class AuditaurExporter {
   }
 
   private get size(): number {
-    return this.batch.spans.length + this.batch.logs.length + this.batch.frontendErrors.length;
+    return this.batch.spans.length
+      + this.batch.logs.length
+      + this.batch.frontendErrors.length
+      + this.batch.tauriIpcCalls.length
+      + this.batch.tauriEvents.length;
   }
 
   private async flushIfFull(): Promise<void> {
@@ -73,5 +87,11 @@ function mergeBatches(first: OTelBatch, second: OTelBatch, maxRecords: number): 
   const spans = [...first.spans, ...second.spans].slice(-maxRecords);
   const logs = [...first.logs, ...second.logs].slice(-maxRecords);
   const frontendErrors = [...first.frontendErrors, ...second.frontendErrors].slice(-maxRecords);
-  return { spans, logs, frontendErrors };
+  const tauriIpcCalls = [...first.tauriIpcCalls, ...second.tauriIpcCalls].slice(-maxRecords);
+  const tauriEvents = [...first.tauriEvents, ...second.tauriEvents].slice(-maxRecords);
+  return { spans, logs, frontendErrors, tauriIpcCalls, tauriEvents };
+}
+
+function emptyBatch(): OTelBatch {
+  return { spans: [], logs: [], frontendErrors: [], tauriIpcCalls: [], tauriEvents: [] };
 }

@@ -1,4 +1,5 @@
 mod commands;
+mod discovery;
 pub mod mcp;
 pub mod output;
 
@@ -25,9 +26,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Apps {
+        #[arg(long)]
+        json: bool,
+    },
     Sessions {
         #[arg(long)]
-        db: PathBuf,
+        db: Option<PathBuf>,
         #[arg(long)]
         json: bool,
         #[arg(long, default_value_t = 20)]
@@ -35,7 +40,7 @@ enum Command {
     },
     Logs {
         #[arg(long)]
-        db: PathBuf,
+        db: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -47,7 +52,7 @@ enum Command {
     },
     Errors {
         #[arg(long)]
-        db: PathBuf,
+        db: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -59,7 +64,7 @@ enum Command {
     },
     Traces {
         #[arg(long)]
-        db: PathBuf,
+        db: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -70,11 +75,45 @@ enum Command {
     Trace {
         trace_id: String,
         #[arg(long)]
-        db: PathBuf,
+        db: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    Ipc {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
+    Events {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
+    Windows {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
     },
     Mcp,
 }
@@ -84,6 +123,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Doctor { db, json } => commands::doctor::run(db.as_deref(), json),
+        Command::Apps { json } => commands::read::apps(json),
         Command::Sessions { db, json, limit } => commands::read::sessions(&db, json, limit),
         Command::Logs {
             db,
@@ -111,6 +151,26 @@ fn main() -> Result<()> {
             session,
             json,
         } => commands::read::trace(&db, session, trace_id, json),
+        Command::Ipc {
+            db,
+            session,
+            trace,
+            json,
+            limit,
+        } => commands::read::ipc(&db, session, trace, json, limit),
+        Command::Events {
+            db,
+            session,
+            trace,
+            json,
+            limit,
+        } => commands::read::events(&db, session, trace, json, limit),
+        Command::Windows {
+            db,
+            session,
+            json,
+            limit,
+        } => commands::read::windows(&db, session, json, limit),
         Command::Mcp => mcp::run(),
     }
 }

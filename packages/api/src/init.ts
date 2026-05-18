@@ -47,7 +47,7 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
     },
     listen<T>(event: string, handler: Parameters<typeof tauriListen<T>>[1]): Promise<() => void> {
       if (config.instrumentTauriEvents ?? true) {
-        return instrumentedListen<T>(exporter, event, handler);
+        return instrumentedListen<T>(exporter, event, handler, maxPayloadBytes, captureFullPayloads);
       }
       return tauriListen<T>(event, handler);
     },

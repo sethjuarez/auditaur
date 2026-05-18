@@ -14,7 +14,6 @@ use auditaur_collector::{
     receiver::OTelBatch,
 };
 use auditaur_core::{discovery::DiscoveryFile, model::Session, AuditaurConfig};
-use directories::BaseDirs;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
@@ -55,7 +54,8 @@ impl AuditaurState {
             ));
         }
 
-        let data_dir = resolve_data_dir(&config)?;
+        let data_dir = auditaur_core::resolve_data_dir(config.data_dir.as_ref())
+            .map_err(|error| AuditaurError::new(error.to_string()))?;
         let session_id = Uuid::new_v4().to_string();
         let instance_id = Uuid::new_v4().to_string();
         let session_dir = data_dir.join("sessions").join(&session_id);
@@ -173,6 +173,42 @@ impl AuditaurState {
             store.insert_frontend_error(&error)?;
         }
 
+        for mut call in batch.tauri_ipc_calls {
+            if call.session_id.is_empty() {
+                call.session_id = session_id.to_string();
+            }
+            if let Some(args_json) = &call.args_json {
+                let outcome = auditaur_core::redaction::redact_json_with_options(
+                    args_json,
+                    self.redact_defaults,
+                    &self.extra_redaction_keys,
+                );
+                call.args_json = Some(outcome.value);
+                call.args_redacted = outcome.redacted;
+            } else {
+                call.args_redacted = false;
+            }
+            store.insert_tauri_ipc_call(&call)?;
+        }
+
+        for mut event in batch.tauri_events {
+            if event.session_id.is_empty() {
+                event.session_id = session_id.to_string();
+            }
+            if let Some(payload_json) = &event.payload_json {
+                let outcome = auditaur_core::redaction::redact_json_with_options(
+                    payload_json,
+                    self.redact_defaults,
+                    &self.extra_redaction_keys,
+                );
+                event.payload_json = Some(outcome.value);
+                event.payload_redacted = outcome.redacted;
+            } else {
+                event.payload_redacted = false;
+            }
+            store.insert_tauri_event(&event)?;
+        }
+
         Ok(())
     }
 
@@ -213,18 +249,6 @@ fn default_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var("AUDITAUR").ok().as_deref() == Some("1")
 }
 
-fn resolve_data_dir(config: &AuditaurConfig) -> Result<PathBuf, AuditaurError> {
-    if let Some(data_dir) = &config.data_dir {
-        return Ok(data_dir.clone());
-    }
-    if let Ok(data_dir) = std::env::var("AUDITAUR_DATA_DIR") {
-        return Ok(PathBuf::from(data_dir));
-    }
-    let base_dirs = BaseDirs::new()
-        .ok_or_else(|| AuditaurError::new("Could not resolve local data directory."))?;
-    Ok(base_dirs.data_local_dir().join("auditaur"))
-}
-
 fn now_rfc3339() -> Result<String, AuditaurError> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -260,7 +284,10 @@ fn start_heartbeat(
 mod tests {
     use super::AuditaurState;
     use auditaur_collector::{exporter_sqlite::SqliteStore, receiver::OTelBatch};
-    use auditaur_core::{model::LogRecord, AuditaurConfig};
+    use auditaur_core::{
+        model::{LogRecord, TauriEventRecord, TauriIpcCall},
+        AuditaurConfig,
+    };
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -324,6 +351,33 @@ mod tests {
                     attributes: json!({ "api_key": "secret" }),
                     source: auditaur_core::model::TelemetrySource::Frontend,
                 }],
+                tauri_ipc_calls: vec![TauriIpcCall {
+                    session_id: String::new(),
+                    timestamp_unix_nanos: 2,
+                    duration_ms: Some(1.0),
+                    command: "save".to_string(),
+                    status: "OK".to_string(),
+                    error_message: None,
+                    trace_id: Some("trace".to_string()),
+                    span_id: Some("span".to_string()),
+                    window_label: Some("main".to_string()),
+                    args_json: Some(json!({ "password": "secret" })),
+                    args_redacted: true,
+                    result_summary: Some("ok".to_string()),
+                }],
+                tauri_events: vec![TauriEventRecord {
+                    session_id: String::new(),
+                    timestamp_unix_nanos: 3,
+                    event_name: "save".to_string(),
+                    direction: "emit".to_string(),
+                    target: None,
+                    trace_id: Some("trace".to_string()),
+                    span_id: Some("event-span".to_string()),
+                    window_label: Some("main".to_string()),
+                    payload_summary: Some("payload".to_string()),
+                    payload_json: Some(json!({ "token": "secret" })),
+                    payload_redacted: true,
+                }],
                 ..OTelBatch::default()
             })
             .unwrap();
@@ -345,5 +399,19 @@ mod tests {
         assert_eq!(log.session_id, session_id);
         assert_eq!(log.attributes["api_key"], "[REDACTED]");
         assert_eq!(log.body_json.as_ref().unwrap()["token"], "[REDACTED]");
+
+        let ipc = store
+            .list_tauri_ipc_calls(&auditaur_core::storage::TauriIpcQuery::default())
+            .unwrap();
+        assert_eq!(ipc[0].session_id, session_id);
+        assert_eq!(ipc[0].args_json.as_ref().unwrap()["password"], "[REDACTED]");
+
+        let events = store
+            .list_tauri_events(&auditaur_core::storage::TauriEventQuery::default())
+            .unwrap();
+        assert_eq!(
+            events[0].payload_json.as_ref().unwrap()["token"],
+            "[REDACTED]"
+        );
     }
 }

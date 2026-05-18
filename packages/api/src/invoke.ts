@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { AuditaurExporter } from './exporter';
-import type { SpanRecord } from './types';
+import type { SpanRecord, TauriIpcCallRecord } from './types';
 import { errorRecordFields, maybePayload, nowUnixNanos, randomSpanId, randomTraceId, summarizePayload } from './utils';
 
 export async function instrumentedInvoke<T>(
@@ -15,11 +15,15 @@ export async function instrumentedInvoke<T>(
   const spanId = randomSpanId();
   try {
     const result = await tauriInvoke<T>(command, args);
-    exporter.addSpan(invokeSpan(command, traceId, spanId, start, 'OK', undefined, args, maxPayloadBytes, captureFullPayloads));
+    const end = nowUnixNanos();
+    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'OK', undefined, args, maxPayloadBytes, captureFullPayloads));
+    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'OK', undefined, args, result, maxPayloadBytes, captureFullPayloads));
     return result;
   } catch (error) {
     const fields = errorRecordFields(error);
-    exporter.addSpan(invokeSpan(command, traceId, spanId, start, 'ERROR', fields.message, args, maxPayloadBytes, captureFullPayloads));
+    const end = nowUnixNanos();
+    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'ERROR', fields.message, args, maxPayloadBytes, captureFullPayloads));
+    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', fields.message, args, undefined, maxPayloadBytes, captureFullPayloads));
     throw error;
   }
 }
@@ -29,6 +33,7 @@ function invokeSpan(
   traceId: string,
   spanId: string,
   startTimeUnixNanos: number,
+  endTimeUnixNanos: number,
   statusCode: 'OK' | 'ERROR',
   statusMessage: string | undefined,
   args: Record<string, unknown> | undefined,
@@ -42,7 +47,7 @@ function invokeSpan(
     name: `tauri.invoke ${command}`,
     kind: 'client',
     startTimeUnixNanos,
-    endTimeUnixNanos: nowUnixNanos(),
+    endTimeUnixNanos,
     statusCode,
     statusMessage,
     attributes: {
@@ -52,5 +57,33 @@ function invokeSpan(
       'tauri.command.args': maybePayload(args ?? {}, captureFullPayloads, maxPayloadBytes),
     },
     source: 'frontend',
+  };
+}
+
+function ipcCall(
+  command: string,
+  traceId: string,
+  spanId: string,
+  startTimeUnixNanos: number,
+  endTimeUnixNanos: number,
+  status: 'OK' | 'ERROR',
+  errorMessage: string | undefined,
+  args: Record<string, unknown> | undefined,
+  result: unknown,
+  maxPayloadBytes: number,
+  captureFullPayloads: boolean,
+): TauriIpcCallRecord {
+  return {
+    sessionId: '',
+    timestampUnixNanos: startTimeUnixNanos,
+    durationMs: (endTimeUnixNanos - startTimeUnixNanos) / 1_000_000,
+    command,
+    status,
+    errorMessage,
+    traceId,
+    spanId,
+    argsJson: maybePayload(args ?? {}, captureFullPayloads, maxPayloadBytes),
+    argsRedacted: true,
+    resultSummary: status === 'OK' ? summarizePayload(result, maxPayloadBytes) : undefined,
   };
 }

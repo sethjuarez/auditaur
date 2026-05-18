@@ -1,5 +1,16 @@
 use std::path::PathBuf;
 
+use directories::BaseDirs;
+use thiserror::Error;
+
+pub const AUDITAUR_DATA_DIR_ENV: &str = "AUDITAUR_DATA_DIR";
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("could not resolve local data directory")]
+    LocalDataDirUnavailable,
+}
+
 #[derive(Debug, Clone)]
 pub struct AuditaurConfig {
     pub enabled: Option<bool>,
@@ -33,4 +44,15 @@ impl Default for AuditaurConfig {
             allow_release_builds: false,
         }
     }
+}
+
+pub fn resolve_data_dir(configured: Option<&PathBuf>) -> Result<PathBuf, ConfigError> {
+    if let Some(data_dir) = configured {
+        return Ok(data_dir.clone());
+    }
+    if let Ok(data_dir) = std::env::var(AUDITAUR_DATA_DIR_ENV) {
+        return Ok(PathBuf::from(data_dir));
+    }
+    let base_dirs = BaseDirs::new().ok_or(ConfigError::LocalDataDirUnavailable)?;
+    Ok(base_dirs.data_local_dir().join("auditaur"))
 }

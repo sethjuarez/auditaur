@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { consoleLogRecord } from './console';
-import { errorRecordFields, summarizePayload } from './utils';
+import { errorRecordFields, maybePayload, summarizePayload } from './utils';
 
 describe('payload summaries', () => {
   it('bounds string payloads', () => {
@@ -23,5 +23,12 @@ describe('payload summaries', () => {
   it('summarizes errors with message and stack', () => {
     const error = new Error('boom');
     expect(summarizePayload(error, 1_000)).toContain('Error: boom');
+  });
+
+  it('does not throw when full payload JSON is truncated', () => {
+    expect(maybePayload({ value: 'abcdef' }, true, 5)).toEqual({
+      auditaurTruncated: true,
+      summary: '{"val',
+    });
   });
 });

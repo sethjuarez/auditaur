@@ -25,6 +25,17 @@ While the app is running, copy `databasePath` from the latest discovery file:
 Then inspect the session:
 
 ```powershell
+cargo run -p auditaur-cli -- apps --json
+cargo run -p auditaur-cli -- logs --json
+cargo run -p auditaur-cli -- errors --json
+cargo run -p auditaur-cli -- traces --json
+cargo run -p auditaur-cli -- ipc --json
+cargo run -p auditaur-cli -- events --json
+```
+
+You can also pass a database path explicitly:
+
+```powershell
 cargo run -p auditaur-cli -- sessions --db "<databasePath>" --json
 cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
 cargo run -p auditaur-cli -- errors --db "<databasePath>" --json

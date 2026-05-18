@@ -1,7 +1,13 @@
 use auditaur_core::{
-    model::{FrontendError, LogRecord, Session, SpanRecord, TelemetrySource},
+    model::{
+        FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall,
+        TauriWindowState, TelemetrySource,
+    },
     protocol::TraceSummary,
-    storage::{FrontendErrorQuery, LogQuery, SpanQuery, TelemetryStore},
+    storage::{
+        FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery, TauriWindowQuery,
+        TelemetryStore,
+    },
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -223,6 +229,77 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub fn insert_tauri_ipc_call(&self, call: &TauriIpcCall) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO tauri_ipc_calls (
+                session_id, timestamp_unix_nanos, duration_ms, command, status, error_message,
+                trace_id, span_id, window_label, args_json, args_redacted, result_summary
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                call.session_id,
+                call.timestamp_unix_nanos,
+                call.duration_ms,
+                call.command,
+                call.status,
+                call.error_message,
+                call.trace_id,
+                call.span_id,
+                call.window_label,
+                optional_json(&call.args_json)?,
+                call.args_redacted,
+                call.result_summary,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_tauri_event(&self, event: &TauriEventRecord) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO tauri_events (
+                session_id, timestamp_unix_nanos, event_name, direction, target, trace_id,
+                span_id, window_label, payload_summary, payload_json, payload_redacted
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                event.session_id,
+                event.timestamp_unix_nanos,
+                event.event_name,
+                event.direction,
+                event.target,
+                event.trace_id,
+                event.span_id,
+                event.window_label,
+                event.payload_summary,
+                optional_json(&event.payload_json)?,
+                event.payload_redacted,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_tauri_window_state(&self, window: &TauriWindowState) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO tauri_windows (
+                session_id, timestamp_unix_nanos, window_label, webview_label, url, title,
+                focused, visible, width, height, scale_factor, attributes_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                window.session_id,
+                window.timestamp_unix_nanos,
+                window.window_label,
+                window.webview_label,
+                window.url,
+                window.title,
+                window.focused,
+                window.visible,
+                window.width,
+                window.height,
+                window.scale_factor,
+                serde_json::to_string(&window.attributes)?,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn list_logs(&self, query: &LogQuery) -> Result<Vec<LogRecord>> {
         let limit = bounded_limit(query.limit, 200);
         match (&query.session_id, &query.trace_id) {
@@ -326,6 +403,86 @@ impl SqliteStore {
             }
         }
     }
+
+    pub fn list_tauri_ipc_calls(&self, query: &TauriIpcQuery) -> Result<Vec<TauriIpcCall>> {
+        let limit = bounded_limit(query.limit, 200);
+        match (&query.session_id, &query.trace_id) {
+            (Some(session_id), Some(trace_id)) => {
+                let mut stmt = self.conn.prepare(TAURI_IPC_SELECT_WITH_SESSION_AND_TRACE)?;
+                let rows = stmt.query_map(params![session_id, trace_id, limit], map_tauri_ipc)?;
+                collect_rows(rows)
+            }
+            (Some(session_id), None) => {
+                let mut stmt = self.conn.prepare(TAURI_IPC_SELECT_WITH_SESSION)?;
+                let rows = stmt.query_map(params![session_id, limit], map_tauri_ipc)?;
+                collect_rows(rows)
+            }
+            (None, Some(trace_id)) => {
+                let mut stmt = self.conn.prepare(TAURI_IPC_SELECT_WITH_TRACE)?;
+                let rows = stmt.query_map(params![trace_id, limit], map_tauri_ipc)?;
+                collect_rows(rows)
+            }
+            (None, None) => {
+                let mut stmt = self.conn.prepare(TAURI_IPC_SELECT)?;
+                let rows = stmt.query_map(params![limit], map_tauri_ipc)?;
+                collect_rows(rows)
+            }
+        }
+    }
+
+    pub fn list_tauri_events(&self, query: &TauriEventQuery) -> Result<Vec<TauriEventRecord>> {
+        let limit = bounded_limit(query.limit, 200);
+        match (&query.session_id, &query.trace_id) {
+            (Some(session_id), Some(trace_id)) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(TAURI_EVENTS_SELECT_WITH_SESSION_AND_TRACE)?;
+                let rows = stmt.query_map(params![session_id, trace_id, limit], map_tauri_event)?;
+                collect_rows(rows)
+            }
+            (Some(session_id), None) => {
+                let mut stmt = self.conn.prepare(TAURI_EVENTS_SELECT_WITH_SESSION)?;
+                let rows = stmt.query_map(params![session_id, limit], map_tauri_event)?;
+                collect_rows(rows)
+            }
+            (None, Some(trace_id)) => {
+                let mut stmt = self.conn.prepare(TAURI_EVENTS_SELECT_WITH_TRACE)?;
+                let rows = stmt.query_map(params![trace_id, limit], map_tauri_event)?;
+                collect_rows(rows)
+            }
+            (None, None) => {
+                let mut stmt = self.conn.prepare(TAURI_EVENTS_SELECT)?;
+                let rows = stmt.query_map(params![limit], map_tauri_event)?;
+                collect_rows(rows)
+            }
+        }
+    }
+
+    pub fn list_tauri_windows(&self, query: &TauriWindowQuery) -> Result<Vec<TauriWindowState>> {
+        let limit = bounded_limit(query.limit, 200);
+        match (&query.session_id, query.latest_only) {
+            (Some(session_id), true) => {
+                let mut stmt = self.conn.prepare(TAURI_WINDOWS_LATEST_WITH_SESSION)?;
+                let rows = stmt.query_map(params![session_id, limit], map_tauri_window)?;
+                collect_rows(rows)
+            }
+            (Some(session_id), false) => {
+                let mut stmt = self.conn.prepare(TAURI_WINDOWS_SELECT_WITH_SESSION)?;
+                let rows = stmt.query_map(params![session_id, limit], map_tauri_window)?;
+                collect_rows(rows)
+            }
+            (None, true) => {
+                let mut stmt = self.conn.prepare(TAURI_WINDOWS_LATEST)?;
+                let rows = stmt.query_map(params![limit], map_tauri_window)?;
+                collect_rows(rows)
+            }
+            (None, false) => {
+                let mut stmt = self.conn.prepare(TAURI_WINDOWS_SELECT)?;
+                let rows = stmt.query_map(params![limit], map_tauri_window)?;
+                collect_rows(rows)
+            }
+        }
+    }
 }
 
 impl TelemetryStore for SqliteStore {
@@ -358,6 +515,30 @@ impl TelemetryStore for SqliteStore {
         error: &FrontendError,
     ) -> std::result::Result<(), auditaur_core::storage::StorageError> {
         SqliteStore::insert_frontend_error(self, error)
+            .map_err(|error| auditaur_core::storage::StorageError::Backend(error.to_string()))
+    }
+
+    fn insert_tauri_ipc_call(
+        &self,
+        call: &TauriIpcCall,
+    ) -> std::result::Result<(), auditaur_core::storage::StorageError> {
+        SqliteStore::insert_tauri_ipc_call(self, call)
+            .map_err(|error| auditaur_core::storage::StorageError::Backend(error.to_string()))
+    }
+
+    fn insert_tauri_event(
+        &self,
+        event: &TauriEventRecord,
+    ) -> std::result::Result<(), auditaur_core::storage::StorageError> {
+        SqliteStore::insert_tauri_event(self, event)
+            .map_err(|error| auditaur_core::storage::StorageError::Backend(error.to_string()))
+    }
+
+    fn insert_tauri_window_state(
+        &self,
+        window: &TauriWindowState,
+    ) -> std::result::Result<(), auditaur_core::storage::StorageError> {
+        SqliteStore::insert_tauri_window_state(self, window)
             .map_err(|error| auditaur_core::storage::StorageError::Backend(error.to_string()))
     }
 }
@@ -464,6 +645,56 @@ fn map_frontend_error(row: &rusqlite::Row<'_>) -> rusqlite::Result<FrontendError
         trace_id: row.get(8)?,
         span_id: row.get(9)?,
         window_label: row.get(10)?,
+        attributes: parse_json(row.get(11)?)?,
+    })
+}
+
+fn map_tauri_ipc(row: &rusqlite::Row<'_>) -> rusqlite::Result<TauriIpcCall> {
+    Ok(TauriIpcCall {
+        session_id: row.get(0)?,
+        timestamp_unix_nanos: row.get(1)?,
+        duration_ms: row.get(2)?,
+        command: row.get(3)?,
+        status: row.get(4)?,
+        error_message: row.get(5)?,
+        trace_id: row.get(6)?,
+        span_id: row.get(7)?,
+        window_label: row.get(8)?,
+        args_json: parse_optional_json(row.get(9)?)?,
+        args_redacted: row.get(10)?,
+        result_summary: row.get(11)?,
+    })
+}
+
+fn map_tauri_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TauriEventRecord> {
+    Ok(TauriEventRecord {
+        session_id: row.get(0)?,
+        timestamp_unix_nanos: row.get(1)?,
+        event_name: row.get(2)?,
+        direction: row.get(3)?,
+        target: row.get(4)?,
+        trace_id: row.get(5)?,
+        span_id: row.get(6)?,
+        window_label: row.get(7)?,
+        payload_summary: row.get(8)?,
+        payload_json: parse_optional_json(row.get(9)?)?,
+        payload_redacted: row.get(10)?,
+    })
+}
+
+fn map_tauri_window(row: &rusqlite::Row<'_>) -> rusqlite::Result<TauriWindowState> {
+    Ok(TauriWindowState {
+        session_id: row.get(0)?,
+        timestamp_unix_nanos: row.get(1)?,
+        window_label: row.get(2)?,
+        webview_label: row.get(3)?,
+        url: row.get(4)?,
+        title: row.get(5)?,
+        focused: row.get(6)?,
+        visible: row.get(7)?,
+        width: row.get(8)?,
+        height: row.get(9)?,
+        scale_factor: row.get(10)?,
         attributes: parse_json(row.get(11)?)?,
     })
 }
@@ -583,6 +814,69 @@ const FRONTEND_ERRORS_SELECT_WITH_SESSION_AND_TRACE: &str =
     window_label, attributes_json FROM frontend_errors WHERE session_id = ?1 AND trace_id = ?2
     ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
 
+const TAURI_IPC_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, duration_ms, command,
+    status, error_message, trace_id, span_id, window_label, args_json, args_redacted,
+    result_summary FROM tauri_ipc_calls ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
+
+const TAURI_IPC_SELECT_WITH_SESSION: &str = "SELECT session_id, timestamp_unix_nanos, duration_ms,
+    command, status, error_message, trace_id, span_id, window_label, args_json, args_redacted,
+    result_summary FROM tauri_ipc_calls WHERE session_id = ?1 ORDER BY timestamp_unix_nanos DESC
+    LIMIT ?2";
+
+const TAURI_IPC_SELECT_WITH_TRACE: &str = "SELECT session_id, timestamp_unix_nanos, duration_ms,
+    command, status, error_message, trace_id, span_id, window_label, args_json, args_redacted,
+    result_summary FROM tauri_ipc_calls WHERE trace_id = ?1 ORDER BY timestamp_unix_nanos DESC
+    LIMIT ?2";
+
+const TAURI_IPC_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, timestamp_unix_nanos,
+    duration_ms, command, status, error_message, trace_id, span_id, window_label, args_json,
+    args_redacted, result_summary FROM tauri_ipc_calls WHERE session_id = ?1 AND trace_id = ?2
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
+
+const TAURI_EVENTS_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, event_name, direction,
+    target, trace_id, span_id, window_label, payload_summary, payload_json, payload_redacted
+    FROM tauri_events ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
+
+const TAURI_EVENTS_SELECT_WITH_SESSION: &str = "SELECT session_id, timestamp_unix_nanos,
+    event_name, direction, target, trace_id, span_id, window_label, payload_summary, payload_json,
+    payload_redacted FROM tauri_events WHERE session_id = ?1 ORDER BY timestamp_unix_nanos DESC
+    LIMIT ?2";
+
+const TAURI_EVENTS_SELECT_WITH_TRACE: &str = "SELECT session_id, timestamp_unix_nanos, event_name,
+    direction, target, trace_id, span_id, window_label, payload_summary, payload_json,
+    payload_redacted FROM tauri_events WHERE trace_id = ?1 ORDER BY timestamp_unix_nanos DESC
+    LIMIT ?2";
+
+const TAURI_EVENTS_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, timestamp_unix_nanos,
+    event_name, direction, target, trace_id, span_id, window_label, payload_summary, payload_json,
+    payload_redacted FROM tauri_events WHERE session_id = ?1 AND trace_id = ?2
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
+
+const TAURI_WINDOWS_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, window_label,
+    webview_label, url, title, focused, visible, width, height, scale_factor, attributes_json
+    FROM tauri_windows ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
+
+const TAURI_WINDOWS_SELECT_WITH_SESSION: &str = "SELECT session_id, timestamp_unix_nanos,
+    window_label, webview_label, url, title, focused, visible, width, height, scale_factor,
+    attributes_json FROM tauri_windows WHERE session_id = ?1 ORDER BY timestamp_unix_nanos DESC
+    LIMIT ?2";
+
+const TAURI_WINDOWS_LATEST: &str = "SELECT session_id, timestamp_unix_nanos, window_label,
+    webview_label, url, title, focused, visible, width, height, scale_factor, attributes_json
+    FROM tauri_windows tw WHERE id = (
+        SELECT id FROM tauri_windows candidate
+        WHERE candidate.session_id = tw.session_id AND candidate.window_label = tw.window_label
+        ORDER BY candidate.timestamp_unix_nanos DESC, candidate.id DESC LIMIT 1
+    ) ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
+
+const TAURI_WINDOWS_LATEST_WITH_SESSION: &str = "SELECT session_id, timestamp_unix_nanos,
+    window_label, webview_label, url, title, focused, visible, width, height, scale_factor,
+    attributes_json FROM tauri_windows tw WHERE session_id = ?1 AND id = (
+        SELECT id FROM tauri_windows candidate
+        WHERE candidate.session_id = tw.session_id AND candidate.window_label = tw.window_label
+        ORDER BY candidate.timestamp_unix_nanos DESC, candidate.id DESC LIMIT 1
+    ) ORDER BY timestamp_unix_nanos DESC LIMIT ?2";
+
 const TRACE_SUMMARIES: &str = "SELECT
     grouped.trace_id,
     root.name,
@@ -648,8 +942,14 @@ const MIGRATION_1: &str = include_str!("schema_v1.sql");
 mod tests {
     use super::{SqliteStore, SQLITE_SCHEMA_VERSION};
     use auditaur_core::{
-        model::{FrontendError, LogRecord, Session, SpanRecord, TelemetrySource},
-        storage::{FrontendErrorQuery, LogQuery, SpanQuery},
+        model::{
+            FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall,
+            TauriWindowState, TelemetrySource,
+        },
+        storage::{
+            FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery,
+            TauriWindowQuery,
+        },
     };
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -849,6 +1149,90 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].root_span_name.as_deref(), Some("root"));
         assert_eq!(summaries[0].span_count, 1_050);
+    }
+
+    #[test]
+    fn inserts_and_queries_tauri_records() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let session = sample_session();
+        store.create_session(&session).unwrap();
+
+        store
+            .insert_tauri_ipc_call(&TauriIpcCall {
+                session_id: session.id.clone(),
+                timestamp_unix_nanos: 200,
+                duration_ms: Some(2.5),
+                command: "save_file".to_string(),
+                status: "ERROR".to_string(),
+                error_message: Some("denied".to_string()),
+                trace_id: Some("trace-tauri".to_string()),
+                span_id: Some("span-ipc".to_string()),
+                window_label: Some("main".to_string()),
+                args_json: Some(json!({ "path": "demo.txt" })),
+                args_redacted: true,
+                result_summary: None,
+            })
+            .unwrap();
+        store
+            .insert_tauri_event(&TauriEventRecord {
+                session_id: session.id.clone(),
+                timestamp_unix_nanos: 210,
+                event_name: "dogfood:event".to_string(),
+                direction: "emit".to_string(),
+                target: Some("main".to_string()),
+                trace_id: Some("trace-tauri".to_string()),
+                span_id: Some("span-event".to_string()),
+                window_label: Some("main".to_string()),
+                payload_summary: Some("{\"ok\":true}".to_string()),
+                payload_json: Some(json!({ "ok": true })),
+                payload_redacted: true,
+            })
+            .unwrap();
+        store
+            .insert_tauri_window_state(&TauriWindowState {
+                session_id: session.id.clone(),
+                timestamp_unix_nanos: 220,
+                window_label: "main".to_string(),
+                webview_label: None,
+                url: Some("tauri://localhost".to_string()),
+                title: Some("Auditaur".to_string()),
+                focused: Some(true),
+                visible: Some(true),
+                width: Some(800.0),
+                height: Some(600.0),
+                scale_factor: Some(1.0),
+                attributes: json!({ "theme": "dark" }),
+            })
+            .unwrap();
+
+        let ipc = store
+            .list_tauri_ipc_calls(&TauriIpcQuery {
+                trace_id: Some("trace-tauri".to_string()),
+                ..TauriIpcQuery::default()
+            })
+            .unwrap();
+        assert_eq!(ipc[0].command, "save_file");
+        assert_eq!(ipc[0].args_json.as_ref().unwrap()["path"], "demo.txt");
+
+        let events = store
+            .list_tauri_events(&TauriEventQuery {
+                session_id: Some(session.id.clone()),
+                ..TauriEventQuery::default()
+            })
+            .unwrap();
+        assert_eq!(events[0].event_name, "dogfood:event");
+        assert_eq!(events[0].payload_json.as_ref().unwrap()["ok"], true);
+
+        let windows = store
+            .list_tauri_windows(&TauriWindowQuery {
+                session_id: Some(session.id),
+                latest_only: true,
+                limit: Some(10),
+            })
+            .unwrap();
+        assert_eq!(windows[0].window_label, "main");
+        assert_eq!(windows[0].focused, Some(true));
     }
 
     fn sample_session() -> Session {

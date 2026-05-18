@@ -26,9 +26,7 @@ tauri::Builder::default()
     .plugin(
         tauri_plugin_auditaur::Builder::new()
             .service_name("my-tauri-app")
-            .session_name("dev")
             .redact_defaults(true)
-            .max_session_bytes(256 * 1024 * 1024)
             .build(),
     )
     .run(tauri::generate_context!())
@@ -36,7 +34,9 @@ tauri::Builder::default()
 }
 ```
 
-The plugin creates the SQLite session database, writes a discovery file, receives frontend telemetry batches through `export_otel_batch`, applies recursive redaction, and records Rust `tracing` events/spans. Add `auditaur:default` to the app capability so the frontend package can call the plugin command:
+The plugin creates the SQLite session database, writes a discovery file, receives frontend telemetry batches through `export_otel_batch`, applies recursive redaction, and records Rust `tracing` events/spans. Session names and retention limits are config fields reserved for a future schema/retention pass and are not stored yet.
+
+Add `auditaur:default` to the app capability so the frontend package can call the plugin command:
 
 ```json
 {

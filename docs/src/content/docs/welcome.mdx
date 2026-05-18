@@ -8,7 +8,7 @@ sidebar:
 import { Aside, Badge } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="MVP in progress">
-  Auditaur is still pre-release. The storage layer, CLI read path, Tauri plugin, frontend package, Rust tracing layer, MCP server, and dogfood example are implemented in source; package publishing and richer Tauri-specific views are still pending.
+  Auditaur is still pre-release. The storage layer, CLI read path, discovery, Tauri plugin, frontend package, Rust tracing layer, MCP server, and dogfood example are implemented in source; package publishing, metrics, screenshots, retention enforcement, and a full OpenTelemetry JS SDK bridge are still pending.
 </Aside>
 
 ## What is Auditaur?
@@ -27,7 +27,9 @@ The goal is to make Tauri debugging easy for both humans and coding agents: inst
 | Frontend API package | <Badge text="Implemented" variant="success" /> |
 | Rust tracing and third-party span sink | <Badge text="Implemented" variant="success" /> |
 | MCP server | <Badge text="Implemented" variant="success" /> |
-| App/IPC/event/window views | <Badge text="Partial" variant="caution" /> |
+| App discovery | <Badge text="Implemented" variant="success" /> |
+| IPC and event views | <Badge text="Implemented" variant="success" /> |
+| Window state views | <Badge text="Storage/query ready" variant="caution" /> |
 
 ## Security posture
 

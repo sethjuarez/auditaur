@@ -7,7 +7,9 @@ use anyhow::Result;
 use auditaur_collector::exporter_sqlite::SqliteStore;
 use auditaur_core::{
     protocol::TraceSummary,
-    storage::{FrontendErrorQuery, LogQuery, SpanQuery},
+    storage::{
+        FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery, TauriWindowQuery,
+    },
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -144,19 +146,62 @@ fn call_tool(params: Value) -> Result<Value> {
                     limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
                 })?,
                 "frontendErrors": store.list_frontend_errors(&FrontendErrorQuery {
+                    session_id: session_id.clone(),
+                    trace_id: Some(trace_id.clone()),
+                    limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
+                })?,
+                "tauriIpcCalls": store.list_tauri_ipc_calls(&TauriIpcQuery {
+                    session_id: session_id.clone(),
+                    trace_id: Some(trace_id.clone()),
+                    limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
+                })?,
+                "tauriEvents": store.list_tauri_events(&TauriEventQuery {
                     session_id,
                     trace_id: Some(trace_id),
                     limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
                 })?,
             }))
         }
-        "list_apps" | "list_ipc_calls" | "list_events" | "list_windows" => Ok(json!([])),
+        "list_apps" => Ok(serde_json::to_value(crate::discovery::list_apps()?)?),
+        "list_ipc_calls" => {
+            let store = open_store(&arguments)?;
+            Ok(serde_json::to_value(store.list_tauri_ipc_calls(
+                &TauriIpcQuery {
+                    session_id: optional_string(&arguments, "sessionId"),
+                    trace_id: optional_string(&arguments, "traceId"),
+                    limit: limit(&arguments, 200, MAX_LIST_LIMIT),
+                },
+            )?)?)
+        }
+        "list_events" => {
+            let store = open_store(&arguments)?;
+            Ok(serde_json::to_value(store.list_tauri_events(
+                &TauriEventQuery {
+                    session_id: optional_string(&arguments, "sessionId"),
+                    trace_id: optional_string(&arguments, "traceId"),
+                    limit: limit(&arguments, 200, MAX_LIST_LIMIT),
+                },
+            )?)?)
+        }
+        "list_windows" => {
+            let store = open_store(&arguments)?;
+            Ok(serde_json::to_value(store.list_tauri_windows(
+                &TauriWindowQuery {
+                    session_id: optional_string(&arguments, "sessionId"),
+                    latest_only: true,
+                    limit: limit(&arguments, 200, MAX_LIST_LIMIT),
+                },
+            )?)?)
+        }
         _ => anyhow::bail!("Unknown tool {}", call.name),
     }
 }
 
 fn open_store(arguments: &Value) -> Result<SqliteStore> {
-    let db = required_string(arguments, "db")?;
+    let db = match optional_string(arguments, "db") {
+        Some(db) => crate::discovery::resolve_db(Some(PathBuf::from(db)))?,
+        None => crate::discovery::resolve_db(None)?,
+    };
     let store = SqliteStore::open(db)?;
     store.validate_schema()?;
     Ok(store)
@@ -230,43 +275,47 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "list_sessions",
-            "List sessions in a SQLite DB. Requires db.",
-            &["db"],
+            "List sessions in a SQLite DB. Uses discovery when db is omitted.",
+            &[],
         ),
-        tool("list_logs", "List logs in a SQLite DB. Requires db.", &["db"]),
+        tool(
+            "list_logs",
+            "List logs in a SQLite DB. Uses discovery when db is omitted.",
+            &[],
+        ),
         tool(
             "list_errors",
-            "List frontend errors in a SQLite DB. Requires db.",
-            &["db"],
+            "List frontend errors in a SQLite DB. Uses discovery when db is omitted.",
+            &[],
         ),
         tool(
             "list_traces",
-            "List trace summaries in a SQLite DB. Requires db.",
-            &["db"],
+            "List trace summaries in a SQLite DB. Uses discovery when db is omitted.",
+            &[],
         ),
         tool(
             "get_trace",
-            "Get spans, logs, and frontend errors for a trace. Requires db and traceId.",
-            &["db", "traceId"],
+            "Get spans, logs, frontend errors, IPC calls, and events for a trace. Requires traceId; uses discovery when db is omitted.",
+            &["traceId"],
         ),
         tool(
             "list_apps",
-            "List active apps discovered locally. Returns an empty list until discovery reads are implemented.",
+            "List active and stale apps discovered locally.",
             &[],
         ),
         tool(
             "list_ipc_calls",
-            "List Tauri IPC calls. Returns an empty list until IPC reads are implemented.",
+            "List Tauri IPC calls from a SQLite DB. Uses discovery when db is omitted.",
             &[],
         ),
         tool(
             "list_events",
-            "List Tauri events. Returns an empty list until event reads are implemented.",
+            "List Tauri events from a SQLite DB. Uses discovery when db is omitted.",
             &[],
         ),
         tool(
             "list_windows",
-            "List latest Tauri window states. Returns an empty list until window reads are implemented.",
+            "List latest Tauri window states from a SQLite DB. Uses discovery when db is omitted.",
             &[],
         ),
     ]
@@ -308,7 +357,7 @@ struct ToolCall {
 mod tests {
     use super::{handle_line, MAX_LIST_LIMIT};
     use auditaur_collector::exporter_sqlite::{SqliteStore, SQLITE_SCHEMA_VERSION};
-    use auditaur_core::model::Session;
+    use auditaur_core::model::{Session, TauriIpcCall};
     use serde_json::{json, Value};
     use tempfile::NamedTempFile;
 
@@ -318,7 +367,7 @@ mod tests {
         assert_eq!(response["result"]["tools"][0]["name"], "doctor");
         assert_eq!(
             response["result"]["tools"][5]["inputSchema"]["required"],
-            json!(["db", "traceId"])
+            json!(["traceId"])
         );
     }
 
@@ -385,6 +434,61 @@ mod tests {
         let sessions: Value = serde_json::from_str(text).unwrap();
 
         assert_eq!(sessions[0]["serviceName"], "mcp-test");
+    }
+
+    #[test]
+    fn calls_list_ipc_against_fixture_db() {
+        let db = NamedTempFile::new().unwrap();
+        let store = SqliteStore::open(db.path()).unwrap();
+        store.migrate().unwrap();
+        store
+            .create_session(&Session {
+                id: "session-mcp".to_string(),
+                service_name: "mcp-test".to_string(),
+                service_version: None,
+                app_identifier: None,
+                pid: None,
+                started_at: "2026-05-18T18:00:00Z".to_string(),
+                ended_at: None,
+                schema_version: SQLITE_SCHEMA_VERSION,
+                auditaur_version: None,
+            })
+            .unwrap();
+        store
+            .insert_tauri_ipc_call(&TauriIpcCall {
+                session_id: "session-mcp".to_string(),
+                timestamp_unix_nanos: 1,
+                duration_ms: Some(1.5),
+                command: "failing_command".to_string(),
+                status: "ERROR".to_string(),
+                error_message: Some("boom".to_string()),
+                trace_id: Some("trace-mcp".to_string()),
+                span_id: Some("span-mcp".to_string()),
+                window_label: Some("main".to_string()),
+                args_json: Some(json!({ "reason": "test" })),
+                args_redacted: true,
+                result_summary: None,
+            })
+            .unwrap();
+        drop(store);
+
+        let response = handle_line(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_ipc_calls",
+                    "arguments": { "db": db.path().to_string_lossy() }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let calls: Value = serde_json::from_str(text).unwrap();
+
+        assert_eq!(calls[0]["command"], "failing_command");
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use crate::model::{FrontendError, LogRecord, Session, SpanRecord};
+use crate::model::{
+    FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall, TauriWindowState,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -12,6 +14,9 @@ pub trait TelemetryStore {
     fn insert_log(&self, log: &LogRecord) -> Result<(), StorageError>;
     fn insert_span(&self, span: &SpanRecord) -> Result<(), StorageError>;
     fn insert_frontend_error(&self, error: &FrontendError) -> Result<(), StorageError>;
+    fn insert_tauri_ipc_call(&self, call: &TauriIpcCall) -> Result<(), StorageError>;
+    fn insert_tauri_event(&self, event: &TauriEventRecord) -> Result<(), StorageError>;
+    fn insert_tauri_window_state(&self, window: &TauriWindowState) -> Result<(), StorageError>;
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -32,5 +37,26 @@ pub struct SpanQuery {
 pub struct FrontendErrorQuery {
     pub session_id: Option<String>,
     pub trace_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TauriIpcQuery {
+    pub session_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TauriEventQuery {
+    pub session_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TauriWindowQuery {
+    pub session_id: Option<String>,
+    pub latest_only: bool,
     pub limit: Option<usize>,
 }

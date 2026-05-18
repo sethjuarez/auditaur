@@ -8,10 +8,10 @@ description: Auditaur plugin and frontend configuration.
 | Method | Purpose |
 | --- | --- |
 | `service_name(name)` | Overrides the stored service name. |
-| `session_name(name)` | Adds a human-readable session label. |
 | `redact_defaults(bool)` | Enables or disables default key-based redaction. |
-| `max_session_bytes(bytes)` | Configures the intended session size cap. |
 | `allow_release_builds(bool)` | Allows collection outside debug builds. |
+
+`session_name`, `max_session_bytes`, `capture_full_payloads`, and `max_payload_bytes` exist in the internal config type for the planned retention/schema pass, but they are not fully enforced or stored in the current MVP.
 
 ## Frontend package
 
@@ -27,4 +27,4 @@ description: Auditaur plugin and frontend configuration.
 | `batchIntervalMs` | `1000` | Flush cadence. |
 | `maxBatchSize` | `64` | Flush when the in-memory batch reaches this size. |
 
-Important defaults: redaction is enabled, full payload capture is disabled, and release builds are blocked unless explicitly allowed.
+Important defaults: redaction is enabled, full payload capture is disabled in the frontend package, and release builds are blocked unless explicitly allowed.

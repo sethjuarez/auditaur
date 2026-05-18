@@ -91,6 +91,7 @@ dependencies = [
 name = "auditaur-core"
 version = "0.1.0"
 dependencies = [
+ "directories",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

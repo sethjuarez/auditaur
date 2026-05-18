@@ -1,8 +1,14 @@
 use auditaur_collector::exporter_sqlite::{SqliteStore, SQLITE_SCHEMA_VERSION};
-use auditaur_core::model::{FrontendError, LogRecord, Session, SpanRecord, TelemetrySource};
+use auditaur_core::{
+    discovery::DiscoveryFile,
+    model::{
+        FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall,
+        TauriWindowState, TelemetrySource,
+    },
+};
 use serde_json::{json, Value};
-use std::process::Command;
-use tempfile::NamedTempFile;
+use std::{fs, process::Command};
+use tempfile::{NamedTempFile, TempDir};
 
 #[test]
 fn reads_fixture_database_as_json() {
@@ -29,13 +35,70 @@ fn reads_fixture_database_as_json() {
     assert_eq!(trace["spans"][0]["name"], "fixture span");
     assert_eq!(trace["logs"][0]["body"], "fixture log");
     assert_eq!(trace["frontendErrors"][0]["message"], "fixture error");
+
+    let ipc = run_json(["ipc", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert_eq!(ipc[0]["command"], "fixture_command");
+
+    let events = run_json(["events", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert_eq!(events[0]["eventName"], "fixture:event");
+
+    let windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert_eq!(windows[0]["windowLabel"], "main");
+}
+
+#[test]
+fn discovers_apps_and_reads_default_database() {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-fixture")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    let store = create_fixture_database_at(&db_path);
+    drop(store);
+
+    let apps_dir = temp.path().join("apps");
+    fs::create_dir_all(&apps_dir).unwrap();
+    fs::write(
+        apps_dir.join("instance-fixture.json"),
+        serde_json::to_vec_pretty(&DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-fixture".to_string(),
+            session_id: "session-fixture".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            database_path: db_path.to_string_lossy().to_string(),
+            capabilities: vec!["logs".to_string(), "traces".to_string()],
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+
+    let apps = run_json_with_env(["apps", "--json"], temp.path().to_str().unwrap());
+    assert_eq!(apps[0]["status"], "active");
+    assert_eq!(apps[0]["schemaValid"], true);
+
+    let logs = run_json_with_env(["logs", "--json"], temp.path().to_str().unwrap());
+    assert_eq!(logs[0]["body"], "fixture log");
 }
 
 fn run_json<const N: usize>(args: [&str; N]) -> Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_auditaur"))
-        .args(args)
-        .output()
-        .unwrap();
+    run_json_command(Command::new(env!("CARGO_BIN_EXE_auditaur")).args(args))
+}
+
+fn run_json_with_env<const N: usize>(args: [&str; N], data_dir: &str) -> Value {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+    command.args(args).env("AUDITAUR_DATA_DIR", data_dir);
+    run_json_command(&mut command)
+}
+
+fn run_json_command(command: &mut Command) -> Value {
+    let output = command.output().unwrap();
 
     assert!(
         output.status.success(),
@@ -49,7 +112,13 @@ fn run_json<const N: usize>(args: [&str; N]) -> Value {
 
 fn fixture_database() -> NamedTempFile {
     let db = NamedTempFile::new().unwrap();
-    let store = SqliteStore::open(db.path()).unwrap();
+    let store = create_fixture_database_at(db.path());
+    drop(store);
+    db
+}
+
+fn create_fixture_database_at(path: &std::path::Path) -> SqliteStore {
+    let store = SqliteStore::open(path).unwrap();
     store.migrate().unwrap();
 
     let session = Session {
@@ -104,7 +173,7 @@ fn fixture_database() -> NamedTempFile {
 
     store
         .insert_frontend_error(&FrontendError {
-            session_id: session.id,
+            session_id: session.id.clone(),
             timestamp_unix_nanos: 175,
             message: "fixture error".to_string(),
             stack: None,
@@ -118,7 +187,53 @@ fn fixture_database() -> NamedTempFile {
             attributes: json!({ "fixture": true }),
         })
         .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 180,
+            duration_ms: Some(3.0),
+            command: "fixture_command".to_string(),
+            status: "ERROR".to_string(),
+            error_message: Some("fixture failure".to_string()),
+            trace_id: Some("trace-fixture".to_string()),
+            span_id: Some("span-fixture".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: Some(json!({ "ok": true })),
+            args_redacted: true,
+            result_summary: None,
+        })
+        .unwrap();
+    store
+        .insert_tauri_event(&TauriEventRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 181,
+            event_name: "fixture:event".to_string(),
+            direction: "emit".to_string(),
+            target: Some("main".to_string()),
+            trace_id: Some("trace-fixture".to_string()),
+            span_id: Some("span-fixture".to_string()),
+            window_label: Some("main".to_string()),
+            payload_summary: Some("{\"ok\":true}".to_string()),
+            payload_json: Some(json!({ "ok": true })),
+            payload_redacted: true,
+        })
+        .unwrap();
+    store
+        .insert_tauri_window_state(&TauriWindowState {
+            session_id: session.id,
+            timestamp_unix_nanos: 182,
+            window_label: "main".to_string(),
+            webview_label: None,
+            url: None,
+            title: Some("Fixture".to_string()),
+            focused: Some(true),
+            visible: Some(true),
+            width: Some(800.0),
+            height: Some(600.0),
+            scale_factor: Some(1.0),
+            attributes: json!({}),
+        })
+        .unwrap();
 
-    drop(store);
-    db
+    store
 }
