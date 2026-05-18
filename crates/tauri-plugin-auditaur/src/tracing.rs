@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn global_layer_stops_writing_after_state_drop() {
         let temp = TempDir::new().unwrap();
-        let state = test_state(&temp);
+        let state = test_state_with_global_sink(&temp);
         let session_id = state.session_id.clone().unwrap();
         drop(state);
         let subscriber = Registry::default().with(tracing_layer());
@@ -477,6 +477,14 @@ mod tests {
     }
 
     fn test_state(temp: &TempDir) -> AuditaurState {
+        let state = test_state_with_global_sink(temp);
+        if let Some(session_id) = state.session_id.as_deref() {
+            super::clear_sink(session_id);
+        }
+        state
+    }
+
+    fn test_state_with_global_sink(temp: &TempDir) -> AuditaurState {
         AuditaurState::initialize(
             AuditaurConfig {
                 enabled: Some(true),

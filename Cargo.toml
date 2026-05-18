@@ -5,6 +5,7 @@ members = [
     "crates/auditaur-collector",
     "crates/tauri-plugin-auditaur",
 ]
+exclude = ["examples/dogfood/src-tauri"]
 resolver = "2"
 
 [workspace.package]

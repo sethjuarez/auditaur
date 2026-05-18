@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Auditaur Dogfood</title>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Auditaur example</p>
+        <h1>Dogfood telemetry generator</h1>
+        <p>
+          Click each button, then inspect the local SQLite session with the
+          Auditaur CLI or MCP server.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Frontend telemetry</h2>
+        <div class="actions">
+          <button id="console-log">Emit console log</button>
+          <button id="frontend-error">Throw frontend error</button>
+          <button id="frontend-event">Emit/listen to event</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Tauri command telemetry</h2>
+        <div class="actions">
+          <button id="successful-command">Call successful command</button>
+          <button id="failing-command">Call failing command</button>
+          <button id="backend-event">Ask backend to emit event</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Output</h2>
+        <pre id="output">Initializing Auditaur...</pre>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

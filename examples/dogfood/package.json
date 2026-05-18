@@ -1,0 +1,21 @@
+{
+  "name": "auditaur-dogfood",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:api": "npm --prefix ../../packages/api run build",
+    "dev:web": "vite --host 127.0.0.1 --port 1420",
+    "build:web": "npm run build:api && tsc --noEmit && vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@auditaur/api": "file:../../packages/api",
+    "@tauri-apps/api": "^2.9.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7"
+  }
+}

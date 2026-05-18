@@ -278,6 +278,9 @@ mod tests {
             Some("dev.auditaur.test".to_string()),
         )
         .unwrap();
+        if let Some(session_id) = state.session_id.as_deref() {
+            crate::tracing::clear_sink(session_id);
+        }
 
         assert!(state.session_id.is_some());
         assert_eq!(
@@ -302,6 +305,7 @@ mod tests {
         )
         .unwrap();
         let session_id = state.session_id.clone().unwrap();
+        crate::tracing::clear_sink(&session_id);
 
         state
             .export_batch(OTelBatch {
@@ -334,9 +338,12 @@ mod tests {
             .list_logs(&auditaur_core::storage::LogQuery::default())
             .unwrap();
 
-        assert_eq!(logs.len(), 1);
-        assert_eq!(logs[0].session_id, session_id);
-        assert_eq!(logs[0].attributes["api_key"], "[REDACTED]");
-        assert_eq!(logs[0].body_json.as_ref().unwrap()["token"], "[REDACTED]");
+        let log = logs
+            .iter()
+            .find(|log| log.body.as_deref() == Some("hello"))
+            .expect("exported frontend log should be present");
+        assert_eq!(log.session_id, session_id);
+        assert_eq!(log.attributes["api_key"], "[REDACTED]");
+        assert_eq!(log.body_json.as_ref().unwrap()["token"], "[REDACTED]");
     }
 }

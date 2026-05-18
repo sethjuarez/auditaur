@@ -4,3 +4,7 @@
 /docs/node_modules/
 /packages/api/node_modules/
 /packages/api/dist/
+/examples/dogfood/node_modules/
+/examples/dogfood/dist/
+/examples/dogfood/src-tauri/target/
+/examples/dogfood/src-tauri/gen/
