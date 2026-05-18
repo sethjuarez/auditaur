@@ -4,6 +4,20 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+links = "tauri-plugin-auditaur"
 
 [dependencies]
+auditaur-collector = { path = "../auditaur-collector" }
 auditaur-core = { path = "../auditaur-core" }
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+tauri-plugin = { version = "2.6.2", features = ["build"] }

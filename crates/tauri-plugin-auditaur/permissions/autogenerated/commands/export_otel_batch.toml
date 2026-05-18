@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-export-otel-batch"
+description = "Enables the export_otel_batch command without any pre-configured scope."
+commands.allow = ["export_otel_batch"]
+
+[[permission]]
+identifier = "deny-export-otel-batch"
+description = "Denies the export_otel_batch command without any pre-configured scope."
+commands.deny = ["export_otel_batch"]

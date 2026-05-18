@@ -28,7 +28,23 @@ pub struct RedactionResult {
 }
 
 pub fn redact_json(value: &Value, extra_keys: &[String]) -> RedactionResult {
+    redact_json_with_options(value, true, extra_keys)
+}
+
+pub fn redact_json_with_options(
+    value: &Value,
+    redact_defaults: bool,
+    extra_keys: &[String],
+) -> RedactionResult {
     let keys = redaction_key_set(extra_keys);
+    let keys = if redact_defaults {
+        keys
+    } else {
+        extra_keys
+            .iter()
+            .map(|key| key.to_ascii_lowercase())
+            .collect()
+    };
     let mut redacted = false;
     let value = redact_value(value, &keys, &mut redacted);
     RedactionResult { value, redacted }
@@ -87,5 +103,19 @@ mod tests {
         assert_eq!(result.value["name"], "auditaur");
         assert_eq!(result.value["nested"]["token"], "[REDACTED]");
         assert_eq!(result.value["nested"]["items"][0]["api_key"], "[REDACTED]");
+    }
+
+    #[test]
+    fn can_use_extra_keys_without_default_keys() {
+        let input = json!({
+            "token": "kept",
+            "custom_secret": "hidden"
+        });
+
+        let result = super::redact_json_with_options(&input, false, &["custom_secret".to_string()]);
+
+        assert!(result.redacted);
+        assert_eq!(result.value["token"], "kept");
+        assert_eq!(result.value["custom_secret"], "[REDACTED]");
     }
 }

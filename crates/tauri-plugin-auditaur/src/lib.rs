@@ -4,6 +4,10 @@ pub mod error;
 pub mod state;
 
 pub use auditaur_core::AuditaurConfig;
+use tauri::{
+    plugin::{Builder as TauriPluginBuilder, TauriPlugin},
+    Manager, Runtime,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct Builder {
@@ -40,7 +44,20 @@ impl Builder {
         self
     }
 
-    pub fn build(self) -> AuditaurConfig {
-        self.config
+    pub fn build<R: Runtime>(self) -> TauriPlugin<R> {
+        let config = self.config;
+        TauriPluginBuilder::new("auditaur")
+            .invoke_handler(tauri::generate_handler![commands::export_otel_batch])
+            .setup(move |app, _api| {
+                let app_identifier = Some(app.config().identifier.clone());
+                let state = state::AuditaurState::initialize(
+                    config.clone(),
+                    std::process::id(),
+                    app_identifier,
+                )?;
+                app.manage(state);
+                Ok(())
+            })
+            .build()
     }
 }
