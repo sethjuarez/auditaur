@@ -1,0 +1,33 @@
+---
+title: Welcome to Auditaur
+description: What Auditaur is and how it helps humans and AI agents debug Tauri apps.
+sidebar:
+  order: 1
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="MVP in progress">
+  Auditaur is being built as a development-first toolkit. The docs describe the target MVP and clearly label functionality that is not implemented yet.
+</Aside>
+
+## What is Auditaur?
+
+**Auditaur** is local-first runtime observability for Tauri apps. A Tauri app opts in during development, emits OpenTelemetry-compatible telemetry, and Auditaur persists that data to SQLite on the developer machine.
+
+The goal is to make Tauri debugging easy for both humans and coding agents: instead of asking for copied logs, browser console output, screenshots, or hand-written summaries, tools can query structured local telemetry.
+
+## MVP scope
+
+| Capability | Status |
+| --- | --- |
+| SQLite session store | <Badge text="Planned" variant="caution" /> |
+| CLI inspection | <Badge text="Planned" variant="caution" /> |
+| Tauri plugin | <Badge text="Planned" variant="caution" /> |
+| Frontend API package | <Badge text="Planned" variant="caution" /> |
+| Third-party OpenTelemetry sink | <Badge text="Planned" variant="caution" /> |
+| MCP server | <Badge text="Planned" variant="caution" /> |
+
+## Security posture
+
+Auditaur is local-only by default, development/debug oriented, and designed to avoid source code, environment variables, secrets, raw request bodies, or arbitrary filesystem collection.

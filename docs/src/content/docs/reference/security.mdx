@@ -1,0 +1,10 @@
+---
+title: Security and Privacy
+description: Auditaur's local-first security posture.
+---
+
+Auditaur is local-only and development-first by default.
+
+The MVP should not collect source code, environment variables, secrets, raw request bodies, or arbitrary filesystem contents. Redaction applies recursively to JSON payloads and common sensitive key names.
+
+Default redaction is key-based. It reduces accidental capture of common secret fields, but applications should still avoid sending secrets to telemetry payloads.

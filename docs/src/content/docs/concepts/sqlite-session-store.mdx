@@ -1,0 +1,14 @@
+---
+title: SQLite session store
+description: How Auditaur stores telemetry sessions.
+---
+
+Each Auditaur debug session writes to a local SQLite database named `telemetry.sqlite`.
+
+Default locations:
+
+| Platform | Path |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\auditaur\sessions\<session-id>\telemetry.sqlite` |
+| macOS | `~/Library/Application Support/auditaur/sessions/<session-id>/telemetry.sqlite` |
+| Linux | `~/.local/share/auditaur/sessions/<session-id>/telemetry.sqlite` |

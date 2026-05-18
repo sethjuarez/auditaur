@@ -1,0 +1,5 @@
+/target/
+/docs/dist/
+/docs/.astro/
+/docs/node_modules/
+/packages/api/node_modules/

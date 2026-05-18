@@ -1,0 +1,25 @@
+---
+title: SQLite Schema
+description: Initial Auditaur SQLite schema overview.
+---
+
+The initial schema is OpenTelemetry-aligned and optimized for local debugging queries.
+
+Core tables:
+
+```text
+sessions
+resources
+logs
+spans
+span_events
+span_links
+frontend_errors
+tauri_ipc_calls
+tauri_events
+tauri_windows
+metrics
+screenshots
+```
+
+JSON attributes are stored as text initially.

@@ -1,0 +1,8 @@
+---
+title: OpenTelemetry model
+description: How Auditaur uses OpenTelemetry concepts.
+---
+
+Auditaur uses OpenTelemetry concepts for resources, logs, traces, spans, span events, links, attributes, and metrics.
+
+Auditaur-specific records, such as Tauri IPC calls and frontend errors, are additive. Auditaur is also a local OpenTelemetry sink: generic spans and logs emitted by app code or third-party libraries should still be preserved and queryable even when they do not contain Tauri-specific attributes.

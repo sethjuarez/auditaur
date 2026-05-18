@@ -1,0 +1,22 @@
+---
+title: Frontend API
+description: Target frontend setup for Auditaur.
+---
+
+The target frontend API is:
+
+```ts
+import { initAuditaur } from '@auditaur/api';
+
+const auditaur = await initAuditaur({
+  serviceName: 'my-tauri-app',
+  instrumentConsole: true,
+  instrumentErrors: true,
+  instrumentTauriInvoke: true,
+  instrumentTauriEvents: true,
+});
+
+export const invoke = auditaur.invoke;
+```
+
+Default instrumentation should be conservative and avoid storing large payloads.

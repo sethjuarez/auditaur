@@ -1,0 +1,8 @@
+---
+title: Local-first observability
+description: Why Auditaur stores development telemetry locally.
+---
+
+Auditaur stores telemetry in SQLite on the developer machine. The MVP should not run a cloud service or open a network listener by default.
+
+This keeps the debugging loop explicit, local, and inspectable while still giving humans and AI agents structured runtime context.

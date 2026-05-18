@@ -1,0 +1,21 @@
+---
+title: MCP Tools
+description: Planned MCP tools exposed by auditaur mcp.
+---
+
+The MVP MCP server should run over stdio and expose bounded, redacted tools:
+
+```text
+list_sessions
+list_apps
+list_logs
+list_errors
+list_traces
+get_trace
+list_ipc_calls
+list_events
+list_windows
+doctor
+```
+
+The server must not write non-MCP data to stdout.

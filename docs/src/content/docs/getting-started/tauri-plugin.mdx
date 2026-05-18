@@ -1,0 +1,21 @@
+---
+title: Tauri Plugin
+description: Target Tauri plugin setup for Auditaur.
+---
+
+The target plugin API is:
+
+```rust
+tauri::Builder::default()
+    .plugin(
+        tauri_plugin_auditaur::Builder::new()
+            .service_name("my-tauri-app")
+            .session_name("dev")
+            .redact_defaults(true)
+            .max_session_bytes(256 * 1024 * 1024)
+            .build(),
+    )
+    .run(tauri::generate_context!())?;
+```
+
+The plugin will create the SQLite session database, write discovery files, receive frontend telemetry batches, and apply redaction before persistence.

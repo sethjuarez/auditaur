@@ -1,0 +1,11 @@
+[package]
+name = "auditaur-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+auditaur-core = { path = "../auditaur-core" }
+serde.workspace = true
+serde_json.workspace = true
