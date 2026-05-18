@@ -5,6 +5,8 @@ description: Auditaur's local-first security posture.
 
 Auditaur is local-only and development-first by default.
 
-The MVP should not collect source code, environment variables, secrets, raw request bodies, or arbitrary filesystem contents. Redaction applies recursively to JSON payloads and common sensitive key names.
+Auditaur does not collect source code, environment variables, arbitrary filesystem contents, or screenshots by default. Telemetry is written to a local SQLite database under the developer's local data directory.
 
-Default redaction is key-based. It reduces accidental capture of common secret fields, but applications should still avoid sending secrets to telemetry payloads.
+Default redaction is key-based and recursive for JSON payloads. Common sensitive keys such as `password`, `token`, `secret`, and `api_key` are replaced with `[REDACTED]` before persistence.
+
+Redaction reduces accidental capture, but applications should still avoid sending secrets to telemetry payloads. Keep Auditaur development-only unless you have explicitly reviewed what your app emits and set `allow_release_builds(true)`.

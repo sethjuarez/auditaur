@@ -1,21 +1,27 @@
 ---
 title: MCP Tools
-description: Planned MCP tools exposed by auditaur mcp.
+description: Tools exposed by auditaur mcp over stdio JSON-RPC.
 ---
 
-The MVP MCP server should run over stdio and expose bounded, redacted tools:
+Start the server:
 
-```text
-list_sessions
-list_apps
-list_logs
-list_errors
-list_traces
-get_trace
-list_ipc_calls
-list_events
-list_windows
-doctor
+```powershell
+cargo run -p auditaur-cli -- mcp
 ```
 
-The server must not write non-MCP data to stdout.
+The server speaks stdio JSON-RPC and does not write non-MCP content to stdout. Tool responses are JSON serialized as MCP text content and are bounded.
+
+| Tool | Required arguments | Notes |
+| --- | --- | --- |
+| `doctor` | none | Accepts optional `db`. |
+| `list_sessions` | `db` | Lists sessions in a SQLite database. |
+| `list_logs` | `db` | Optional `sessionId`, `traceId`, `limit`. |
+| `list_errors` | `db` | Optional `sessionId`, `traceId`, `limit`. |
+| `list_traces` | `db` | Optional `sessionId`, `limit`. |
+| `get_trace` | `db`, `traceId` | Returns spans, logs, and frontend errors for a trace. |
+| `list_apps` | none | Currently returns an empty list until discovery reads are wired. |
+| `list_ipc_calls` | none | Currently returns an empty list until IPC reads are wired. |
+| `list_events` | none | Currently returns an empty list until event reads are wired. |
+| `list_windows` | none | Currently returns an empty list until window reads are wired. |
+
+For the dogfood app, copy `databasePath` from the discovery file and pass it as the `db` argument when calling tools.

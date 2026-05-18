@@ -1,12 +1,42 @@
 ---
 title: Installation
-description: Planned installation paths for Auditaur.
+description: Build and run Auditaur from source during the pre-release MVP.
 ---
 
-Auditaur is not published yet. The MVP will provide:
+Auditaur is not published yet. Build from source until the first release.
 
-1. A Rust CLI binary named `auditaur`.
-2. A Tauri v2 plugin crate named `tauri-plugin-auditaur`.
-3. A frontend package named `@auditaur/api`.
+## Prerequisites
 
-Until the first release, build from source in the repository.
+1. Rust and Cargo.
+2. Node.js 24 or newer for the docs and example app.
+3. Tauri v2 prerequisites for your operating system.
+
+## Build the CLI
+
+```powershell
+cargo build -p auditaur-cli
+cargo run -p auditaur-cli -- doctor
+```
+
+The binary is named `auditaur`. During development, examples use `cargo run -p auditaur-cli -- ...` so you do not need to install it globally.
+
+## Build the frontend package
+
+```powershell
+cd packages\api
+npm install
+npm run build
+npm test
+```
+
+The package is currently consumed from the repo as `@auditaur/api` through a local file dependency.
+
+## Build the docs
+
+```powershell
+cd docs
+npm install
+npm run build
+```
+
+The docs site is configured for GitHub Pages at `auditaur.dev` through `docs/public/CNAME` and `.github/workflows/publish-docs.yml`.

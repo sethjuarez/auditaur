@@ -1,14 +1,30 @@
 ---
 title: Configuration
-description: Planned Auditaur configuration surfaces.
+description: Auditaur plugin and frontend configuration.
 ---
 
-Auditaur configuration should be available through the Rust plugin builder and environment variables.
+## Rust plugin builder
 
-Important defaults:
+| Method | Purpose |
+| --- | --- |
+| `service_name(name)` | Overrides the stored service name. |
+| `session_name(name)` | Adds a human-readable session label. |
+| `redact_defaults(bool)` | Enables or disables default key-based redaction. |
+| `max_session_bytes(bytes)` | Configures the intended session size cap. |
+| `allow_release_builds(bool)` | Allows collection outside debug builds. |
 
-1. Enabled only in debug builds or with explicit opt-in.
-2. Redaction enabled.
-3. Full payload capture disabled.
-4. Bounded payload sizes and session retention.
-5. Release builds blocked unless explicitly allowed.
+## Frontend package
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `serviceName` | required | Frontend service name. |
+| `instrumentConsole` | `true` | Capture console logs. |
+| `instrumentErrors` | `true` | Capture uncaught errors and unhandled rejections. |
+| `instrumentTauriInvoke` | `true` | Wrap Tauri command calls. |
+| `instrumentTauriEvents` | `true` | Wrap event emit/listen calls. |
+| `captureFullPayloads` | `false` | Store full payloads when they fit within the size cap. |
+| `maxPayloadBytes` | `16384` | Bounds captured payload summaries and payload values. |
+| `batchIntervalMs` | `1000` | Flush cadence. |
+| `maxBatchSize` | `64` | Flush when the in-memory batch reaches this size. |
+
+Important defaults: redaction is enabled, full payload capture is disabled, and release builds are blocked unless explicitly allowed.

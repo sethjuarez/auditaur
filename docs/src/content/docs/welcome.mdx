@@ -8,7 +8,7 @@ sidebar:
 import { Aside, Badge } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="MVP in progress">
-  Auditaur is being built as a development-first toolkit. The docs describe the target MVP and clearly label functionality that is not implemented yet.
+  Auditaur is still pre-release. The storage layer, CLI read path, Tauri plugin, frontend package, Rust tracing layer, MCP server, and dogfood example are implemented in source; package publishing and richer Tauri-specific views are still pending.
 </Aside>
 
 ## What is Auditaur?
@@ -21,12 +21,13 @@ The goal is to make Tauri debugging easy for both humans and coding agents: inst
 
 | Capability | Status |
 | --- | --- |
-| SQLite session store | <Badge text="Planned" variant="caution" /> |
-| CLI inspection | <Badge text="Planned" variant="caution" /> |
-| Tauri plugin | <Badge text="Planned" variant="caution" /> |
-| Frontend API package | <Badge text="Planned" variant="caution" /> |
-| Third-party OpenTelemetry sink | <Badge text="Planned" variant="caution" /> |
-| MCP server | <Badge text="Planned" variant="caution" /> |
+| SQLite session store | <Badge text="Implemented" variant="success" /> |
+| CLI inspection | <Badge text="Implemented" variant="success" /> |
+| Tauri plugin | <Badge text="Implemented" variant="success" /> |
+| Frontend API package | <Badge text="Implemented" variant="success" /> |
+| Rust tracing and third-party span sink | <Badge text="Implemented" variant="success" /> |
+| MCP server | <Badge text="Implemented" variant="success" /> |
+| App/IPC/event/window views | <Badge text="Partial" variant="caution" /> |
 
 ## Security posture
 

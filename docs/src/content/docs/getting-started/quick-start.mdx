@@ -1,13 +1,34 @@
 ---
 title: Quick Start
-description: The target development loop for using Auditaur with a Tauri app.
+description: Run the dogfood Tauri app and inspect its local telemetry.
 ---
 
-The target quick start is:
+The fastest way to try Auditaur is the dogfood app in `examples\dogfood`.
 
-1. Add `tauri-plugin-auditaur` to the Tauri app.
-2. Initialize `@auditaur/api` in the frontend.
-3. Run the app in development mode.
-4. Inspect the local session with `auditaur logs`, `auditaur errors`, `auditaur traces`, or `auditaur mcp`.
+```powershell
+cd examples\dogfood
+npm install
+npm run build:api
+npm run tauri dev
+```
 
-Auditaur should be enabled automatically only for debug builds or when explicitly requested with `AUDITAUR=1`.
+Click the buttons to emit a console log, throw a frontend error, call successful and failing Tauri commands, and emit/listen to events.
+
+While the app is running, copy `databasePath` from the latest discovery file:
+
+| Platform | Discovery directory |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\auditaur\apps` |
+| macOS | `~/Library/Application Support/auditaur/apps` |
+| Linux | `~/.local/share/auditaur/apps` |
+
+Then inspect the session:
+
+```powershell
+cargo run -p auditaur-cli -- sessions --db "<databasePath>" --json
+cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
+cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
+cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
+```
+
+Use `cargo run -p auditaur-cli -- mcp` to expose the same database-backed tools to an MCP client.

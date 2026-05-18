@@ -1,9 +1,17 @@
 ---
 title: Frontend API
-description: Target frontend setup for Auditaur.
+description: Capture frontend console logs, errors, invokes, and events.
 ---
 
-The target frontend API is:
+Build the local package first:
+
+```powershell
+cd packages\api
+npm install
+npm run build
+```
+
+Initialize Auditaur once in the Tauri webview:
 
 ```ts
 import { initAuditaur } from '@auditaur/api';
@@ -14,9 +22,20 @@ const auditaur = await initAuditaur({
   instrumentErrors: true,
   instrumentTauriInvoke: true,
   instrumentTauriEvents: true,
+  captureFullPayloads: false,
 });
 
 export const invoke = auditaur.invoke;
 ```
 
-Default instrumentation should be conservative and avoid storing large payloads.
+The returned client exposes:
+
+| Method | Purpose |
+| --- | --- |
+| `invoke(command, args)` | Wraps Tauri command calls in client spans. |
+| `emit(event, payload)` / `emitTo(target, event, payload)` | Records event emit spans. |
+| `listen(event, handler)` | Records event receive spans. |
+| `flush()` | Writes the current batch immediately. |
+| `shutdown()` | Removes console/error hooks and flushes pending telemetry. |
+
+Console and error instrumentation are enabled by default. Full payload capture is disabled by default; payload summaries and recursive key-based redaction help reduce accidental secret capture.

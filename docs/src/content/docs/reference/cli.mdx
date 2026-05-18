@@ -1,22 +1,20 @@
 ---
 title: CLI Reference
-description: Planned Auditaur CLI commands.
+description: Auditaur CLI commands for inspecting SQLite sessions.
 ---
 
-Planned commands:
+All read commands accept `--db <path>` and most support `--json`.
 
 ```text
-auditaur doctor
-auditaur sessions
-auditaur apps
-auditaur logs
-auditaur errors
-auditaur traces
-auditaur trace <trace-id>
-auditaur ipc
-auditaur events
-auditaur windows
-auditaur mcp
+cargo run -p auditaur-cli -- doctor [--db <path>]
+cargo run -p auditaur-cli -- sessions --db <path> [--json] [--limit <n>]
+cargo run -p auditaur-cli -- logs --db <path> [--json] [--session <id>] [--trace <id>] [--limit <n>]
+cargo run -p auditaur-cli -- errors --db <path> [--json] [--session <id>] [--trace <id>] [--limit <n>]
+cargo run -p auditaur-cli -- traces --db <path> [--json] [--session <id>] [--limit <n>]
+cargo run -p auditaur-cli -- trace --db <path> [--json] [--session <id>] <trace-id>
+cargo run -p auditaur-cli -- mcp
 ```
 
-Human output should be concise by default. Structured output should be available with `--json`.
+Human output is compact and bounds table cells. JSON output uses camelCase fields matching the Rust model.
+
+`doctor --db` validates that a SQLite database exists, has the current schema version, and contains the expected core tables.

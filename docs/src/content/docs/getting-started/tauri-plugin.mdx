@@ -1,11 +1,27 @@
 ---
 title: Tauri Plugin
-description: Target Tauri plugin setup for Auditaur.
+description: Add the Auditaur embedded collector to a Tauri v2 app.
 ---
 
-The target plugin API is:
+Add the plugin crate to your Tauri app:
+
+```toml
+[dependencies]
+tauri-plugin-auditaur = { path = "../../crates/tauri-plugin-auditaur" }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+Register the plugin and, if you want backend tracing, install the tracing layer before starting Tauri:
 
 ```rust
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+fn main() {
+    tracing_subscriber::registry()
+        .with(tauri_plugin_auditaur::tracing_layer())
+        .init();
+
 tauri::Builder::default()
     .plugin(
         tauri_plugin_auditaur::Builder::new()
@@ -15,7 +31,17 @@ tauri::Builder::default()
             .max_session_bytes(256 * 1024 * 1024)
             .build(),
     )
-    .run(tauri::generate_context!())?;
+    .run(tauri::generate_context!())
+    .expect("failed to run app");
+}
 ```
 
-The plugin will create the SQLite session database, write discovery files, receive frontend telemetry batches, and apply redaction before persistence.
+The plugin creates the SQLite session database, writes a discovery file, receives frontend telemetry batches through `export_otel_batch`, applies recursive redaction, and records Rust `tracing` events/spans. Add `auditaur:default` to the app capability so the frontend package can call the plugin command:
+
+```json
+{
+  "permissions": ["core:default", "auditaur:default"]
+}
+```
+
+The collector is development-first. Release builds are blocked unless `allow_release_builds(true)` is explicitly set.

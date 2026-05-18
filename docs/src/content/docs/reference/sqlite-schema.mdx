@@ -22,4 +22,6 @@ metrics
 screenshots
 ```
 
-JSON attributes are stored as text initially.
+`logs`, `spans`, and `frontend_errors` are implemented and queryable through the CLI and MCP server. The Tauri-specific tables are present in the schema so future IPC, event, window, metric, and screenshot records can be added without a disruptive migration.
+
+JSON attributes are stored as text. The store enables WAL mode, uses a busy timeout for multi-connection reads, and validates schema version `1` in `doctor --db`.

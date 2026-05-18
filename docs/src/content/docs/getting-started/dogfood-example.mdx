@@ -1,0 +1,49 @@
+---
+title: Dogfood Example
+description: Use the bundled Tauri app to generate and inspect Auditaur telemetry.
+---
+
+The dogfood app in `examples\dogfood` exercises the current end-to-end loop:
+
+1. Frontend console and error instrumentation.
+2. Wrapped Tauri command calls.
+3. Wrapped Tauri event emit/listen calls.
+4. Backend Rust `tracing` logs and spans.
+5. CLI and MCP reads from the same SQLite session.
+
+## Run the app
+
+```powershell
+cd examples\dogfood
+npm install
+npm run build:api
+npm run tauri dev
+```
+
+Click each button in the app. The failing-command button is intentionally useful for agents: it creates a frontend `tauri.invoke failing_command` span with `ERROR` status and a backend tracing error that contains `Intentional dogfood backend failure`.
+
+## Inspect the data
+
+Copy `databasePath` from the latest discovery file under:
+
+| Platform | Discovery directory |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\auditaur\apps` |
+| macOS | `~/Library/Application Support/auditaur/apps` |
+| Linux | `~/.local/share/auditaur/apps` |
+
+Then run:
+
+```powershell
+cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
+cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
+cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
+```
+
+For MCP, start:
+
+```powershell
+cargo run -p auditaur-cli -- mcp
+```
+
+Point your MCP client at that command and ask it to use `list_traces`, `list_logs`, `list_errors`, and `get_trace` with the copied `databasePath`.
