@@ -116,11 +116,13 @@ impl AuditaurState {
             heartbeat_alive.clone(),
             Duration::from_millis(config.heartbeat_interval_ms.max(1_000)),
         );
+        let store = Arc::new(Mutex::new(store));
+        crate::tracing::install_sink(session_id.clone(), store.clone());
 
         Ok(Self {
             session_id: Some(session_id),
             enabled: true,
-            store: Some(Arc::new(Mutex::new(store))),
+            store: Some(store),
             discovery_path: Some(discovery_path),
             heartbeat_alive: Some(heartbeat_alive),
             redact_defaults: config.redact_defaults,
@@ -174,6 +176,15 @@ impl AuditaurState {
         Ok(())
     }
 
+    pub fn tracing_layer(&self) -> crate::tracing::AuditaurTracingLayer {
+        match (&self.session_id, &self.store) {
+            (Some(session_id), Some(store)) => {
+                crate::tracing::AuditaurTracingLayer::with_sink(session_id.clone(), store.clone())
+            }
+            _ => crate::tracing::tracing_layer(),
+        }
+    }
+
     fn redact_value(&self, value: &serde_json::Value) -> serde_json::Value {
         auditaur_core::redaction::redact_json_with_options(
             value,
@@ -188,6 +199,9 @@ impl Drop for AuditaurState {
     fn drop(&mut self) {
         if let Some(alive) = &self.heartbeat_alive {
             alive.store(false, Ordering::SeqCst);
+        }
+        if let Some(session_id) = &self.session_id {
+            crate::tracing::clear_sink(session_id);
         }
         if let Some(path) = &self.discovery_path {
             let _ = fs::remove_file(path);

@@ -2,12 +2,14 @@ pub mod commands;
 pub mod desktop;
 pub mod error;
 pub mod state;
+pub mod tracing;
 
 pub use auditaur_core::AuditaurConfig;
 use tauri::{
     plugin::{Builder as TauriPluginBuilder, TauriPlugin},
     Manager, Runtime,
 };
+pub use tracing::tracing_layer;
 
 #[derive(Debug, Clone, Default)]
 pub struct Builder {
