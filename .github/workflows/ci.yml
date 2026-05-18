@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-workspace:
+    name: Rust workspace
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  api:
+    name: Frontend API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/api/package-lock.json
+      - run: npm ci
+        working-directory: packages/api
+      - run: npm test
+        working-directory: packages/api
+      - run: npm run build
+        working-directory: packages/api
+      - run: npm audit --audit-level=moderate
+        working-directory: packages/api
+        continue-on-error: true
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+        working-directory: docs
+      - run: npm run build
+        working-directory: docs
+      - run: npm audit --audit-level=moderate
+        working-directory: docs
+        continue-on-error: true
+
+  dogfood-web:
+    name: Dogfood web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            packages/api/package-lock.json
+            examples/dogfood/package-lock.json
+      - run: npm ci
+        working-directory: packages/api
+      - run: npm run build
+        working-directory: packages/api
+      - run: npm ci
+        working-directory: examples/dogfood
+      - run: npm run build:web
+        working-directory: examples/dogfood
+      - run: npm audit --audit-level=moderate
+        working-directory: examples/dogfood
+        continue-on-error: true
+
+  tauri-check:
+    name: Dogfood Tauri check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            packages/api/package-lock.json
+            examples/dogfood/package-lock.json
+      - run: npm ci
+        working-directory: packages/api
+      - run: npm run build
+        working-directory: packages/api
+      - run: npm ci
+        working-directory: examples/dogfood
+      - run: npm run build:web
+        working-directory: examples/dogfood
+      - run: cargo check --manifest-path examples\dogfood\src-tauri\Cargo.toml
