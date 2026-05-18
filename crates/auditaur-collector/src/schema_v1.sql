@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
+  session_name TEXT,
   service_name TEXT NOT NULL,
   service_version TEXT,
   app_identifier TEXT,

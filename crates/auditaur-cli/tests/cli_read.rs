@@ -123,6 +123,7 @@ fn create_fixture_database_at(path: &std::path::Path) -> SqliteStore {
 
     let session = Session {
         id: "session-fixture".to_string(),
+        session_name: Some("fixture".to_string()),
         service_name: "auditaur-fixture".to_string(),
         service_version: Some("0.1.0".to_string()),
         app_identifier: Some("dev.auditaur.fixture".to_string()),

@@ -56,6 +56,10 @@ impl SqliteStore {
             INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ({SQLITE_SCHEMA_VERSION}, datetime('now'));
             COMMIT;"
         ))?;
+        if !column_exists(&self.conn, "sessions", "session_name")? {
+            self.conn
+                .execute("ALTER TABLE sessions ADD COLUMN session_name TEXT", [])?;
+        }
         Ok(())
     }
 
@@ -99,9 +103,10 @@ impl SqliteStore {
     pub fn create_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
             "INSERT INTO sessions (
-                id, service_name, service_version, app_identifier, pid, started_at, ended_at, schema_version, auditaur_version
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                id, session_name, service_name, service_version, app_identifier, pid, started_at, ended_at, schema_version, auditaur_version
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
+                session_name = excluded.session_name,
                 service_name = excluded.service_name,
                 service_version = excluded.service_version,
                 app_identifier = excluded.app_identifier,
@@ -112,6 +117,7 @@ impl SqliteStore {
                 auditaur_version = excluded.auditaur_version",
             params![
                 session.id,
+                session.session_name,
                 session.service_name,
                 session.service_version,
                 session.app_identifier,
@@ -129,7 +135,7 @@ impl SqliteStore {
         self.conn
             .query_row(
                 "SELECT id, service_name, service_version, app_identifier, pid, started_at,
-                    ended_at, schema_version, auditaur_version
+                    ended_at, schema_version, auditaur_version, session_name
                  FROM sessions
                  WHERE id = ?1",
                 params![session_id],
@@ -143,7 +149,7 @@ impl SqliteStore {
         let limit = bounded_limit(limit, 20);
         let mut stmt = self.conn.prepare(
             "SELECT id, service_name, service_version, app_identifier, pid, started_at,
-                ended_at, schema_version, auditaur_version
+                ended_at, schema_version, auditaur_version, session_name
              FROM sessions
              ORDER BY started_at DESC
              LIMIT ?1",
@@ -297,6 +303,55 @@ impl SqliteStore {
                 serde_json::to_string(&window.attributes)?,
             ],
         )?;
+        Ok(())
+    }
+
+    pub fn enforce_retention(&self, limits: crate::retention::RetentionLimits) -> Result<()> {
+        prune_table(
+            &self.conn,
+            "logs",
+            "timestamp_unix_nanos",
+            limits.max_log_rows,
+        )?;
+        prune_table(
+            &self.conn,
+            "spans",
+            "start_time_unix_nanos",
+            limits.max_span_rows,
+        )?;
+        remove_orphan_span_children(&self.conn)?;
+        prune_table(
+            &self.conn,
+            "frontend_errors",
+            "timestamp_unix_nanos",
+            limits.max_error_rows,
+        )?;
+
+        if database_size_bytes(&self.conn)? > limits.max_session_bytes {
+            for table in [
+                ("logs", "timestamp_unix_nanos"),
+                ("span_events", "timestamp_unix_nanos"),
+                ("span_links", "id"),
+                ("spans", "start_time_unix_nanos"),
+                ("frontend_errors", "timestamp_unix_nanos"),
+                ("tauri_ipc_calls", "timestamp_unix_nanos"),
+                ("tauri_events", "timestamp_unix_nanos"),
+                ("tauri_windows", "timestamp_unix_nanos"),
+                ("metrics", "timestamp_unix_nanos"),
+                ("screenshots", "timestamp_unix_nanos"),
+            ] {
+                prune_table_to_fraction(&self.conn, table.0, table.1, 2)?;
+                if table.0 == "spans" {
+                    remove_orphan_span_children(&self.conn)?;
+                }
+                if database_size_bytes(&self.conn)? <= limits.max_session_bytes {
+                    break;
+                }
+            }
+            remove_orphan_span_children(&self.conn)?;
+            self.conn.execute_batch("VACUUM;")?;
+        }
+
         Ok(())
     }
 
@@ -587,6 +642,79 @@ fn bounded_limit(limit: Option<usize>, default_limit: i64) -> i64 {
         .unwrap_or(default_limit)
 }
 
+fn database_size_bytes(conn: &Connection) -> Result<u64> {
+    let page_count: u64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+    let page_size: u64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    Ok(page_count.saturating_mul(page_size))
+}
+
+fn prune_table(conn: &Connection, table: &str, time_column: &str, max_rows: u64) -> Result<()> {
+    let count: u64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })?;
+    if count <= max_rows {
+        return Ok(());
+    }
+    let delete_count = count - max_rows;
+    conn.execute(
+        &format!(
+            "DELETE FROM {table} WHERE id IN (
+                SELECT id FROM {table} ORDER BY {time_column} ASC, id ASC LIMIT ?1
+            )"
+        ),
+        params![i64::try_from(delete_count).unwrap_or(i64::MAX)],
+    )?;
+    Ok(())
+}
+
+fn prune_table_to_fraction(
+    conn: &Connection,
+    table: &str,
+    time_column: &str,
+    divisor: u64,
+) -> Result<()> {
+    let count: u64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })?;
+    if count == 0 {
+        return Ok(());
+    }
+    let delete_count = (count / divisor).max(1);
+    conn.execute(
+        &format!(
+            "DELETE FROM {table} WHERE id IN (
+                SELECT id FROM {table} ORDER BY {time_column} ASC, id ASC LIMIT ?1
+            )"
+        ),
+        params![i64::try_from(delete_count).unwrap_or(i64::MAX)],
+    )?;
+    Ok(())
+}
+
+fn remove_orphan_span_children(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "DELETE FROM span_events
+         WHERE NOT EXISTS (
+            SELECT 1 FROM spans
+            WHERE spans.session_id = span_events.session_id
+              AND spans.trace_id = span_events.trace_id
+              AND spans.span_id = span_events.span_id
+         )",
+        [],
+    )?;
+    conn.execute(
+        "DELETE FROM span_links
+         WHERE NOT EXISTS (
+            SELECT 1 FROM spans
+            WHERE spans.session_id = span_links.session_id
+              AND spans.trace_id = span_links.trace_id
+              AND spans.span_id = span_links.span_id
+         )",
+        [],
+    )?;
+    Ok(())
+}
+
 fn collect_rows<T, M>(rows: rusqlite::MappedRows<'_, M>) -> Result<Vec<T>>
 where
     M: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
@@ -710,6 +838,7 @@ fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         ended_at: row.get(6)?,
         schema_version: row.get(7)?,
         auditaur_version: row.get(8)?,
+        session_name: row.get(9)?,
     })
 }
 
@@ -754,6 +883,7 @@ const REQUIRED_COLUMNS: &[(&str, &str)] = &[
     ("spans", "source"),
     ("frontend_errors", "attributes_json"),
     ("sessions", "schema_version"),
+    ("sessions", "session_name"),
 ];
 
 const LOGS_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, observed_timestamp_unix_nanos,
@@ -940,7 +1070,7 @@ const MIGRATION_1: &str = include_str!("schema_v1.sql");
 
 #[cfg(test)]
 mod tests {
-    use super::{SqliteStore, SQLITE_SCHEMA_VERSION};
+    use super::{column_exists, SqliteStore, SQLITE_SCHEMA_VERSION};
     use auditaur_core::{
         model::{
             FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall,
@@ -1104,6 +1234,7 @@ mod tests {
         let sessions = reader.list_sessions(Some(10)).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "session-1");
+        assert_eq!(sessions[0].session_name.as_deref(), Some("test-session"));
     }
 
     #[test]
@@ -1235,9 +1366,140 @@ mod tests {
         assert_eq!(windows[0].focused, Some(true));
     }
 
+    #[test]
+    fn retention_prunes_old_rows() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let session = sample_session();
+        store.create_session(&session).unwrap();
+
+        for index in 0..5 {
+            store
+                .insert_log(&LogRecord {
+                    session_id: session.id.clone(),
+                    timestamp_unix_nanos: index,
+                    observed_timestamp_unix_nanos: None,
+                    severity_text: Some("INFO".to_string()),
+                    severity_number: Some(9),
+                    body: Some(format!("log-{index}")),
+                    body_json: None,
+                    trace_id: None,
+                    span_id: None,
+                    scope_name: None,
+                    scope_version: None,
+                    attributes: json!({}),
+                    source: TelemetrySource::Backend,
+                })
+                .unwrap();
+        }
+
+        store
+            .enforce_retention(crate::retention::RetentionLimits {
+                max_session_bytes: u64::MAX,
+                max_log_rows: 3,
+                ..crate::retention::RetentionLimits::default()
+            })
+            .unwrap();
+
+        let logs = store.list_logs(&LogQuery::default()).unwrap();
+        assert_eq!(logs.len(), 3);
+        assert_eq!(logs.last().unwrap().body.as_deref(), Some("log-2"));
+    }
+
+    #[test]
+    fn migration_adds_session_name_to_existing_v1_database() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .conn
+            .execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                 INSERT INTO schema_migrations(version, applied_at) VALUES (1, 'now');
+                 CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    service_name TEXT NOT NULL,
+                    service_version TEXT,
+                    app_identifier TEXT,
+                    pid INTEGER,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    schema_version INTEGER NOT NULL,
+                    auditaur_version TEXT
+                 );",
+            )
+            .unwrap();
+
+        store.migrate().unwrap();
+        store.validate_schema().unwrap();
+        assert!(column_exists(&store.conn, "sessions", "session_name").unwrap());
+    }
+
+    #[test]
+    fn retention_removes_orphan_span_children() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let session = sample_session();
+        store.create_session(&session).unwrap();
+        for index in 0..3 {
+            store
+                .insert_span(&SpanRecord {
+                    session_id: session.id.clone(),
+                    trace_id: "trace-retention".to_string(),
+                    span_id: format!("span-{index}"),
+                    parent_span_id: None,
+                    name: format!("span-{index}"),
+                    kind: Some("internal".to_string()),
+                    start_time_unix_nanos: index,
+                    end_time_unix_nanos: Some(index + 1),
+                    status_code: Some("OK".to_string()),
+                    status_message: None,
+                    scope_name: None,
+                    scope_version: None,
+                    attributes: json!({}),
+                    source: TelemetrySource::Backend,
+                })
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO span_events(session_id, trace_id, span_id, name, timestamp_unix_nanos, attributes_json)
+                     VALUES (?1, 'trace-retention', ?2, 'event', ?3, '{}')",
+                    rusqlite::params![session.id, format!("span-{index}"), index],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO span_links(session_id, trace_id, span_id, linked_trace_id, linked_span_id, attributes_json)
+                     VALUES (?1, 'trace-retention', ?2, 'linked', 'linked-span', '{}')",
+                    rusqlite::params![session.id, format!("span-{index}")],
+                )
+                .unwrap();
+        }
+
+        store
+            .enforce_retention(crate::retention::RetentionLimits {
+                max_session_bytes: u64::MAX,
+                max_span_rows: 1,
+                ..crate::retention::RetentionLimits::default()
+            })
+            .unwrap();
+
+        let span_events: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM span_events", [], |row| row.get(0))
+            .unwrap();
+        let span_links: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM span_links", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(span_events, 1);
+        assert_eq!(span_links, 1);
+    }
+
     fn sample_session() -> Session {
         Session {
             id: "session-1".to_string(),
+            session_name: Some("test-session".to_string()),
             service_name: "auditaur-test".to_string(),
             service_version: Some("0.1.0".to_string()),
             app_identifier: Some("dev.auditaur.test".to_string()),

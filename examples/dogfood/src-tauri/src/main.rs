@@ -44,6 +44,7 @@ fn main() {
         .plugin(
             tauri_plugin_auditaur::Builder::new()
                 .service_name("auditaur-dogfood-backend")
+                .session_name("dogfood-manual-smoke")
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![

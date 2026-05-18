@@ -203,6 +203,7 @@ fn open_store(arguments: &Value) -> Result<SqliteStore> {
         None => crate::discovery::resolve_db(None)?,
     };
     let store = SqliteStore::open(db)?;
+    store.migrate()?;
     store.validate_schema()?;
     Ok(store)
 }
@@ -405,6 +406,7 @@ mod tests {
         store
             .create_session(&Session {
                 id: "session-mcp".to_string(),
+                session_name: None,
                 service_name: "mcp-test".to_string(),
                 service_version: None,
                 app_identifier: None,
@@ -444,6 +446,7 @@ mod tests {
         store
             .create_session(&Session {
                 id: "session-mcp".to_string(),
+                session_name: None,
                 service_name: "mcp-test".to_string(),
                 service_version: None,
                 app_identifier: None,
@@ -500,6 +503,7 @@ mod tests {
             store
                 .create_session(&Session {
                     id: format!("session-{index}"),
+                    session_name: None,
                     service_name: "mcp-test".to_string(),
                     service_version: None,
                     app_identifier: None,

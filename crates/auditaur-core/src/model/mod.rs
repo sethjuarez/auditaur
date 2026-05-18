@@ -5,6 +5,7 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
+    pub session_name: Option<String>,
     pub service_name: String,
     pub service_version: Option<String>,
     pub app_identifier: Option<String>,

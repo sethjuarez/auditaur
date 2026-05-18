@@ -12,6 +12,7 @@ use std::{
 use auditaur_collector::{
     exporter_sqlite::{SqliteStore, SQLITE_SCHEMA_VERSION, TELEMETRY_DATABASE_FILE},
     receiver::OTelBatch,
+    retention::RetentionLimits,
 };
 use auditaur_core::{discovery::DiscoveryFile, model::Session, AuditaurConfig};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -27,6 +28,7 @@ pub struct AuditaurState {
     heartbeat_alive: Option<Arc<AtomicBool>>,
     redact_defaults: bool,
     extra_redaction_keys: Vec<String>,
+    retention_limits: RetentionLimits,
 }
 
 impl AuditaurState {
@@ -45,6 +47,7 @@ impl AuditaurState {
                 heartbeat_alive: None,
                 redact_defaults: config.redact_defaults,
                 extra_redaction_keys: config.extra_redaction_keys,
+                retention_limits: RetentionLimits::default(),
             });
         }
 
@@ -76,6 +79,7 @@ impl AuditaurState {
         let started_at = now_rfc3339()?;
         store.create_session(&Session {
             id: session_id.clone(),
+            session_name: config.session_name.clone(),
             service_name: service_name.clone(),
             service_version: service_version.clone(),
             app_identifier: app_identifier.clone(),
@@ -127,6 +131,10 @@ impl AuditaurState {
             heartbeat_alive: Some(heartbeat_alive),
             redact_defaults: config.redact_defaults,
             extra_redaction_keys: config.extra_redaction_keys,
+            retention_limits: RetentionLimits {
+                max_session_bytes: config.max_session_bytes,
+                ..RetentionLimits::default()
+            },
         })
     }
 
@@ -208,6 +216,8 @@ impl AuditaurState {
             }
             store.insert_tauri_event(&event)?;
         }
+
+        store.enforce_retention(self.retention_limits)?;
 
         Ok(())
     }
@@ -298,6 +308,7 @@ mod tests {
             AuditaurConfig {
                 enabled: Some(true),
                 service_name: Some("plugin-test".to_string()),
+                session_name: Some("plugin-session".to_string()),
                 data_dir: Some(temp.path().to_path_buf()),
                 ..AuditaurConfig::default()
             },
@@ -310,6 +321,17 @@ mod tests {
         }
 
         assert!(state.session_id.is_some());
+        let db = temp
+            .path()
+            .join("sessions")
+            .join(state.session_id.as_ref().unwrap())
+            .join("telemetry.sqlite");
+        let store = SqliteStore::open(db).unwrap();
+        let session = store
+            .get_session(state.session_id.as_ref().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.session_name.as_deref(), Some("plugin-session"));
         assert_eq!(
             temp.path().join("apps").read_dir().unwrap().count(),
             1,

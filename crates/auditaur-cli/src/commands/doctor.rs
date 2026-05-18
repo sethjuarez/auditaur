@@ -33,7 +33,10 @@ pub fn report(db: Option<&Path>) -> DoctorReport {
 
     match db {
         Some(path) if path.exists() => {
-            match SqliteStore::open(path).and_then(|store| store.validate_schema()) {
+            match SqliteStore::open(path).and_then(|store| {
+                store.migrate()?;
+                store.validate_schema()
+            }) {
                 Ok(()) => checks.push(DoctorCheck {
                     name: "sqlite-schema".to_string(),
                     ok: true,

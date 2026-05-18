@@ -169,6 +169,7 @@ pub fn windows(
 
 fn open_validated_store(db: &Path) -> Result<SqliteStore> {
     let store = SqliteStore::open(db)?;
+    store.migrate()?;
     store.validate_schema()?;
     Ok(store)
 }

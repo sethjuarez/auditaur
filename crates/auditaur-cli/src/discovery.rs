@@ -106,7 +106,10 @@ fn app_from_discovery(discovery: DiscoveryFile, discovery_path: PathBuf) -> Disc
     let database_readable = database_path.is_file();
     let schema_valid = database_readable
         && SqliteStore::open(&database_path)
-            .and_then(|store| store.validate_schema())
+            .and_then(|store| {
+                store.migrate()?;
+                store.validate_schema()
+            })
             .is_ok();
 
     DiscoveredApp {
