@@ -1,5 +1,11 @@
+import { getCurrentWindow } from '@tauri-apps/api/window';
+
 export function nowUnixNanos(): number {
   return Date.now() * 1_000_000;
+}
+
+export function currentWindowLabel(): string {
+  return getCurrentWindow().label;
 }
 
 export function randomTraceId(): string {

@@ -1,6 +1,6 @@
 import type { AuditaurExporter } from './exporter';
 import type { FrontendErrorRecord } from './types';
-import { errorRecordFields, nowUnixNanos } from './utils';
+import { currentWindowLabel, errorRecordFields, nowUnixNanos } from './utils';
 
 export function instrumentErrors(exporter: AuditaurExporter): () => void {
   if (typeof window === 'undefined') {
@@ -41,6 +41,7 @@ export function frontendErrorRecord(
     lineNumber: location.lineNumber,
     columnNumber: location.columnNumber,
     errorType: fields.errorType,
+    windowLabel: currentWindowLabel(),
     attributes: { 'auditaur.source': 'frontend' },
   };
 }

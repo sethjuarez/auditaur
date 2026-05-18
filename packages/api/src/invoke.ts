@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { AuditaurExporter } from './exporter';
 import type { SpanRecord, TauriIpcCallRecord } from './types';
-import { errorRecordFields, maybePayload, nowUnixNanos, randomSpanId, randomTraceId, summarizePayload } from './utils';
+import { currentWindowLabel, errorRecordFields, maybePayload, nowUnixNanos, randomSpanId, randomTraceId, summarizePayload } from './utils';
 
 export async function instrumentedInvoke<T>(
   exporter: AuditaurExporter,
@@ -13,17 +13,18 @@ export async function instrumentedInvoke<T>(
   const start = nowUnixNanos();
   const traceId = randomTraceId();
   const spanId = randomSpanId();
+  const windowLabel = currentWindowLabel();
   try {
     const result = await tauriInvoke<T>(command, args);
     const end = nowUnixNanos();
-    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'OK', undefined, args, maxPayloadBytes, captureFullPayloads));
-    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'OK', undefined, args, result, maxPayloadBytes, captureFullPayloads));
+    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, args, maxPayloadBytes, captureFullPayloads));
+    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, args, result, maxPayloadBytes, captureFullPayloads));
     return result;
   } catch (error) {
     const fields = errorRecordFields(error);
     const end = nowUnixNanos();
-    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'ERROR', fields.message, args, maxPayloadBytes, captureFullPayloads));
-    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', fields.message, args, undefined, maxPayloadBytes, captureFullPayloads));
+    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, args, maxPayloadBytes, captureFullPayloads));
+    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, args, undefined, maxPayloadBytes, captureFullPayloads));
     throw error;
   }
 }
@@ -36,6 +37,7 @@ function invokeSpan(
   endTimeUnixNanos: number,
   statusCode: 'OK' | 'ERROR',
   statusMessage: string | undefined,
+  windowLabel: string,
   args: Record<string, unknown> | undefined,
   maxPayloadBytes: number,
   captureFullPayloads: boolean,
@@ -52,6 +54,7 @@ function invokeSpan(
     statusMessage,
     attributes: {
       'tauri.command': command,
+      'tauri.window.label': windowLabel,
       'auditaur.source': 'frontend',
       'tauri.command.args.summary': summarizePayload(args ?? {}, maxPayloadBytes),
       'tauri.command.args': maybePayload(args ?? {}, captureFullPayloads, maxPayloadBytes),
@@ -68,6 +71,7 @@ function ipcCall(
   endTimeUnixNanos: number,
   status: 'OK' | 'ERROR',
   errorMessage: string | undefined,
+  windowLabel: string,
   args: Record<string, unknown> | undefined,
   result: unknown,
   maxPayloadBytes: number,
@@ -82,6 +86,7 @@ function ipcCall(
     errorMessage,
     traceId,
     spanId,
+    windowLabel,
     argsJson: maybePayload(args ?? {}, captureFullPayloads, maxPayloadBytes),
     argsRedacted: true,
     resultSummary: status === 'OK' ? summarizePayload(result, maxPayloadBytes) : undefined,
