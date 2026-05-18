@@ -37,8 +37,11 @@ Then run:
 ```powershell
 cargo run -p auditaur-cli -- apps --json
 cargo run -p auditaur-cli -- logs --json
+cargo run -p auditaur-cli -- errors --json
 cargo run -p auditaur-cli -- ipc --json
 cargo run -p auditaur-cli -- events --json
+cargo run -p auditaur-cli -- traces --json
+cargo run -p auditaur-cli -- windows --json
 ```
 
 Or pass the copied path explicitly:
@@ -49,7 +52,12 @@ cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
 cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
 cargo run -p auditaur-cli -- ipc --db "<databasePath>" --json
 cargo run -p auditaur-cli -- events --db "<databasePath>" --json
+cargo run -p auditaur-cli -- windows --db "<databasePath>" --json
 ```
+
+If multiple dogfood app instances are active, discovery intentionally refuses to guess which database to inspect. Use `apps --json`, copy the latest `databasePath`, and pass `--db`.
+
+`windows` returns rows only when window state has been inserted; automatic runtime window capture is still planned, so an empty `windows` result is expected in the current dogfood app.
 
 For MCP, start:
 
@@ -57,4 +65,4 @@ For MCP, start:
 cargo run -p auditaur-cli -- mcp
 ```
 
-Point your MCP client at that command and ask it to use `list_traces`, `list_logs`, `list_errors`, and `get_trace` with the copied `databasePath`.
+Point your MCP client at that command and ask it to use `list_traces`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_windows`, and `get_trace` with the copied `databasePath`.
