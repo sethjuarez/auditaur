@@ -1,0 +1,164 @@
+---
+title: CutReady Integration
+description: Add Auditaur to CutReady as dev-only local tooling.
+---
+
+This guide is for a minimal development branch in `D:\projects\CutReady`. Do not merge a permanent dependency until the dogfood branch proves useful.
+
+## Recommended branch plan
+
+1. Create a branch in CutReady, for example `dev/auditaur-smoke`.
+2. Add Auditaur with local path dependencies.
+3. Verify frontend errors, Tauri command failures, Rust tracing logs, and command spans.
+4. Decide whether to keep Auditaur as local dev tooling or publish Auditaur crates/npm first.
+
+## Rust dependency
+
+In the CutReady Tauri crate `Cargo.toml`, add local path dependencies while both repos are checked out side by side:
+
+```toml
+[dependencies]
+tauri-plugin-auditaur = { path = "../../auditaur/crates/tauri-plugin-auditaur" }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+If the relative path differs, use the correct path from CutReady's `src-tauri` directory to `D:\projects\auditaur\crates\tauri-plugin-auditaur`.
+
+For a git dependency smoke instead of a local path:
+
+```toml
+[dependencies]
+tauri-plugin-auditaur = { git = "https://github.com/sethjuarez/auditaur", package = "tauri-plugin-auditaur" }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+Local path is recommended until the first Auditaur release.
+
+## Plugin registration
+
+Register the plugin only for development/debug builds:
+
+```rust
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+fn main() {
+    #[cfg(debug_assertions)]
+    tracing_subscriber::registry()
+        .with(tauri_plugin_auditaur::tracing_layer())
+        .init();
+
+    let builder = tauri::Builder::default();
+
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri_plugin_auditaur::Builder::new()
+            .service_name("cutready")
+            .session_name("cutready-dev")
+            .redact_defaults(true)
+            .max_session_bytes(256 * 1024 * 1024)
+            .build(),
+    );
+
+    builder
+        .invoke_handler(tauri::generate_handler![
+            // existing CutReady commands
+        ])
+        .run(tauri::generate_context!())
+        .expect("failed to run CutReady");
+}
+```
+
+If CutReady already initializes `tracing_subscriber`, add `tauri_plugin_auditaur::tracing_layer()` to the existing subscriber instead of calling `.init()` twice.
+
+Add the Auditaur permission to the development capability used by CutReady:
+
+```json
+{
+  "permissions": ["core:default", "auditaur:default"]
+}
+```
+
+## Frontend package
+
+Add the local package to CutReady's frontend package:
+
+```powershell
+cd D:\projects\CutReady
+npm install D:\projects\auditaur\packages\api
+```
+
+Or edit `package.json` directly:
+
+```json
+{
+  "dependencies": {
+    "@auditaur/api": "file:../auditaur/packages/api"
+  }
+}
+```
+
+Initialize once in the Tauri webview entry point:
+
+```ts
+import { initAuditaur } from '@auditaur/api';
+
+export const auditaur = import.meta.env.DEV
+  ? await initAuditaur({
+      serviceName: 'cutready-frontend',
+      instrumentConsole: true,
+      instrumentErrors: true,
+      instrumentTauriInvoke: true,
+      instrumentTauriEvents: true,
+      captureFullPayloads: false,
+      maxPayloadBytes: 16_384,
+    })
+  : undefined;
+```
+
+Use the wrapper for smoke commands where practical:
+
+```ts
+const invoke = auditaur?.invoke ?? tauriInvoke;
+```
+
+## Inspect CutReady telemetry
+
+With CutReady running:
+
+```powershell
+cd D:\projects\auditaur
+auditaur apps --json
+auditaur logs --json
+auditaur errors --json
+auditaur ipc --json
+auditaur events --json
+auditaur traces --json
+```
+
+If more than one Auditaur-enabled app is active:
+
+```powershell
+auditaur apps --json
+auditaur trace <traceId> --db "<databasePath>" --json
+```
+
+For MCP:
+
+```powershell
+auditaur mcp
+```
+
+Then ask the agent to call `list_apps`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, and `get_trace` using the CutReady `databasePath`.
+
+## Smoke criteria
+
+The CutReady branch is useful when Auditaur shows:
+
+- Frontend errors in `auditaur errors`.
+- Tauri command failures in `auditaur ipc`.
+- Rust tracing logs in `auditaur logs`.
+- Command spans and related telemetry in `auditaur traces` and `auditaur trace <traceId>`.
+
+Keep this debug-only until the team decides whether to publish Auditaur crates/npm packages or continue with local path tooling.

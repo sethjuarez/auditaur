@@ -20,6 +20,22 @@ cargo run -p auditaur-cli -- doctor
 
 The binary is named `auditaur`. During development, examples use `cargo run -p auditaur-cli -- ...` so you do not need to install it globally.
 
+To place the CLI on your `PATH` locally:
+
+```powershell
+cargo install --path crates\auditaur-cli --force
+auditaur doctor
+```
+
+To build a distributable binary without installing:
+
+```powershell
+cargo build -p auditaur-cli --release
+.\target\release\auditaur.exe doctor
+```
+
+On macOS/Linux the release binary is `./target/release/auditaur`.
+
 ## Build the frontend package
 
 ```powershell
@@ -30,6 +46,49 @@ npm test
 ```
 
 The package is currently consumed from the repo as `@auditaur/api` through a local file dependency.
+
+## Local data paths
+
+Auditaur discovery files are written under the local data directory:
+
+| Platform | Discovery directory |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\auditaur\apps` |
+| macOS | `~/Library/Application Support/auditaur/apps` |
+| Linux | `~/.local/share/auditaur/apps` |
+
+Each discovery file points at a SQLite session database under the matching `sessions` directory. Override the root during tests with `AUDITAUR_DATA_DIR`.
+
+## MCP client config
+
+For a locally installed CLI:
+
+```json
+{
+  "mcpServers": {
+    "auditaur": {
+      "command": "auditaur",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Without installing the CLI, point the MCP client at Cargo:
+
+```json
+{
+  "mcpServers": {
+    "auditaur": {
+      "command": "cargo",
+      "args": ["run", "-p", "auditaur-cli", "--", "mcp"],
+      "cwd": "D:\\projects\\auditaur"
+    }
+  }
+}
+```
+
+Use the equivalent repository path for macOS/Linux. The MCP server uses discovery when exactly one active readable session exists; pass a `db` argument to tools when multiple sessions are active.
 
 ## Build the docs
 

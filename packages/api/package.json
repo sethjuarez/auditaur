@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sethjuarez/auditaur.git",
+    "directory": "packages/api"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",

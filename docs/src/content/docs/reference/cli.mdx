@@ -21,4 +21,4 @@ cargo run -p auditaur-cli -- mcp
 
 Human output is compact and bounds table cells. JSON output uses camelCase fields matching the Rust model.
 
-`apps` reads discovery files from the local Auditaur data directory and marks entries stale when the heartbeat is older than 30 seconds. `doctor --db` validates a specific SQLite database; `doctor` without `--db` validates discovery files and readable database paths.
+`apps` reads discovery files from the local Auditaur data directory and marks entries stale when the heartbeat is older than 30 seconds. Staleness is heartbeat-only today; platform-specific PID existence checks are not implemented yet. `doctor --db` validates a specific SQLite database; `doctor` without `--db` validates discovery files and readable database paths.

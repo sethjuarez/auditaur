@@ -1,0 +1,53 @@
+---
+title: Release and Packaging
+description: Current package names, metadata, and first-use distribution decision.
+---
+
+Auditaur is pre-release and should be consumed from source for now.
+
+## Package names
+
+| Component | Name | Status |
+| --- | --- | --- |
+| CLI crate | `auditaur-cli` | Builds binary named `auditaur`. |
+| Core crate | `auditaur-core` | Internal/shared models and config. |
+| Collector crate | `auditaur-collector` | SQLite store and receiver types. |
+| Tauri plugin crate | `tauri-plugin-auditaur` | Local path or git dependency. |
+| Frontend package | `@auditaur/api` | Local `file:` dependency; not published. |
+
+The Rust workspace declares MIT license and repository metadata. The npm package also declares MIT license and repository metadata, but remains `private` until publication is intentional.
+
+## CLI build
+
+Development:
+
+```powershell
+cargo run -p auditaur-cli -- apps --json
+cargo run -p auditaur-cli -- mcp
+```
+
+Install locally:
+
+```powershell
+cargo install --path crates\auditaur-cli --force
+auditaur doctor
+```
+
+Build release binary:
+
+```powershell
+cargo build -p auditaur-cli --release
+.\target\release\auditaur.exe doctor
+```
+
+On macOS/Linux, use `./target/release/auditaur`.
+
+## First-use decision
+
+Use local path dependencies first:
+
+- They keep CutReady and dogfood validation fast.
+- They avoid publishing unstable APIs.
+- They make it obvious that Auditaur is dev-only tooling.
+
+Use git dependencies next if a separate repo needs to consume Auditaur without a sibling checkout. Publish crates/npm packages only after the CutReady smoke branch proves the API shape.

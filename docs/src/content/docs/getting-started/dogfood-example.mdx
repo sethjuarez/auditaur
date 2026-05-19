@@ -22,6 +22,15 @@ npm run tauri dev
 
 Click each button in the app. The failing-command button is intentionally useful for agents: it creates a frontend `tauri.invoke failing_command` span with `ERROR` status and a backend tracing error that contains `Intentional dogfood backend failure`.
 
+Manual smoke path:
+
+1. Emit console log.
+2. Throw frontend error.
+3. Emit/listen to frontend event.
+4. Call successful command.
+5. Call failing command.
+6. Ask backend to emit event.
+
 ## Inspect the data
 
 Copy `databasePath` from the latest discovery file under:
@@ -66,3 +75,22 @@ cargo run -p auditaur-cli -- mcp
 ```
 
 Point your MCP client at that command and ask it to use `list_traces`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_windows`, and `get_trace` with the copied `databasePath`.
+
+## Last manual smoke result
+
+The latest local manual smoke used the dogfood app on Windows with an isolated `AUDITAUR_DATA_DIR` and verified:
+
+- `auditaur apps --json` discovered one active dogfood session with a readable SQLite database.
+- `auditaur logs --json` returned frontend console logs plus backend `tracing` logs.
+- `auditaur errors --json` returned the intentional frontend error.
+- `auditaur ipc --json` returned `successful_command`, `failing_command`, and `emit_backend_event` rows.
+- `auditaur events --json` returned frontend emit/receive and backend receive rows.
+- `auditaur traces --json` returned frontend wrapper spans and backend Rust tracing spans.
+- `auditaur trace <traceId> --json` returned trace detail for the failing command span and its IPC row.
+- MCP `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, and `get_trace` returned real dogfood telemetry from the same SQLite DB.
+- MCP `list_windows` returned `[]`, which is expected until automatic runtime window capture is implemented.
+
+Exact caveats:
+
+- If multiple dogfood instances are active, discovery refuses to choose a default DB. Pass `--db`.
+- `windows` is storage/query-ready but not automatically populated by the dogfood app.

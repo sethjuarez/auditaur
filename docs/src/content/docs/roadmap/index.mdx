@@ -3,16 +3,24 @@ title: Roadmap
 description: Auditaur implementation milestones.
 ---
 
-Auditaur will be built in phases:
+Implemented MVP pieces:
 
 1. Repository scaffolding and docs.
 2. SQLite session store.
-3. CLI read path.
+3. CLI read path and discovery.
 4. Tauri plugin embedded collector.
-5. Expand the OpenTelemetry JS sink beyond spans to logs, metrics, and automatic instrumentation setup.
-6. Frontend API package.
-7. Rust tracing integration.
+5. Frontend API package for console logs, frontend errors, invoke wrappers, and event wrappers.
+6. Rust tracing integration.
+7. OpenTelemetry JS span exporter shim.
 8. MCP server.
 9. Example Tauri app and dogfood loop.
-10. Public docs polish.
-11. OTLP/sidecar receiver for telemetry produced outside the Tauri plugin path.
+10. Retention and redaction.
+
+Planned follow-ups:
+
+1. OTLP/sidecar receiver for telemetry produced outside the Tauri plugin path.
+2. Automatic runtime window capture. Window storage/query methods exist today.
+3. Metrics ingestion and OpenTelemetry logs SDK support.
+4. Screenshots and devtools actions.
+5. Package publishing for Rust crates, CLI binaries, and `@auditaur/api`.
+6. Automated browser/desktop smoke tests around the dogfood app.

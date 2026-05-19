@@ -9,6 +9,39 @@ Start the server:
 cargo run -p auditaur-cli -- mcp
 ```
 
+Or with a locally installed binary:
+
+```powershell
+auditaur mcp
+```
+
+Example MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "auditaur": {
+      "command": "auditaur",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+For source checkout usage:
+
+```json
+{
+  "mcpServers": {
+    "auditaur": {
+      "command": "cargo",
+      "args": ["run", "-p", "auditaur-cli", "--", "mcp"],
+      "cwd": "D:\\projects\\auditaur"
+    }
+  }
+}
+```
+
 The server speaks stdio JSON-RPC and does not write non-MCP content to stdout. Tool responses are JSON serialized as MCP text content and are bounded.
 
 | Tool | Required arguments | Notes |
