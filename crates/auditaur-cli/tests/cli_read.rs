@@ -44,6 +44,38 @@ fn reads_fixture_database_as_json() {
 
     let windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
     assert_eq!(windows[0]["windowLabel"], "main");
+
+    let failed_ipc = run_json([
+        "ipc",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--failed",
+        "--json",
+    ]);
+    assert_eq!(failed_ipc[0]["command"], "fixture_command");
+
+    let timeline = run_json(["timeline", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(timeline.as_array().unwrap().len() >= 6);
+    assert_eq!(timeline[0]["kind"], "span");
+
+    let explain = run_json(["explain", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert_eq!(explain["failedIpcCount"], 1);
+    assert!(explain["findings"].as_array().unwrap().len() >= 1);
+
+    let bundle = run_json(["bundle", "--db", db.path().to_str().unwrap(), "--redacted"]);
+    assert_eq!(bundle["redacted"], true);
+    assert_eq!(bundle["tauriIpcCalls"][0]["argsJson"], "[redacted]");
+
+    let tail = run_stdout([
+        "tail",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--replay",
+        "--duration-seconds",
+        "0",
+        "--json",
+    ]);
+    assert!(tail.contains("\"kind\":\"ipc\""));
 }
 
 #[test]
@@ -87,8 +119,30 @@ fn discovers_apps_and_reads_default_database() {
     assert_eq!(logs[0]["body"], "fixture log");
 }
 
+#[test]
+fn doctor_tauri_reports_dogfood_setup() {
+    let dogfood_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("examples")
+        .join("dogfood");
+    let report = run_json([
+        "doctor",
+        "tauri",
+        "--path",
+        dogfood_path.to_str().unwrap(),
+        "--json",
+    ]);
+
+    assert_eq!(report["ok"], true);
+}
+
 fn run_json<const N: usize>(args: [&str; N]) -> Value {
-    run_json_command(Command::new(env!("CARGO_BIN_EXE_auditaur")).args(args))
+    serde_json::from_str(&run_stdout(args)).unwrap()
+}
+
+fn run_stdout<const N: usize>(args: [&str; N]) -> String {
+    run_command(Command::new(env!("CARGO_BIN_EXE_auditaur")).args(args))
 }
 
 fn run_json_with_env<const N: usize>(args: [&str; N], data_dir: &str) -> Value {
@@ -98,6 +152,10 @@ fn run_json_with_env<const N: usize>(args: [&str; N], data_dir: &str) -> Value {
 }
 
 fn run_json_command(command: &mut Command) -> Value {
+    serde_json::from_str(&run_command(command)).unwrap()
+}
+
+fn run_command(command: &mut Command) -> String {
     let output = command.output().unwrap();
 
     assert!(
@@ -107,7 +165,7 @@ fn run_json_command(command: &mut Command) -> Value {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    serde_json::from_slice(&output.stdout).unwrap()
+    String::from_utf8(output.stdout).unwrap()
 }
 
 fn fixture_database() -> NamedTempFile {

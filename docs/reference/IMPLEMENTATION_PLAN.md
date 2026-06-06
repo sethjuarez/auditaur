@@ -129,7 +129,7 @@ auditaur/
 
 The workspace should be Rust-first. TypeScript exists only where needed for frontend instrumentation.
 
-The documentation site should follow the same pattern as CutReady: an Astro/Starlight site under `docs/`, with long-form planning/reference documents kept under `docs/reference/`, and a GitHub Pages deployment workflow at `.github/workflows/publish-docs.yml`.
+The documentation site should use Astro/Starlight under `docs/`, with long-form planning/reference documents kept under `docs/reference/`, and a GitHub Pages deployment workflow at `.github/workflows/publish-docs.yml`.
 
 ## Components
 
@@ -255,7 +255,7 @@ Suggested API:
 import { initAuditaur } from '@auditaur/api';
 
 const auditaur = await initAuditaur({
-  serviceName: 'cutready',
+  serviceName: 'my-tauri-app',
   serviceVersion: __APP_VERSION__,
   instrumentConsole: true,
   instrumentErrors: true,
@@ -322,7 +322,7 @@ Do not implement the sidecar collector until the embedded flow works.
 
 Auditaur should ship with a public documentation website at `https://auditaur.dev`.
 
-Use the CutReady docs setup as the reference implementation:
+Use the standard docs setup:
 
 1. Use Astro with Starlight.
 2. Keep the site app in `docs/`.
@@ -488,9 +488,9 @@ Discovery file shape:
   "schemaVersion": 1,
   "instanceId": "uuid",
   "sessionId": "uuid",
-  "serviceName": "cutready",
+  "serviceName": "my-tauri-app",
   "serviceVersion": "0.9.0",
-  "appIdentifier": "com.example.cutready",
+  "appIdentifier": "com.example.my-tauri-app",
   "pid": 12345,
   "startedAt": "2026-05-18T18:00:00Z",
   "databasePath": "absolute path to telemetry.sqlite",
@@ -872,7 +872,7 @@ Batch shape:
 {
   "resource": {
     "attributes": {
-      "service.name": "cutready",
+      "service.name": "my-tauri-app",
       "service.version": "0.9.0"
     }
   },
@@ -1499,4 +1499,3 @@ The MVP is complete when:
 8. No network listener is opened by default.
 9. The documentation site is deployed through GitHub Pages at `https://auditaur.dev`.
 10. All core tests pass on Windows, macOS, and Linux.
-

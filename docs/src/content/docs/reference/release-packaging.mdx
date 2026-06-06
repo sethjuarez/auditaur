@@ -1,36 +1,36 @@
 ---
 title: Release and Packaging
-description: Current package names, metadata, and first-use distribution decision.
+description: Published package names and release automation.
 ---
 
-Auditaur is pre-release, but the repository is configured for public package publishing once the first release is approved.
+Auditaur packages are published publicly and the repository is configured for semantic release automation.
 
 ## Package names
 
 | Component | Name | Status |
 | --- | --- | --- |
-| CLI crate | `auditaur-cli` | Public crates.io target that builds a binary named `auditaur`. |
-| Core crate | `auditaur-core` | Public crates.io target for shared models and config. |
-| Collector crate | `auditaur-collector` | Public crates.io target for SQLite store and receiver types. |
-| Tauri plugin crate | `tauri-plugin-auditaur` | Public crates.io target for Tauri v2 apps. |
-| Frontend package | `@auditaur/api` | Public npm target. |
+| CLI crate | `auditaur-cli` | Published to crates.io; installs a binary named `auditaur`. |
+| Core crate | `auditaur-core` | Published to crates.io for shared models and config. |
+| Collector crate | `auditaur-collector` | Published to crates.io for SQLite store and receiver types. |
+| Tauri plugin crate | `tauri-plugin-auditaur` | Published to crates.io for Tauri v2 apps. |
+| Frontend package | `@auditaur/api` | Published to npm. |
 
-The Rust workspace declares MIT license and repository metadata. Each publishable crate includes crates.io metadata and versioned local path dependencies. The npm package is public-scoped through `publishConfig.access = "public"`.
+The Rust workspace declares MIT license and repository metadata. Each crate includes crates.io metadata and versioned workspace dependency declarations. The npm package is public-scoped through `publishConfig.access = "public"`.
 
 ## CLI build
 
-Development:
+Install the CLI:
+
+```powershell
+cargo install auditaur-cli
+auditaur doctor
+```
+
+Source checkout development:
 
 ```powershell
 cargo run -p auditaur-cli -- apps --json
 cargo run -p auditaur-cli -- mcp
-```
-
-Install locally:
-
-```powershell
-cargo install --path crates\auditaur-cli --force
-auditaur doctor
 ```
 
 Build release binary:
@@ -50,6 +50,7 @@ Rust crates use release-plz:
 2. Merging the release PR updates versions and changelogs according to Conventional Commits plus release-plz semver checks.
 3. Crates.io publishing is gated behind the repository variable `ENABLE_CRATES_IO_RELEASE=true`.
 4. Publishing requires a `CARGO_REGISTRY_TOKEN` repository secret until crates.io trusted publishing is configured for existing crates.
+5. `.github/workflows/release-binaries.yml` uploads Windows x64, Windows ARM64, macOS ARM64, and Linux x64 `auditaur` binaries for `auditaur-cli-v*` GitHub releases.
 
 The frontend package uses release-please:
 
@@ -58,7 +59,7 @@ The frontend package uses release-please:
 3. `.github/workflows/publish-api.yml` publishes matching `@auditaur/api-v*` releases to npm with provenance.
 4. Publishing uses npm trusted publishing/OIDC, so no `NPM_TOKEN` is required after the package is configured on npm.
 
-Manual dry runs are available from the Actions tab:
+Manual dry runs are available locally:
 
 ```powershell
 cargo publish -p auditaur-core --dry-run
@@ -70,17 +71,14 @@ cd packages\api
 npm publish --dry-run --access public
 ```
 
-## First publish checklist
+## Release checklist
 
-1. Fix `auditaur.dev` DNS so package docs and repository links resolve correctly.
-2. Create npm access for the `@auditaur` scope and publish `@auditaur/api` once manually with `npm publish --access public`. npm trusted publishing cannot create a package name on the first publish.
-3. Configure npm trusted publishing for `@auditaur/api`:
+1. Keep npm trusted publishing configured for `@auditaur/api`:
    - Publisher: GitHub Actions.
    - Organization/user: `sethjuarez`.
    - Repository: `auditaur`.
    - Workflow: `publish-api.yml`.
    - Environment: leave blank unless this workflow is later updated to use one.
-4. Create a crates.io token with publish rights and add `CARGO_REGISTRY_TOKEN`.
-5. Publish the new Rust crates the first time in dependency order: `auditaur-core`, `auditaur-collector`, `tauri-plugin-auditaur`, then `auditaur-cli`.
-6. Set repository variable `ENABLE_CRATES_IO_RELEASE=true` after the first crates.io publish succeeds.
-7. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
+2. Keep `CARGO_REGISTRY_TOKEN` available until crates.io trusted publishing is configured for all Rust crates.
+3. Set repository variable `ENABLE_CRATES_IO_RELEASE=true` when automated crates.io publishing should run.
+4. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.

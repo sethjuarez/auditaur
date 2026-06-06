@@ -7,18 +7,25 @@ Read commands discover the active Auditaur session automatically when `--db` is 
 
 ```text
 cargo run -p auditaur-cli -- doctor [--db <path>]
+cargo run -p auditaur-cli -- doctor tauri [--path <app-or-src-tauri-path>] [--json]
 cargo run -p auditaur-cli -- apps [--json]
 cargo run -p auditaur-cli -- sessions [--db <path>] [--json] [--limit <n>]
-cargo run -p auditaur-cli -- logs [--db <path>] [--json] [--session <id>] [--trace <id>] [--limit <n>]
-cargo run -p auditaur-cli -- errors [--db <path>] [--json] [--session <id>] [--trace <id>] [--limit <n>]
-cargo run -p auditaur-cli -- traces [--db <path>] [--json] [--session <id>] [--limit <n>]
+cargo run -p auditaur-cli -- logs [--db <path>] [--json] [--session <id>] [--trace <id>] [--since <duration>] [--limit <n>]
+cargo run -p auditaur-cli -- errors [--db <path>] [--json] [--session <id>] [--trace <id>] [--since <duration>] [--limit <n>]
+cargo run -p auditaur-cli -- traces [--db <path>] [--json] [--session <id>] [--since <duration>] [--failed] [--limit <n>]
 cargo run -p auditaur-cli -- trace <trace-id> [--db <path>] [--json] [--session <id>]
-cargo run -p auditaur-cli -- ipc [--db <path>] [--json] [--session <id>] [--trace <id>] [--limit <n>]
-cargo run -p auditaur-cli -- events [--db <path>] [--json] [--session <id>] [--trace <id>] [--limit <n>]
+cargo run -p auditaur-cli -- ipc [--db <path>] [--json] [--session <id>] [--trace <id>] [--since <duration>] [--failed] [--limit <n>]
+cargo run -p auditaur-cli -- events [--db <path>] [--json] [--session <id>] [--trace <id>] [--since <duration>] [--limit <n>]
 cargo run -p auditaur-cli -- windows [--db <path>] [--json] [--session <id>] [--limit <n>]
+cargo run -p auditaur-cli -- timeline [--db <path>] [--json] [--session <id>] [--trace <id>] [--since <duration>] [--limit <n>]
+cargo run -p auditaur-cli -- explain [--db <path>] [--json] [--session <id>] [--trace <id>] [--since <duration>] [--limit <n>]
+cargo run -p auditaur-cli -- bundle [--db <path>] [--session <id>] [--trace <id>] [--since <duration>] [--redacted] [--output <path>] [--limit <n>]
+cargo run -p auditaur-cli -- tail [--db <path>] [--session <id>] [--trace <id>] [--replay] [--interval-ms <ms>] [--duration-seconds <n>] [--json]
 cargo run -p auditaur-cli -- mcp
 ```
 
 Human output is compact and bounds table cells. JSON output uses camelCase fields matching the Rust model.
 
-`apps` reads discovery files from the local Auditaur data directory and marks entries stale when the heartbeat is older than 30 seconds. Staleness is heartbeat-only today; platform-specific PID existence checks are not implemented yet. `doctor --db` validates a specific SQLite database; `doctor` without `--db` validates discovery files and readable database paths.
+`--since` accepts durations such as `30s`, `10m`, `2h`, or `1d`. `timeline` merges logs, spans, frontend errors, IPC calls, events, and window states into one chronological view. `explain` summarizes obvious failures. `bundle` always redacts share-sensitive JSON fields and exports bounded JSON suitable for bug reports or handoffs; `--redacted` is accepted for explicitness.
+
+`apps` reads discovery files from the local Auditaur data directory and marks entries stale when the heartbeat is older than 30 seconds. Staleness is heartbeat-only today; platform-specific PID existence checks are not implemented yet. `doctor --db` validates a specific SQLite database; `doctor` without `--db` validates discovery files and readable database paths. `doctor tauri` checks a Tauri app for the Auditaur crate, plugin registration, and required capability permission.

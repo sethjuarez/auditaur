@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs, panic,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -14,11 +14,25 @@ use auditaur_collector::{
     receiver::OTelBatch,
     retention::RetentionLimits,
 };
-use auditaur_core::{discovery::DiscoveryFile, model::Session, AuditaurConfig};
+use auditaur_core::{
+    discovery::DiscoveryFile,
+    model::{FrontendError, LogRecord, Session, TelemetrySource},
+    AuditaurConfig,
+};
+use serde_json::json;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::error::AuditaurError;
+
+static PANIC_SINK: Mutex<Option<PanicSink>> = Mutex::new(None);
+static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone)]
+struct PanicSink {
+    session_id: String,
+    store: Arc<Mutex<SqliteStore>>,
+}
 
 pub struct AuditaurState {
     pub session_id: Option<String>,
@@ -122,6 +136,7 @@ impl AuditaurState {
         );
         let store = Arc::new(Mutex::new(store));
         crate::tracing::install_sink(session_id.clone(), store.clone());
+        install_panic_sink(session_id.clone(), store.clone());
 
         Ok(Self {
             session_id: Some(session_id),
@@ -231,6 +246,10 @@ impl AuditaurState {
         }
     }
 
+    pub(crate) fn store(&self) -> Option<Arc<Mutex<SqliteStore>>> {
+        self.store.clone()
+    }
+
     fn redact_value(&self, value: &serde_json::Value) -> serde_json::Value {
         auditaur_core::redaction::redact_json_with_options(
             value,
@@ -248,6 +267,7 @@ impl Drop for AuditaurState {
         }
         if let Some(session_id) = &self.session_id {
             crate::tracing::clear_sink(session_id);
+            clear_panic_sink(session_id);
         }
         if let Some(path) = &self.discovery_path {
             let _ = fs::remove_file(path);
@@ -290,12 +310,117 @@ fn start_heartbeat(
     });
 }
 
+fn install_panic_sink(session_id: String, store: Arc<Mutex<SqliteStore>>) {
+    if let Ok(mut sink) = PANIC_SINK.lock() {
+        *sink = Some(PanicSink { session_id, store });
+    }
+    if PANIC_HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let previous = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        record_panic(info);
+        previous(info);
+    }));
+}
+
+fn clear_panic_sink(session_id: &str) {
+    let Ok(mut sink) = PANIC_SINK.lock() else {
+        return;
+    };
+    if sink
+        .as_ref()
+        .map(|sink| sink.session_id.as_str() == session_id)
+        .unwrap_or(false)
+    {
+        *sink = None;
+    }
+}
+
+fn active_panic_sink() -> Option<PanicSink> {
+    PANIC_SINK.lock().ok().and_then(|sink| sink.clone())
+}
+
+fn record_panic(info: &panic::PanicHookInfo<'_>) {
+    let Some(sink) = active_panic_sink() else {
+        return;
+    };
+    let Ok(store) = sink.store.try_lock() else {
+        return;
+    };
+    let message = panic_message(info);
+    let location = info.location().map(|location| {
+        format!(
+            "{}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column()
+        )
+    });
+    let timestamp = now_unix_nanos();
+    let attributes = json!({
+        "auditaur.source": "panic_hook",
+        "exception.escaped": true,
+        "code.filepath": info.location().map(|location| location.file()),
+        "code.lineno": info.location().map(|location| location.line()),
+        "code.column": info.location().map(|location| location.column()),
+    });
+    let _ = store.insert_log(&LogRecord {
+        session_id: sink.session_id.clone(),
+        timestamp_unix_nanos: timestamp,
+        observed_timestamp_unix_nanos: None,
+        severity_text: Some("ERROR".to_string()),
+        severity_number: Some(17),
+        body: Some(format!("Rust panic: {message}")),
+        body_json: Some(json!({
+            "message": message,
+            "location": location,
+        })),
+        trace_id: None,
+        span_id: None,
+        scope_name: Some("panic".to_string()),
+        scope_version: None,
+        attributes: attributes.clone(),
+        source: TelemetrySource::Plugin,
+    });
+    let _ = store.insert_frontend_error(&FrontendError {
+        session_id: sink.session_id,
+        timestamp_unix_nanos: timestamp,
+        message,
+        stack: location,
+        filename: info.location().map(|location| location.file().to_string()),
+        line_number: info.location().map(|location| i64::from(location.line())),
+        column_number: info.location().map(|location| i64::from(location.column())),
+        error_type: Some("RustPanic".to_string()),
+        trace_id: None,
+        span_id: None,
+        window_label: None,
+        attributes,
+    });
+}
+
+fn panic_message(info: &panic::PanicHookInfo<'_>) -> String {
+    info.payload()
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| info.payload().downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic payload was not a string".to_string())
+}
+
+fn now_unix_nanos() -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    i64::try_from(now.as_nanos()).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::AuditaurState;
     use auditaur_collector::{exporter_sqlite::SqliteStore, receiver::OTelBatch};
     use auditaur_core::{
         model::{LogRecord, TauriEventRecord, TauriIpcCall},
+        storage::FrontendErrorQuery,
         AuditaurConfig,
     };
     use serde_json::json;
@@ -303,6 +428,7 @@ mod tests {
 
     #[test]
     fn initializes_session_database_and_discovery_file() {
+        let _guard = crate::test_support::global_state_lock();
         let temp = TempDir::new().unwrap();
         let state = AuditaurState::initialize(
             AuditaurConfig {
@@ -341,6 +467,7 @@ mod tests {
 
     #[test]
     fn exports_redacted_batch_to_sqlite() {
+        let _guard = crate::test_support::global_state_lock();
         let temp = TempDir::new().unwrap();
         let state = AuditaurState::initialize(
             AuditaurConfig {
@@ -435,5 +562,50 @@ mod tests {
             events[0].payload_json.as_ref().unwrap()["token"],
             "[REDACTED]"
         );
+    }
+
+    #[test]
+    fn panic_hook_records_and_clears_with_state() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = AuditaurState::initialize(
+            AuditaurConfig {
+                enabled: Some(true),
+                service_name: Some("panic-test".to_string()),
+                data_dir: Some(temp.path().to_path_buf()),
+                ..AuditaurConfig::default()
+            },
+            123,
+            None,
+        )
+        .unwrap();
+        let session_id = state.session_id.clone().unwrap();
+        crate::tracing::clear_sink(&session_id);
+
+        let _ = std::panic::catch_unwind(|| panic!("intentional auditaur panic test"));
+
+        let store = store_for(&temp, &session_id);
+        let errors = store
+            .list_frontend_errors(&FrontendErrorQuery::default())
+            .unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error_type.as_deref(), Some("RustPanic"));
+        assert_eq!(errors[0].message, "intentional auditaur panic test");
+
+        drop(state);
+        let _ = std::panic::catch_unwind(|| panic!("after drop"));
+        let errors_after_drop = store
+            .list_frontend_errors(&FrontendErrorQuery::default())
+            .unwrap();
+        assert_eq!(errors_after_drop.len(), 1);
+    }
+
+    fn store_for(temp: &TempDir, session_id: &str) -> SqliteStore {
+        let db = temp
+            .path()
+            .join("sessions")
+            .join(session_id)
+            .join("telemetry.sqlite");
+        SqliteStore::open(db).unwrap()
     }
 }

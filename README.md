@@ -50,21 +50,21 @@ MCP clients should point at the built binary or the cargo command above. The too
 
 - SQLite session store with WAL and schema validation.
 - Discovery files under the local Auditaur data directory.
-- CLI reads for apps, sessions, logs, errors, IPC, events, traces, trace detail, and stored window rows.
+- CLI reads for apps, sessions, logs, errors, IPC, events, traces, trace detail, stored window rows, timeline, explain, tail, and redacted bundles.
 - MCP reads over stdio for the same data.
-- Tauri plugin collector for frontend batches and Rust `tracing`.
+- Tauri plugin collector for frontend batches, startup window state, Rust `tracing`, and Rust panic diagnostics.
 - Frontend console/error/invoke/event wrappers.
 - OpenTelemetry JS span exporter shim for existing tracer providers.
 - Recursive redaction and best-effort retention.
 
-Planned: OTLP receiver/sidecar, automatic runtime window capture, screenshots/devtools actions, metrics ingestion, and OpenTelemetry logs SDK support.
+Planned: OTLP receiver/sidecar, full window lifecycle capture, screenshots/devtools actions, metrics ingestion, and OpenTelemetry logs SDK support.
 
-## Local package status
+## Package status
 
-Auditaur is not published yet. First usage should be local path dependencies or git dependencies from this repository:
+Auditaur packages are published publicly:
 
 - Rust crates: `auditaur-core`, `auditaur-collector`, `auditaur-cli`, `tauri-plugin-auditaur`.
-- CLI binary: `auditaur` from `crates/auditaur-cli`.
-- Frontend package: `@auditaur/api`.
+- CLI binary: install with `cargo install auditaur-cli`.
+- Frontend package: install with `npm install @auditaur/api`.
 
-See the docs in `docs\src\content\docs` for installation, MCP, and CutReady integration details.
+See the docs in `docs\src\content\docs` for installation, MCP, and Tauri integration details.

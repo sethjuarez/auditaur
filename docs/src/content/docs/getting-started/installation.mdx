@@ -1,9 +1,9 @@
 ---
 title: Installation
-description: Build and run Auditaur from source during the pre-release MVP.
+description: Install the Auditaur CLI, Tauri plugin, and frontend package.
 ---
 
-Auditaur is not published yet. Build from source until the first release.
+Auditaur ships as Rust crates plus the `@auditaur/api` npm package. The CLI binary is provided by the `auditaur-cli` crate and is installed as `auditaur`.
 
 ## Prerequisites
 
@@ -11,41 +11,46 @@ Auditaur is not published yet. Build from source until the first release.
 2. Node.js 24 or newer for the docs and example app.
 3. Tauri v2 prerequisites for your operating system.
 
-## Build the CLI
+## Install the CLI
 
 ```powershell
-cargo build -p auditaur-cli
-cargo run -p auditaur-cli -- doctor
-```
-
-The binary is named `auditaur`. During development, examples use `cargo run -p auditaur-cli -- ...` so you do not need to install it globally.
-
-To place the CLI on your `PATH` locally:
-
-```powershell
-cargo install --path crates\auditaur-cli --force
+cargo install auditaur-cli
 auditaur doctor
 ```
 
-To build a distributable binary without installing:
+## Add the Tauri plugin
 
-```powershell
-cargo build -p auditaur-cli --release
-.\target\release\auditaur.exe doctor
+In your Tauri app's Rust crate:
+
+```toml
+[dependencies]
+tauri-plugin-auditaur = "0.1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
 ```
 
-On macOS/Linux the release binary is `./target/release/auditaur`.
+## Add the frontend package
 
-## Build the frontend package
+```powershell
+npm install @auditaur/api
+```
+
+## Source checkout development
+
+When working inside the Auditaur repository, you can still run the CLI from source:
+
+```powershell
+cargo run -p auditaur-cli -- doctor
+cargo run -p auditaur-cli -- apps --json
+```
+
+To build the frontend package locally:
 
 ```powershell
 cd packages\api
 npm install
 npm run build
-npm test
 ```
-
-The package is currently consumed from the repo as `@auditaur/api` through a local file dependency.
 
 ## Local data paths
 
@@ -74,7 +79,7 @@ For a locally installed CLI:
 }
 ```
 
-Without installing the CLI, point the MCP client at Cargo:
+Without installing the CLI from crates.io, point the MCP client at Cargo:
 
 ```json
 {
@@ -98,4 +103,4 @@ npm install
 npm run build
 ```
 
-The docs site is configured for GitHub Pages at `auditaur.dev` through `docs/public/CNAME` and `.github/workflows/publish-docs.yml`.
+The docs site is published at `https://auditaur.dev`.

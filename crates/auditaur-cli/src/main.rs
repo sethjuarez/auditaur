@@ -21,6 +21,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Doctor {
+        #[command(subcommand)]
+        command: Option<DoctorCommand>,
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
@@ -46,6 +48,8 @@ enum Command {
         #[arg(long)]
         trace: Option<String>,
         #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
         json: bool,
         #[arg(long, default_value_t = 200)]
         limit: usize,
@@ -58,6 +62,8 @@ enum Command {
         #[arg(long)]
         trace: Option<String>,
         #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
         json: bool,
         #[arg(long, default_value_t = 200)]
         limit: usize,
@@ -67,6 +73,10 @@ enum Command {
         db: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        failed: bool,
         #[arg(long)]
         json: bool,
         #[arg(long, default_value_t = 100)]
@@ -89,6 +99,10 @@ enum Command {
         #[arg(long)]
         trace: Option<String>,
         #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        failed: bool,
+        #[arg(long)]
         json: bool,
         #[arg(long, default_value_t = 200)]
         limit: usize,
@@ -100,6 +114,8 @@ enum Command {
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
         #[arg(long)]
         json: bool,
         #[arg(long, default_value_t = 200)]
@@ -115,36 +131,115 @@ enum Command {
         #[arg(long, default_value_t = 200)]
         limit: usize,
     },
+    Timeline {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
+    Explain {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
+    Bundle {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        redacted: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
+    Tail {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        replay: bool,
+        #[arg(long, default_value_t = 1000)]
+        interval_ms: u64,
+        #[arg(long)]
+        duration_seconds: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
     Mcp,
+}
+
+#[derive(Debug, Subcommand)]
+enum DoctorCommand {
+    Tauri {
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Doctor { db, json } => commands::doctor::run(db.as_deref(), json),
+        Command::Doctor { command, db, json } => match command {
+            Some(DoctorCommand::Tauri { path, json }) => {
+                commands::doctor::tauri(path.as_deref(), json)
+            }
+            None => commands::doctor::run(db.as_deref(), json),
+        },
         Command::Apps { json } => commands::read::apps(json),
         Command::Sessions { db, json, limit } => commands::read::sessions(&db, json, limit),
         Command::Logs {
             db,
             session,
             trace,
+            since,
             json,
             limit,
-        } => commands::read::logs(&db, session, trace, json, limit),
+        } => commands::read::logs(&db, session, trace, since, json, limit),
         Command::Errors {
             db,
             session,
             trace,
+            since,
             json,
             limit,
-        } => commands::read::errors(&db, session, trace, json, limit),
+        } => commands::read::errors(&db, session, trace, since, json, limit),
         Command::Traces {
             db,
             session,
+            since,
+            failed,
             json,
             limit,
-        } => commands::read::traces(&db, session, json, limit),
+        } => commands::read::traces(&db, session, since, failed, json, limit),
         Command::Trace {
             trace_id,
             db,
@@ -155,22 +250,67 @@ fn main() -> Result<()> {
             db,
             session,
             trace,
+            since,
+            failed,
             json,
             limit,
-        } => commands::read::ipc(&db, session, trace, json, limit),
+        } => commands::read::ipc(&db, session, trace, since, failed, json, limit),
         Command::Events {
             db,
             session,
             trace,
+            since,
             json,
             limit,
-        } => commands::read::events(&db, session, trace, json, limit),
+        } => commands::read::events(&db, session, trace, since, json, limit),
         Command::Windows {
             db,
             session,
             json,
             limit,
         } => commands::read::windows(&db, session, json, limit),
+        Command::Timeline {
+            db,
+            session,
+            trace,
+            since,
+            json,
+            limit,
+        } => commands::polish::timeline(&db, session, trace, since, json, limit),
+        Command::Explain {
+            db,
+            session,
+            trace,
+            since,
+            json,
+            limit,
+        } => commands::polish::explain(&db, session, trace, since, json, limit),
+        Command::Bundle {
+            db,
+            session,
+            trace,
+            since,
+            redacted,
+            output,
+            limit,
+        } => commands::polish::bundle(&db, session, trace, since, redacted, output, limit),
+        Command::Tail {
+            db,
+            session,
+            trace,
+            replay,
+            interval_ms,
+            duration_seconds,
+            json,
+        } => commands::polish::tail(
+            &db,
+            session,
+            trace,
+            replay,
+            interval_ms,
+            duration_seconds,
+            json,
+        ),
         Command::Mcp => mcp::run(),
     }
 }

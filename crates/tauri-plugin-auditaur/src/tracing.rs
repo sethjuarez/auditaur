@@ -389,6 +389,7 @@ mod tests {
 
     #[test]
     fn tracing_events_and_spans_are_persisted() {
+        let _guard = crate::test_support::global_state_lock();
         let temp = TempDir::new().unwrap();
         let state = test_state(&temp);
         let session_id = state.session_id.clone().unwrap();
@@ -414,6 +415,7 @@ mod tests {
 
     #[test]
     fn nested_spans_share_trace_and_record_parent() {
+        let _guard = crate::test_support::global_state_lock();
         let temp = TempDir::new().unwrap();
         let state = test_state(&temp);
         let session_id = state.session_id.clone().unwrap();
@@ -439,6 +441,7 @@ mod tests {
 
     #[test]
     fn explicit_trace_context_fields_are_used() {
+        let _guard = crate::test_support::global_state_lock();
         let temp = TempDir::new().unwrap();
         let state = test_state(&temp);
         let session_id = state.session_id.clone().unwrap();
@@ -462,6 +465,7 @@ mod tests {
 
     #[test]
     fn global_layer_stops_writing_after_state_drop() {
+        let _guard = crate::test_support::global_state_lock();
         let temp = TempDir::new().unwrap();
         let state = test_state_with_global_sink(&temp);
         let session_id = state.session_id.clone().unwrap();

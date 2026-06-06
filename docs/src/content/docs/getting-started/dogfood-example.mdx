@@ -51,6 +51,8 @@ cargo run -p auditaur-cli -- ipc --json
 cargo run -p auditaur-cli -- events --json
 cargo run -p auditaur-cli -- traces --json
 cargo run -p auditaur-cli -- windows --json
+cargo run -p auditaur-cli -- timeline --json
+cargo run -p auditaur-cli -- explain
 ```
 
 Or pass the copied path explicitly:
@@ -66,7 +68,7 @@ cargo run -p auditaur-cli -- windows --db "<databasePath>" --json
 
 If multiple dogfood app instances are active, discovery intentionally refuses to guess which database to inspect. Use `apps --json`, copy the latest `databasePath`, and pass `--db`.
 
-`windows` returns rows only when window state has been inserted; automatic runtime window capture is still planned, so an empty `windows` result is expected in the current dogfood app.
+`windows` returns the latest stored window states. The plugin captures initial window state at startup; additional live window lifecycle capture is still a follow-up.
 
 For MCP, start:
 
@@ -87,10 +89,12 @@ The latest local manual smoke used the dogfood app on Windows with an isolated `
 - `auditaur events --json` returned frontend emit/receive and backend receive rows.
 - `auditaur traces --json` returned frontend wrapper spans and backend Rust tracing spans.
 - `auditaur trace <traceId> --json` returned trace detail for the failing command span and its IPC row.
+- `auditaur timeline --json` returned a chronological view across spans, logs, errors, IPC calls, events, and window state.
+- `auditaur explain` summarized the intentional failing command path.
 - MCP `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, and `get_trace` returned real dogfood telemetry from the same SQLite DB.
-- MCP `list_windows` returned `[]`, which is expected until automatic runtime window capture is implemented.
+- MCP `list_windows` returned stored window state rows when startup window capture was available.
 
 Exact caveats:
 
 - If multiple dogfood instances are active, discovery refuses to choose a default DB. Pass `--db`.
-- `windows` is storage/query-ready but not automatically populated by the dogfood app.
+- `windows` currently captures initial window state, not every later lifecycle transition.

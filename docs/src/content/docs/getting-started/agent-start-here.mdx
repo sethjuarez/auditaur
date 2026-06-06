@@ -1,0 +1,64 @@
+---
+title: Agent Start Here
+description: A concise workflow for coding agents debugging Auditaur-enabled Tauri apps.
+---
+
+Use Auditaur data before asking a developer to paste logs, screenshots, browser console output, or terminal output.
+
+## First checks
+
+```powershell
+auditaur doctor
+auditaur apps --json
+```
+
+If exactly one active readable session exists, Auditaur commands discover it automatically. If multiple sessions are active, copy `databasePath` from `auditaur apps --json` and pass it with `--db`.
+
+## Fast failure triage
+
+```powershell
+auditaur errors --json
+auditaur traces --failed --json
+auditaur ipc --failed --json
+auditaur events --json
+```
+
+Start with frontend errors, failed traces, failed IPC calls, and recent events. Prefer JSON when another tool or model will inspect the output.
+
+## Follow causality
+
+When a failing trace or IPC call includes a `traceId`, inspect the full trace:
+
+```powershell
+auditaur trace <traceId> --json
+auditaur timeline --trace <traceId> --json
+auditaur explain --trace <traceId>
+```
+
+Use the trace detail to connect frontend actions, Tauri invokes, Rust logs/spans, Tauri events, and frontend listeners.
+
+## Live debugging
+
+```powershell
+auditaur tail
+```
+
+Use `tail` while the app is running to watch new logs, errors, spans, IPC calls, and events.
+
+## Shareable context
+
+```powershell
+auditaur bundle --redacted --output auditaur-bundle.json
+```
+
+Use a redacted bundle when a bug report or handoff needs a bounded snapshot of the local session.
+
+## MCP equivalent
+
+The MCP server exposes the same data for agents that support MCP:
+
+```powershell
+auditaur mcp
+```
+
+Prefer the CLI for quick scripted checks and use MCP when the agent can call tools directly.

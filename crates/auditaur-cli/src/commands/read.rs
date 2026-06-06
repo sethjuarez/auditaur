@@ -12,6 +12,7 @@ use auditaur_core::{
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 
 use crate::{discovery, output::table_cell};
 
@@ -31,16 +32,19 @@ pub fn logs(
     db: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
+    since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
     let store = open_validated_store(&db)?;
-    let logs = store.list_logs(&LogQuery {
+    let mut logs = store.list_logs(&LogQuery {
         session_id,
         trace_id,
-        limit: Some(limit),
+        limit: Some(fetch_limit(since.as_ref(), limit)),
     })?;
+    filter_since(&mut logs, since.as_deref(), |log| log.timestamp_unix_nanos)?;
+    logs.truncate(limit);
     print_json_or_table(json, &logs, || print_logs(&logs))
 }
 
@@ -48,28 +52,49 @@ pub fn errors(
     db: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
+    since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
     let store = open_validated_store(&db)?;
-    let errors = store.list_frontend_errors(&FrontendErrorQuery {
+    let mut errors = store.list_frontend_errors(&FrontendErrorQuery {
         session_id,
         trace_id,
-        limit: Some(limit),
+        limit: Some(fetch_limit(since.as_ref(), limit)),
     })?;
+    filter_since(&mut errors, since.as_deref(), |error| {
+        error.timestamp_unix_nanos
+    })?;
+    errors.truncate(limit);
     print_json_or_table(json, &errors, || print_errors(&errors))
 }
 
 pub fn traces(
     db: &Option<PathBuf>,
     session_id: Option<String>,
+    since: Option<String>,
+    failed: bool,
     json: bool,
     limit: usize,
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
     let store = open_validated_store(&db)?;
-    let summaries = store.list_trace_summaries(session_id.as_deref(), Some(limit))?;
+    let mut summaries = store.list_trace_summaries(
+        session_id.as_deref(),
+        Some(if since.is_some() || failed {
+            usize::MAX
+        } else {
+            limit
+        }),
+    )?;
+    filter_since(&mut summaries, since.as_deref(), |trace| {
+        trace.start_time_unix_nanos.unwrap_or_default()
+    })?;
+    if failed {
+        summaries.retain(is_failed_trace);
+    }
+    summaries.truncate(limit);
     print_json_or_table(json, &summaries, || print_traces(&summaries))
 }
 
@@ -121,16 +146,29 @@ pub fn ipc(
     db: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
+    since: Option<String>,
+    failed: bool,
     json: bool,
     limit: usize,
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
     let store = open_validated_store(&db)?;
-    let calls = store.list_tauri_ipc_calls(&TauriIpcQuery {
+    let mut calls = store.list_tauri_ipc_calls(&TauriIpcQuery {
         session_id,
         trace_id,
-        limit: Some(limit),
+        limit: Some(if since.is_some() || failed {
+            usize::MAX
+        } else {
+            limit
+        }),
     })?;
+    filter_since(&mut calls, since.as_deref(), |call| {
+        call.timestamp_unix_nanos
+    })?;
+    if failed {
+        calls.retain(is_failed_ipc);
+    }
+    calls.truncate(limit);
     print_json_or_table(json, &calls, || print_ipc(&calls))
 }
 
@@ -138,16 +176,21 @@ pub fn events(
     db: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
+    since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
     let store = open_validated_store(&db)?;
-    let events = store.list_tauri_events(&TauriEventQuery {
+    let mut events = store.list_tauri_events(&TauriEventQuery {
         session_id,
         trace_id,
-        limit: Some(limit),
+        limit: Some(fetch_limit(since.as_ref(), limit)),
     })?;
+    filter_since(&mut events, since.as_deref(), |event| {
+        event.timestamp_unix_nanos
+    })?;
+    events.truncate(limit);
     print_json_or_table(json, &events, || print_events(&events))
 }
 
@@ -167,14 +210,14 @@ pub fn windows(
     print_json_or_table(json, &windows, || print_windows(&windows))
 }
 
-fn open_validated_store(db: &Path) -> Result<SqliteStore> {
+pub(crate) fn open_validated_store(db: &Path) -> Result<SqliteStore> {
     let store = SqliteStore::open(db)?;
     store.migrate()?;
     store.validate_schema()?;
     Ok(store)
 }
 
-fn print_json_or_table<T: Serialize>(
+pub(crate) fn print_json_or_table<T: Serialize>(
     json: bool,
     value: &T,
     human: impl FnOnce() -> Result<()>,
@@ -184,6 +227,93 @@ fn print_json_or_table<T: Serialize>(
         Ok(())
     } else {
         human()
+    }
+}
+
+pub(crate) fn parse_since_cutoff(value: Option<&str>) -> Result<Option<i64>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let duration_nanos = parse_duration_nanos(value)?;
+    Ok(Some(
+        current_time_unix_nanos().saturating_sub(duration_nanos),
+    ))
+}
+
+pub(crate) fn current_time_unix_nanos() -> i64 {
+    let now = OffsetDateTime::now_utc();
+    now.unix_timestamp()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(i64::from(now.nanosecond()))
+}
+
+pub(crate) fn is_failed_trace(trace: &TraceSummary) -> bool {
+    trace.error_count > 0
+        || trace
+            .status_code
+            .as_deref()
+            .is_some_and(|status| !status.eq_ignore_ascii_case("OK"))
+}
+
+pub(crate) fn is_failed_ipc(call: &TauriIpcCall) -> bool {
+    is_failed_ipc_status(&call.status)
+}
+
+pub(crate) fn is_failed_ipc_status(status: &str) -> bool {
+    !matches!(
+        status,
+        "OK" | "Ok" | "ok" | "SUCCESS" | "Success" | "success"
+    )
+}
+
+fn fetch_limit(since: Option<&String>, limit: usize) -> usize {
+    if since.is_some() {
+        usize::MAX
+    } else {
+        limit
+    }
+}
+
+fn filter_since<T>(
+    items: &mut Vec<T>,
+    since: Option<&str>,
+    timestamp: impl Fn(&T) -> i64,
+) -> Result<()> {
+    if let Some(cutoff) = parse_since_cutoff(since)? {
+        items.retain(|item| timestamp(item) >= cutoff);
+    }
+    Ok(())
+}
+
+fn parse_duration_nanos(value: &str) -> Result<i64> {
+    let mut chars = value.chars();
+    let unit = chars.next_back().unwrap_or_default();
+    let number = chars.as_str();
+    let amount: i64 = number.parse().map_err(|_| {
+        anyhow::anyhow!("Invalid duration `{value}`. Use values like 30s, 10m, 2h, or 1d.")
+    })?;
+    let seconds = match unit {
+        's' => amount,
+        'm' => amount.saturating_mul(60),
+        'h' => amount.saturating_mul(60 * 60),
+        'd' => amount.saturating_mul(60 * 60 * 24),
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Invalid duration unit `{unit}`. Use s, m, h, or d."
+            ))
+        }
+    };
+    Ok(seconds.saturating_mul(1_000_000_000))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_duration_nanos;
+
+    #[test]
+    fn duration_parser_rejects_invalid_unicode_unit_without_panicking() {
+        let error = parse_duration_nanos("5µ").unwrap_err().to_string();
+        assert!(error.contains("Invalid duration unit"));
     }
 }
 
