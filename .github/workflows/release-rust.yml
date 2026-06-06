@@ -35,7 +35,6 @@ jobs:
   publish:
     name: Publish Rust crates
     runs-on: ubuntu-latest
-    if: vars.ENABLE_CRATES_IO_RELEASE == 'true'
     steps:
       - uses: actions/checkout@v4
         with:

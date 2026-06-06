@@ -48,7 +48,7 @@ Rust crates use release-plz:
 
 1. `.github/workflows/release-rust.yml` opens or updates a Rust release PR on pushes to `main`.
 2. Merging the release PR updates versions and changelogs according to Conventional Commits plus release-plz semver checks.
-3. Crates.io publishing is gated behind the repository variable `ENABLE_CRATES_IO_RELEASE=true`.
+3. Merging the release PR runs release-plz publish for changed Rust crates.
 4. Publishing requires a `CARGO_REGISTRY_TOKEN` repository secret until crates.io trusted publishing is configured for existing crates.
 5. `.github/workflows/release-binaries.yml` uploads Windows x64, Windows ARM64, macOS ARM64, and Linux x64 `auditaur` binaries for `auditaur-cli-v*` GitHub releases.
 
@@ -80,5 +80,4 @@ npm publish --dry-run --access public
    - Workflow: `publish-api.yml`.
    - Environment: leave blank unless this workflow is later updated to use one.
 2. Keep `CARGO_REGISTRY_TOKEN` available until crates.io trusted publishing is configured for all Rust crates.
-3. Set repository variable `ENABLE_CRATES_IO_RELEASE=true` when automated crates.io publishing should run.
-4. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
+3. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
