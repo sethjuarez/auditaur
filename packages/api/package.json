@@ -1,12 +1,12 @@
 {
   "name": "@auditaur/api",
   "version": "0.1.0",
+  "description": "Frontend telemetry API for Auditaur-enabled Tauri apps.",
   "type": "module",
-  "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sethjuarez/auditaur.git",
+    "url": "git+https://github.com/sethjuarez/auditaur.git",
     "directory": "packages/api"
   },
   "main": "./dist/index.js",
@@ -20,6 +20,15 @@
   },
   "files": [
     "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "tauri",
+    "observability",
+    "opentelemetry",
+    "telemetry"
   ],
   "sideEffects": false,
   "scripts": {

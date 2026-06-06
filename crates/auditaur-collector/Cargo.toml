@@ -4,9 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Local SQLite telemetry collector and query store for Auditaur."
+categories = ["development-tools::debugging"]
+keywords = ["tauri", "observability", "opentelemetry", "sqlite"]
 
 [dependencies]
-auditaur-core = { path = "../auditaur-core" }
+auditaur-core = { version = "0.1.0", path = "../auditaur-core" }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

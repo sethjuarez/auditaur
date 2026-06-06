@@ -1,0 +1,9 @@
+{
+  "packages": {
+    "packages/api": {
+      "release-type": "node",
+      "package-name": "@auditaur/api",
+      "include-component-in-tag": true
+    }
+  }
+}
