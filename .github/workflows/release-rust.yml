@@ -40,6 +40,13 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev
       - uses: Swatinem/rust-cache@v2
       - name: Publish changed crates
         uses: MarcoIeni/release-plz-action@v0.5
