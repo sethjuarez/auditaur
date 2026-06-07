@@ -464,6 +464,36 @@ mod tests {
     }
 
     #[test]
+    fn traceparent_field_continues_frontend_trace() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = test_state(&temp);
+        let session_id = state.session_id.clone().unwrap();
+        let subscriber = Registry::default().with(state.tracing_layer());
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "successful_command",
+                traceparent = "00-00112233445566778899aabbccddeeff-0123456789abcdef-01"
+            );
+            let _entered = span.enter();
+            tracing::info!("backend command log");
+        });
+
+        let store = store_for(&temp, &session_id);
+        let spans = store.list_spans(&SpanQuery::default()).unwrap();
+        let logs = store.list_logs(&LogQuery::default()).unwrap();
+
+        assert_eq!(spans[0].trace_id, "00112233445566778899aabbccddeeff");
+        assert_eq!(spans[0].parent_span_id.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(
+            logs[0].trace_id.as_deref(),
+            Some("00112233445566778899aabbccddeeff")
+        );
+        assert_eq!(logs[0].span_id.as_deref(), Some(spans[0].span_id.as_str()));
+    }
+
+    #[test]
     fn global_layer_stops_writing_after_state_drop() {
         let _guard = crate::test_support::global_state_lock();
         let temp = TempDir::new().unwrap();

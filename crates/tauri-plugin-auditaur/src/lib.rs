@@ -1,11 +1,13 @@
 pub mod commands;
 pub mod desktop;
 pub mod error;
+pub mod ipc;
 pub mod state;
 pub mod tracing;
 
 use auditaur_core::model::TauriWindowState;
 pub use auditaur_core::AuditaurConfig;
+pub use ipc::{ipc_traceparent, IpcTraceContext, IPC_CONTEXT_ARG};
 use serde_json::json;
 use tauri::{
     plugin::{Builder as TauriPluginBuilder, TauriPlugin},

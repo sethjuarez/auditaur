@@ -38,6 +38,27 @@ tauri::Builder::default()
 
 The plugin creates the SQLite session database, writes a discovery file, receives frontend telemetry batches through `export_otel_batch`, applies recursive redaction, records Rust `tracing` events/spans, stores the optional session name, and applies best-effort retention after frontend batches.
 
+To continue frontend `invoke()` traces into backend command spans, opt commands into the experimental IPC trace bridge:
+
+```rust
+use tauri_plugin_auditaur::{ipc_traceparent, IpcTraceContext};
+
+#[tauri::command]
+#[tracing::instrument(
+    skip(auditaur_trace_context),
+    fields(traceparent = ipc_traceparent(auditaur_trace_context.as_ref()))
+)]
+fn load_user(
+    id: String,
+    auditaur_trace_context: Option<IpcTraceContext>,
+) -> Result<String, String> {
+    tracing::info!(user.id = %id, "loading user");
+    Ok(id)
+}
+```
+
+The frontend wrapper sends W3C `traceparent` in the reserved `auditaurTraceContext` argument. The backend helper validates it and exposes it to Auditaur's tracing layer, so the backend command span is parented to the frontend invoke span without command-name or timestamp heuristics.
+
 Add `auditaur:default` to the app capability so the frontend package can call the plugin command:
 
 ```json

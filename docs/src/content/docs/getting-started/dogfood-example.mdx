@@ -22,6 +22,8 @@ npm run tauri dev
 
 Click each button in the app. The failing-command button is intentionally useful for agents: it creates a frontend `tauri.invoke failing_command` span with `ERROR` status and a backend tracing error that contains `Intentional dogfood backend failure`.
 
+The dogfood commands also opt into Auditaur's experimental Tauri IPC trace context bridge. The frontend invoke wrapper sends W3C `traceparent` in a reserved `auditaurTraceContext` argument, and the Rust commands use `IpcTraceContext` plus `ipc_traceparent` to attach backend spans to the frontend invoke trace without command-name or timestamp heuristics.
+
 Manual smoke path:
 
 1. Emit console log.

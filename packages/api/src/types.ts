@@ -6,6 +6,7 @@ export interface AuditaurFrontendConfig {
   instrumentConsole?: boolean;
   instrumentErrors?: boolean;
   instrumentTauriInvoke?: boolean;
+  propagateTauriInvokeTraceContext?: boolean;
   instrumentTauriEvents?: boolean;
   captureFullPayloads?: boolean;
   maxPayloadBytes?: number;

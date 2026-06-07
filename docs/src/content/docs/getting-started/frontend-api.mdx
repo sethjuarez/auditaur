@@ -19,6 +19,7 @@ const auditaur = await initAuditaur({
   instrumentConsole: true,
   instrumentErrors: true,
   instrumentTauriInvoke: true,
+  propagateTauriInvokeTraceContext: true,
   instrumentTauriEvents: true,
   captureFullPayloads: false,
 });
@@ -39,7 +40,7 @@ The returned client exposes:
 
 Console and error instrumentation are enabled by default. Full payload capture is disabled by default; payload summaries and recursive key-based redaction help reduce accidental secret capture.
 
-The frontend invoke/event wrappers emit Auditaur's OTEL-shaped records directly and map them into SQLite spans plus Tauri-specific rows.
+The frontend invoke/event wrappers emit Auditaur's OTEL-shaped records directly and map them into SQLite spans plus Tauri-specific rows. When `instrumentTauriInvoke` is enabled, `propagateTauriInvokeTraceContext` defaults to `true` and sends W3C `traceparent` through a reserved `auditaurTraceContext` invoke argument. If your app already uses an argument named `auditaurTraceContext`, Auditaur leaves it untouched and skips propagation for that call; set `propagateTauriInvokeTraceContext: false` to disable this bridge globally.
 
 To sink spans emitted through an existing OpenTelemetry JS tracer provider, attach the Auditaur exporter as another span processor:
 

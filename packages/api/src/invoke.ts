@@ -3,19 +3,24 @@ import type { AuditaurExporter } from './exporter';
 import type { SpanRecord, TauriIpcCallRecord } from './types';
 import { currentWindowLabel, errorRecordFields, maybePayload, nowUnixNanos, randomSpanId, randomTraceId, summarizePayload } from './utils';
 
+const IPC_CONTEXT_ARG = 'auditaurTraceContext';
+
 export async function instrumentedInvoke<T>(
   exporter: AuditaurExporter,
   command: string,
   args: Record<string, unknown> | undefined,
   maxPayloadBytes: number,
   captureFullPayloads: boolean,
+  propagateTraceContext: boolean,
 ): Promise<T> {
   const start = nowUnixNanos();
   const traceId = randomTraceId();
   const spanId = randomSpanId();
+  const traceparent = `00-${traceId}-${spanId}-01`;
   const windowLabel = currentWindowLabel();
+  const invokeArgs = propagateTraceContext ? argsWithTraceContext(args, traceparent) : args;
   try {
-    const result = await tauriInvoke<T>(command, args);
+    const result = await tauriInvoke<T>(command, invokeArgs);
     const end = nowUnixNanos();
     exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, args, maxPayloadBytes, captureFullPayloads));
     exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, args, result, maxPayloadBytes, captureFullPayloads));
@@ -27,6 +32,16 @@ export async function instrumentedInvoke<T>(
     exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, args, undefined, maxPayloadBytes, captureFullPayloads));
     throw error;
   }
+}
+
+function argsWithTraceContext(args: Record<string, unknown> | undefined, traceparent: string): Record<string, unknown> {
+  if (args && Object.prototype.hasOwnProperty.call(args, IPC_CONTEXT_ARG)) {
+    return args;
+  }
+  return {
+    ...(args ?? {}),
+    [IPC_CONTEXT_ARG]: { traceparent },
+  };
 }
 
 function invokeSpan(

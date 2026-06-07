@@ -17,6 +17,7 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
 
   const maxPayloadBytes = config.maxPayloadBytes ?? 16_384;
   const captureFullPayloads = config.captureFullPayloads ?? false;
+  const propagateTauriInvokeTraceContext = config.propagateTauriInvokeTraceContext ?? true;
   const exporter = new AuditaurExporter(config.batchIntervalMs ?? 1_000, config.maxBatchSize ?? 64);
   const cleanup: Array<() => void> = [];
 
@@ -30,7 +31,14 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
   return {
     invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       if (config.instrumentTauriInvoke ?? true) {
-        return instrumentedInvoke<T>(exporter, command, args, maxPayloadBytes, captureFullPayloads);
+        return instrumentedInvoke<T>(
+          exporter,
+          command,
+          args,
+          maxPayloadBytes,
+          captureFullPayloads,
+          propagateTauriInvokeTraceContext,
+        );
       }
       return tauriInvoke<T>(command, args);
     },
