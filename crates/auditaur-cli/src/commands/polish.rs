@@ -3,9 +3,7 @@ use auditaur_core::{
     model::{
         FrontendError, LogRecord, SpanRecord, TauriEventRecord, TauriIpcCall, TauriWindowState,
     },
-    storage::{
-        FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery, TauriWindowQuery,
-    },
+    storage::{RelatedTelemetry, RelatedTelemetryQuery},
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -30,6 +28,27 @@ pub fn timeline(
     let mut entries = load_timeline(&db, session_id, trace_id, since.as_deref(), limit)?;
     entries.truncate(limit);
     read::print_json_or_table(json, &entries, || print_timeline(&entries))
+}
+
+pub fn related(
+    db: &Option<PathBuf>,
+    session_id: Option<String>,
+    trace_id: Option<String>,
+    window_label: Option<String>,
+    since: Option<String>,
+    json: bool,
+    limit: usize,
+) -> Result<()> {
+    let db = discovery::resolve_db(db.clone())?;
+    let related = load_related(
+        &db,
+        session_id,
+        trace_id,
+        window_label,
+        since.as_deref(),
+        limit,
+    )?;
+    read::print_json_or_table(json, &related, || print_related(&related))
 }
 
 pub fn explain(
@@ -58,49 +77,19 @@ pub fn bundle(
     let db = discovery::resolve_db(db.clone())?;
     let store = read::open_validated_store(&db)?;
     let sessions = store.list_sessions(Some(limit))?;
-    let logs = store.list_logs(&LogQuery {
-        session_id: session_id.clone(),
-        trace_id: trace_id.clone(),
-        limit: Some(usize::MAX),
-    })?;
-    let spans = store.list_spans(&SpanQuery {
-        session_id: session_id.clone(),
-        trace_id: trace_id.clone(),
-        limit: Some(usize::MAX),
-    })?;
-    let frontend_errors = store.list_frontend_errors(&FrontendErrorQuery {
-        session_id: session_id.clone(),
-        trace_id: trace_id.clone(),
-        limit: Some(usize::MAX),
-    })?;
-    let tauri_ipc_calls = store.list_tauri_ipc_calls(&TauriIpcQuery {
-        session_id: session_id.clone(),
-        trace_id: trace_id.clone(),
-        limit: Some(usize::MAX),
-    })?;
-    let tauri_events = store.list_tauri_events(&TauriEventQuery {
-        session_id: session_id.clone(),
-        trace_id,
-        limit: Some(usize::MAX),
-    })?;
-    let tauri_windows = store.list_tauri_windows(&TauriWindowQuery {
-        session_id,
-        latest_only: false,
-        limit: Some(usize::MAX),
-    })?;
-    let cutoff = read::parse_since_cutoff(since.as_deref())?;
+    let related = related_from_store(&store, session_id, trace_id, None, since.as_deref(), limit)?;
     let mut bundle = json!({
         "schemaVersion": 1,
         "generatedAtUnixNanos": read::current_time_unix_nanos(),
         "databasePath": db,
         "redacted": true,
         "sessions": sessions,
-        "logs": take_recent(filter_by_time(logs, cutoff, |item| item.timestamp_unix_nanos), limit),
-        "spans": take_recent(filter_by_time(spans, cutoff, |item| item.start_time_unix_nanos), limit),
-        "frontendErrors": take_recent(filter_by_time(frontend_errors, cutoff, |item| item.timestamp_unix_nanos), limit),
-        "tauriIpcCalls": take_recent(filter_by_time(tauri_ipc_calls, cutoff, |item| item.timestamp_unix_nanos), limit),
-        "tauriEvents": take_recent(filter_by_time(tauri_events, cutoff, |item| item.timestamp_unix_nanos), limit),
-        "tauriWindows": take_recent(filter_by_time(tauri_windows, cutoff, |item| item.timestamp_unix_nanos), limit),
+        "logs": related.logs,
+        "spans": related.spans,
+        "frontendErrors": related.frontend_errors,
+        "tauriIpcCalls": related.tauri_ipc_calls,
+        "tauriEvents": related.tauri_events,
+        "tauriWindows": related.tauri_windows,
     });
     redact_value(&mut bundle);
     let serialized = serde_json::to_string_pretty(&bundle)?;
@@ -157,106 +146,74 @@ fn load_timeline(
     since: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TimelineEntry>> {
+    let related = load_related(db, session_id, trace_id, None, since, limit)?;
+    Ok(timeline_entries(related, limit))
+}
+
+fn load_related(
+    db: &PathBuf,
+    session_id: Option<String>,
+    trace_id: Option<String>,
+    window_label: Option<String>,
+    since: Option<&str>,
+    limit: usize,
+) -> Result<RelatedTelemetry> {
     let store = read::open_validated_store(db)?;
-    let cutoff = read::parse_since_cutoff(since)?;
+    related_from_store(&store, session_id, trace_id, window_label, since, limit)
+}
+
+pub(crate) fn related_from_store(
+    store: &auditaur_collector::exporter_sqlite::SqliteStore,
+    session_id: Option<String>,
+    trace_id: Option<String>,
+    window_label: Option<String>,
+    since: Option<&str>,
+    limit: usize,
+) -> Result<RelatedTelemetry> {
+    let start_time_unix_nanos = read::parse_since_cutoff(since)?;
+    Ok(store.related_telemetry(&RelatedTelemetryQuery {
+        session_id,
+        trace_id,
+        window_label,
+        start_time_unix_nanos,
+        end_time_unix_nanos: None,
+        limit: Some(limit),
+    })?)
+}
+
+fn timeline_entries(related: RelatedTelemetry, limit: usize) -> Vec<TimelineEntry> {
     let mut entries = Vec::new();
+    entries.extend(related.logs.into_iter().map(TimelineEntry::from_log));
+    entries.extend(related.spans.into_iter().map(TimelineEntry::from_span));
     entries.extend(
-        filter_by_time(
-            store.list_logs(&LogQuery {
-                session_id: session_id.clone(),
-                trace_id: trace_id.clone(),
-                limit: Some(usize::MAX),
-            })?,
-            cutoff,
-            |item| item.timestamp_unix_nanos,
-        )
-        .into_iter()
-        .map(TimelineEntry::from_log),
+        related
+            .frontend_errors
+            .into_iter()
+            .map(TimelineEntry::from_error),
     );
     entries.extend(
-        filter_by_time(
-            store.list_spans(&SpanQuery {
-                session_id: session_id.clone(),
-                trace_id: trace_id.clone(),
-                limit: Some(usize::MAX),
-            })?,
-            cutoff,
-            |item| item.start_time_unix_nanos,
-        )
-        .into_iter()
-        .map(TimelineEntry::from_span),
+        related
+            .tauri_ipc_calls
+            .into_iter()
+            .map(TimelineEntry::from_ipc),
     );
     entries.extend(
-        filter_by_time(
-            store.list_frontend_errors(&FrontendErrorQuery {
-                session_id: session_id.clone(),
-                trace_id: trace_id.clone(),
-                limit: Some(usize::MAX),
-            })?,
-            cutoff,
-            |item| item.timestamp_unix_nanos,
-        )
-        .into_iter()
-        .map(TimelineEntry::from_error),
+        related
+            .tauri_events
+            .into_iter()
+            .map(TimelineEntry::from_event),
     );
     entries.extend(
-        filter_by_time(
-            store.list_tauri_ipc_calls(&TauriIpcQuery {
-                session_id: session_id.clone(),
-                trace_id: trace_id.clone(),
-                limit: Some(usize::MAX),
-            })?,
-            cutoff,
-            |item| item.timestamp_unix_nanos,
-        )
-        .into_iter()
-        .map(TimelineEntry::from_ipc),
-    );
-    entries.extend(
-        filter_by_time(
-            store.list_tauri_events(&TauriEventQuery {
-                session_id: session_id.clone(),
-                trace_id: trace_id.clone(),
-                limit: Some(usize::MAX),
-            })?,
-            cutoff,
-            |item| item.timestamp_unix_nanos,
-        )
-        .into_iter()
-        .map(TimelineEntry::from_event),
-    );
-    entries.extend(
-        filter_by_time(
-            store.list_tauri_windows(&TauriWindowQuery {
-                session_id,
-                latest_only: false,
-                limit: Some(usize::MAX),
-            })?,
-            cutoff,
-            |item| item.timestamp_unix_nanos,
-        )
-        .into_iter()
-        .map(TimelineEntry::from_window),
+        related
+            .tauri_windows
+            .into_iter()
+            .map(TimelineEntry::from_window),
     );
     entries.sort_by_key(|entry| entry.timestamp_unix_nanos);
     if entries.len() > limit {
         entries = entries.split_off(entries.len() - limit);
     }
-    Ok(entries)
-}
-
-fn filter_by_time<T>(items: Vec<T>, cutoff: Option<i64>, timestamp: impl Fn(&T) -> i64) -> Vec<T> {
-    items
-        .into_iter()
-        .filter(|item| cutoff.is_none_or(|cutoff| timestamp(item) >= cutoff))
-        .collect()
-}
-
-fn take_recent<T>(mut items: Vec<T>, limit: usize) -> Vec<T> {
-    if items.len() > limit {
-        items = items.split_off(items.len() - limit);
-    }
-    items
+    entries
 }
 
 fn print_timeline(entries: &[TimelineEntry]) -> Result<()> {
@@ -292,6 +249,17 @@ fn print_explain(report: &ExplainReport) -> Result<()> {
             println!("- {}", table_cell(finding, 240));
         }
     }
+    Ok(())
+}
+
+fn print_related(related: &RelatedTelemetry) -> Result<()> {
+    println!("TYPE\tCOUNT");
+    println!("spans\t{}", related.spans.len());
+    println!("logs\t{}", related.logs.len());
+    println!("frontend_errors\t{}", related.frontend_errors.len());
+    println!("tauri_ipc_calls\t{}", related.tauri_ipc_calls.len());
+    println!("tauri_events\t{}", related.tauri_events.len());
+    println!("tauri_windows\t{}", related.tauri_windows.len());
     Ok(())
 }
 

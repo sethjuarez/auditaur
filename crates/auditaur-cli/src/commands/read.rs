@@ -7,7 +7,8 @@ use auditaur_core::{
     },
     protocol::TraceSummary,
     storage::{
-        FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery, TauriWindowQuery,
+        FrontendErrorQuery, LogQuery, RelatedTelemetryQuery, TauriEventQuery, TauriIpcQuery,
+        TauriWindowQuery,
     },
 };
 use serde::Serialize;
@@ -106,38 +107,22 @@ pub fn trace(
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
     let store = open_validated_store(&db)?;
-    let spans = store.list_spans(&SpanQuery {
-        session_id: session_id.clone(),
-        trace_id: Some(trace_id.clone()),
-        limit: Some(usize::MAX),
-    })?;
-    let logs = store.list_logs(&LogQuery {
-        session_id: session_id.clone(),
-        trace_id: Some(trace_id.clone()),
-        limit: Some(usize::MAX),
-    })?;
-    let errors = store.list_frontend_errors(&FrontendErrorQuery {
-        session_id: session_id.clone(),
-        trace_id: Some(trace_id.clone()),
-        limit: Some(usize::MAX),
-    })?;
-    let ipc_calls = store.list_tauri_ipc_calls(&TauriIpcQuery {
-        session_id: session_id.clone(),
-        trace_id: Some(trace_id.clone()),
-        limit: Some(usize::MAX),
-    })?;
-    let events = store.list_tauri_events(&TauriEventQuery {
+    let related = store.related_telemetry(&RelatedTelemetryQuery {
         session_id,
         trace_id: Some(trace_id.clone()),
+        window_label: None,
+        start_time_unix_nanos: None,
+        end_time_unix_nanos: None,
         limit: Some(usize::MAX),
     })?;
     let detail = TraceDetail {
         trace_id,
-        spans,
-        logs,
-        frontend_errors: errors,
-        tauri_ipc_calls: ipc_calls,
-        tauri_events: events,
+        spans: related.spans,
+        logs: related.logs,
+        frontend_errors: related.frontend_errors,
+        tauri_ipc_calls: related.tauri_ipc_calls,
+        tauri_events: related.tauri_events,
+        tauri_windows: related.tauri_windows,
     };
     print_json_or_table(json, &detail, || print_trace(&detail))
 }
@@ -474,4 +459,5 @@ struct TraceDetail {
     frontend_errors: Vec<FrontendError>,
     tauri_ipc_calls: Vec<TauriIpcCall>,
     tauri_events: Vec<TauriEventRecord>,
+    tauri_windows: Vec<TauriWindowState>,
 }

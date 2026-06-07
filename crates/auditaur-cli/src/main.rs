@@ -32,6 +32,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Health {
+        #[arg(long)]
+        json: bool,
+    },
     Sessions {
         #[arg(long)]
         db: Option<PathBuf>,
@@ -145,6 +149,22 @@ enum Command {
         #[arg(long, default_value_t = 200)]
         limit: usize,
     },
+    Related {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        window: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
     Explain {
         #[arg(long)]
         db: Option<PathBuf>,
@@ -215,6 +235,7 @@ fn main() -> Result<()> {
             None => commands::doctor::run(db.as_deref(), json),
         },
         Command::Apps { json } => commands::read::apps(json),
+        Command::Health { json } => commands::health::run(json),
         Command::Sessions { db, json, limit } => commands::read::sessions(&db, json, limit),
         Command::Logs {
             db,
@@ -277,6 +298,15 @@ fn main() -> Result<()> {
             json,
             limit,
         } => commands::polish::timeline(&db, session, trace, since, json, limit),
+        Command::Related {
+            db,
+            session,
+            trace,
+            window,
+            since,
+            json,
+            limit,
+        } => commands::polish::related(&db, session, trace, window, since, json, limit),
         Command::Explain {
             db,
             session,

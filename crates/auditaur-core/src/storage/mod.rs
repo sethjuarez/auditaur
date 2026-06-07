@@ -1,6 +1,7 @@
 use crate::model::{
     FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall, TauriWindowState,
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -59,4 +60,27 @@ pub struct TauriWindowQuery {
     pub session_id: Option<String>,
     pub latest_only: bool,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedTelemetryQuery {
+    pub session_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub window_label: Option<String>,
+    pub start_time_unix_nanos: Option<i64>,
+    pub end_time_unix_nanos: Option<i64>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedTelemetry {
+    pub filter_notes: Vec<String>,
+    pub spans: Vec<SpanRecord>,
+    pub logs: Vec<LogRecord>,
+    pub frontend_errors: Vec<FrontendError>,
+    pub tauri_ipc_calls: Vec<TauriIpcCall>,
+    pub tauri_events: Vec<TauriEventRecord>,
+    pub tauri_windows: Vec<TauriWindowState>,
 }

@@ -23,7 +23,7 @@ jobs:
   publish:
     name: Publish @auditaur/api
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, '@auditaur/api-v')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'api-v')
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

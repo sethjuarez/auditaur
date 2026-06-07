@@ -50,14 +50,14 @@ MCP clients should point at the built binary or the cargo command above. The too
 
 - SQLite session store with WAL and schema validation.
 - Discovery files under the local Auditaur data directory.
-- CLI reads for apps, sessions, logs, errors, IPC, events, traces, trace detail, stored window rows, timeline, explain, tail, and redacted bundles.
-- MCP reads over stdio for the same data.
-- Tauri plugin collector for frontend batches, startup window state, Rust `tracing`, and Rust panic diagnostics.
+- CLI reads for apps, health, sessions, logs, errors, IPC, events, traces, trace detail, related telemetry, stored window rows, timeline, explain, tail, and redacted bundles.
+- MCP reads and agent summaries over stdio for the same data.
+- Tauri plugin collector for frontend batches, window startup/lifecycle state, Rust `tracing`, and Rust panic diagnostics.
 - Frontend console/error/invoke/event wrappers.
 - OpenTelemetry JS span exporter shim for existing tracer providers.
 - Recursive redaction and best-effort retention.
 
-Planned: OTLP receiver/sidecar, full window lifecycle capture, screenshots/devtools actions, metrics ingestion, and OpenTelemetry logs SDK support.
+Planned: OTLP receiver/sidecar, screenshots/devtools actions, metrics ingestion, OpenTelemetry logs SDK support, and a lightweight local dashboard.
 
 ## Package status
 

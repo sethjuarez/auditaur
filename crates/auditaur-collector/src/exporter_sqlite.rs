@@ -5,11 +5,11 @@ use auditaur_core::{
     },
     protocol::TraceSummary,
     storage::{
-        FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery, TauriWindowQuery,
-        TelemetryStore,
+        FrontendErrorQuery, LogQuery, RelatedTelemetry, RelatedTelemetryQuery, SpanQuery,
+        TauriEventQuery, TauriIpcQuery, TauriWindowQuery, TelemetryStore,
     },
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
@@ -538,6 +538,195 @@ impl SqliteStore {
             }
         }
     }
+
+    pub fn related_telemetry(&self, query: &RelatedTelemetryQuery) -> Result<RelatedTelemetry> {
+        let limit = bounded_limit(query.limit, 200);
+        let mut effective_query = query.clone();
+        let mut time_bounds_are_derived = false;
+        if effective_query.trace_id.is_some()
+            && effective_query.start_time_unix_nanos.is_none()
+            && effective_query.end_time_unix_nanos.is_none()
+        {
+            if let Some((start, end)) = self.trace_time_bounds(
+                effective_query.session_id.as_deref(),
+                effective_query.trace_id.as_deref().expect("checked above"),
+            )? {
+                effective_query.start_time_unix_nanos = Some(start);
+                effective_query.end_time_unix_nanos = Some(end.saturating_add(1));
+                time_bounds_are_derived = true;
+            }
+        }
+        Ok(RelatedTelemetry {
+            filter_notes: related_filter_notes(&effective_query, time_bounds_are_derived),
+            spans: self.select_related(
+                SPANS_COLUMNS,
+                "spans",
+                "start_time_unix_nanos",
+                true,
+                false,
+                &effective_query,
+                time_bounds_are_derived,
+                limit,
+                map_span,
+            )?,
+            logs: self.select_related(
+                LOGS_COLUMNS,
+                "logs",
+                "timestamp_unix_nanos",
+                true,
+                false,
+                &effective_query,
+                time_bounds_are_derived,
+                limit,
+                map_log,
+            )?,
+            frontend_errors: self.select_related(
+                FRONTEND_ERRORS_COLUMNS,
+                "frontend_errors",
+                "timestamp_unix_nanos",
+                true,
+                true,
+                &effective_query,
+                time_bounds_are_derived,
+                limit,
+                map_frontend_error,
+            )?,
+            tauri_ipc_calls: self.select_related(
+                TAURI_IPC_COLUMNS,
+                "tauri_ipc_calls",
+                "timestamp_unix_nanos",
+                true,
+                true,
+                &effective_query,
+                time_bounds_are_derived,
+                limit,
+                map_tauri_ipc,
+            )?,
+            tauri_events: self.select_related(
+                TAURI_EVENTS_COLUMNS,
+                "tauri_events",
+                "timestamp_unix_nanos",
+                true,
+                true,
+                &effective_query,
+                time_bounds_are_derived,
+                limit,
+                map_tauri_event,
+            )?,
+            tauri_windows: self.select_related(
+                TAURI_WINDOWS_COLUMNS,
+                "tauri_windows",
+                "timestamp_unix_nanos",
+                false,
+                true,
+                &effective_query,
+                time_bounds_are_derived,
+                limit,
+                map_tauri_window,
+            )?,
+        })
+    }
+
+    fn trace_time_bounds(
+        &self,
+        session_id: Option<&str>,
+        trace_id: &str,
+    ) -> Result<Option<(i64, i64)>> {
+        if let Some(session_id) = session_id {
+            self.conn
+                .query_row(
+                    "SELECT MIN(start_time_unix_nanos),
+                        MAX(COALESCE(end_time_unix_nanos, start_time_unix_nanos))
+                     FROM spans
+                     WHERE session_id = ?1 AND trace_id = ?2",
+                    params![session_id, trace_id],
+                    |row| trace_bounds_from_row(row),
+                )
+                .map_err(Into::into)
+        } else {
+            self.conn
+                .query_row(
+                    "SELECT MIN(start_time_unix_nanos),
+                        MAX(COALESCE(end_time_unix_nanos, start_time_unix_nanos))
+                     FROM spans
+                     WHERE trace_id = ?1",
+                    params![trace_id],
+                    |row| trace_bounds_from_row(row),
+                )
+                .map_err(Into::into)
+        }
+    }
+
+    fn select_related<T>(
+        &self,
+        columns: &str,
+        table: &str,
+        time_column: &str,
+        supports_trace: bool,
+        supports_window: bool,
+        query: &RelatedTelemetryQuery,
+        time_bounds_are_derived: bool,
+        limit: i64,
+        mapper: fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> Result<Vec<T>> {
+        if query.window_label.is_some()
+            && !supports_window
+            && query.trace_id.is_none()
+            && query.start_time_unix_nanos.is_none()
+            && query.end_time_unix_nanos.is_none()
+        {
+            return Ok(Vec::new());
+        }
+
+        let mut sql = format!("SELECT {columns} FROM {table}");
+        let mut clauses = Vec::new();
+        let mut values = Vec::new();
+
+        if let Some(session_id) = &query.session_id {
+            clauses.push("session_id = ?".to_string());
+            values.push(SqlValue::Text(session_id.clone()));
+        }
+        if supports_trace {
+            if let Some(trace_id) = &query.trace_id {
+                clauses.push("trace_id = ?".to_string());
+                values.push(SqlValue::Text(trace_id.clone()));
+            }
+        } else if query.trace_id.is_some()
+            && query.start_time_unix_nanos.is_none()
+            && query.end_time_unix_nanos.is_none()
+        {
+            return Ok(Vec::new());
+        }
+        if supports_window {
+            if let Some(window_label) = &query.window_label {
+                clauses.push("window_label = ?".to_string());
+                values.push(SqlValue::Text(window_label.clone()));
+            }
+        }
+        let apply_time_bounds =
+            !time_bounds_are_derived || !supports_trace || query.trace_id.is_none();
+        if apply_time_bounds {
+            if let Some(start) = query.start_time_unix_nanos {
+                clauses.push(format!("{time_column} >= ?"));
+                values.push(SqlValue::Integer(start));
+            }
+            if let Some(end) = query.end_time_unix_nanos {
+                clauses.push(format!("{time_column} < ?"));
+                values.push(SqlValue::Integer(end));
+            }
+        }
+
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+        sql.push_str(&format!(" ORDER BY {time_column} DESC LIMIT ?"));
+        values.push(SqlValue::Integer(limit));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = collect_rows(stmt.query_map(params_from_iter(values), mapper)?);
+        rows
+    }
 }
 
 impl TelemetryStore for SqliteStore {
@@ -723,6 +912,47 @@ where
         .map_err(Into::into)
 }
 
+fn trace_bounds_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<(i64, i64)>> {
+    let start: Option<i64> = row.get(0)?;
+    let end: Option<i64> = row.get(1)?;
+    Ok(start.zip(end))
+}
+
+fn related_filter_notes(
+    query: &RelatedTelemetryQuery,
+    time_bounds_are_derived: bool,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    if query.session_id.is_none()
+        && query.trace_id.is_none()
+        && query.window_label.is_none()
+        && query.start_time_unix_nanos.is_none()
+        && query.end_time_unix_nanos.is_none()
+    {
+        notes.push(
+            "No filters were provided; returning the most recent records from each telemetry table."
+                .to_string(),
+        );
+    }
+    if query.window_label.is_some() {
+        notes.push(
+            "windowLabel directly filters frontend errors, IPC calls, Tauri events, and window states; logs and spans do not store window labels, so they require a trace or time filter to be included in window-scoped related telemetry."
+                .to_string(),
+        );
+    }
+    if query.trace_id.is_some()
+        && query.start_time_unix_nanos.is_some()
+        && query.end_time_unix_nanos.is_some()
+        && time_bounds_are_derived
+    {
+        notes.push(
+            "Trace-scoped related telemetry uses the trace span time bounds for tables that do not store trace IDs, such as window states."
+                .to_string(),
+        );
+    }
+    notes
+}
+
 fn map_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogRecord> {
     Ok(LogRecord {
         session_id: row.get(0)?,
@@ -886,6 +1116,10 @@ const REQUIRED_COLUMNS: &[(&str, &str)] = &[
     ("sessions", "session_name"),
 ];
 
+const LOGS_COLUMNS: &str = "session_id, timestamp_unix_nanos, observed_timestamp_unix_nanos,
+    severity_text, severity_number, body, body_json, trace_id, span_id, scope_name, scope_version,
+    attributes_json, source";
+
 const LOGS_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, observed_timestamp_unix_nanos,
     severity_text, severity_number, body, body_json, trace_id, span_id, scope_name, scope_version,
     attributes_json, source FROM logs ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
@@ -905,6 +1139,10 @@ const LOGS_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, timestamp_u
     span_id, scope_name, scope_version, attributes_json, source FROM logs
     WHERE session_id = ?1 AND trace_id = ?2 ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
 
+const SPANS_COLUMNS: &str = "session_id, trace_id, span_id, parent_span_id, name, kind,
+    start_time_unix_nanos, end_time_unix_nanos, status_code, status_message, scope_name,
+    scope_version, attributes_json, source";
+
 const SPANS_SELECT: &str = "SELECT session_id, trace_id, span_id, parent_span_id, name, kind,
     start_time_unix_nanos, end_time_unix_nanos, status_code, status_message, scope_name,
     scope_version, attributes_json, source FROM spans ORDER BY start_time_unix_nanos DESC LIMIT ?1";
@@ -923,6 +1161,10 @@ const SPANS_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, trace_id, 
     parent_span_id, name, kind, start_time_unix_nanos, end_time_unix_nanos, status_code,
     status_message, scope_name, scope_version, attributes_json, source FROM spans
     WHERE session_id = ?1 AND trace_id = ?2 ORDER BY start_time_unix_nanos DESC LIMIT ?3";
+
+const FRONTEND_ERRORS_COLUMNS: &str = "session_id, timestamp_unix_nanos, message, stack,
+    filename, line_number, column_number, error_type, trace_id, span_id, window_label,
+    attributes_json";
 
 const FRONTEND_ERRORS_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, message, stack,
     filename, line_number, column_number, error_type, trace_id, span_id, window_label,
@@ -944,6 +1186,10 @@ const FRONTEND_ERRORS_SELECT_WITH_SESSION_AND_TRACE: &str =
     window_label, attributes_json FROM frontend_errors WHERE session_id = ?1 AND trace_id = ?2
     ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
 
+const TAURI_IPC_COLUMNS: &str = "session_id, timestamp_unix_nanos, duration_ms, command,
+    status, error_message, trace_id, span_id, window_label, args_json, args_redacted,
+    result_summary";
+
 const TAURI_IPC_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, duration_ms, command,
     status, error_message, trace_id, span_id, window_label, args_json, args_redacted,
     result_summary FROM tauri_ipc_calls ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
@@ -963,6 +1209,9 @@ const TAURI_IPC_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, timest
     args_redacted, result_summary FROM tauri_ipc_calls WHERE session_id = ?1 AND trace_id = ?2
     ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
 
+const TAURI_EVENTS_COLUMNS: &str = "session_id, timestamp_unix_nanos, event_name, direction,
+    target, trace_id, span_id, window_label, payload_summary, payload_json, payload_redacted";
+
 const TAURI_EVENTS_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, event_name, direction,
     target, trace_id, span_id, window_label, payload_summary, payload_json, payload_redacted
     FROM tauri_events ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
@@ -981,6 +1230,9 @@ const TAURI_EVENTS_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, tim
     event_name, direction, target, trace_id, span_id, window_label, payload_summary, payload_json,
     payload_redacted FROM tauri_events WHERE session_id = ?1 AND trace_id = ?2
     ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
+
+const TAURI_WINDOWS_COLUMNS: &str = "session_id, timestamp_unix_nanos, window_label,
+    webview_label, url, title, focused, visible, width, height, scale_factor, attributes_json";
 
 const TAURI_WINDOWS_SELECT: &str = "SELECT session_id, timestamp_unix_nanos, window_label,
     webview_label, url, title, focused, visible, width, height, scale_factor, attributes_json
@@ -1077,8 +1329,8 @@ mod tests {
             TauriWindowState, TelemetrySource,
         },
         storage::{
-            FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery,
-            TauriWindowQuery,
+            FrontendErrorQuery, LogQuery, RelatedTelemetryQuery, SpanQuery, TauriEventQuery,
+            TauriIpcQuery, TauriWindowQuery,
         },
     };
     use serde_json::json;
@@ -1219,6 +1471,95 @@ mod tests {
         let reopened = store.get_session(&session.id).unwrap().unwrap();
         assert_eq!(reopened.service_version.as_deref(), Some("0.2.0"));
         assert_eq!(store.list_logs(&LogQuery::default()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn related_trace_keeps_trace_records_outside_derived_span_bounds() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let session = sample_session();
+        store.create_session(&session).unwrap();
+
+        store
+            .insert_span(&SpanRecord {
+                session_id: session.id.clone(),
+                trace_id: "trace-related".to_string(),
+                span_id: "span-related".to_string(),
+                parent_span_id: None,
+                name: "bounded span".to_string(),
+                kind: Some("internal".to_string()),
+                start_time_unix_nanos: 100,
+                end_time_unix_nanos: Some(200),
+                status_code: Some("OK".to_string()),
+                status_message: None,
+                scope_name: None,
+                scope_version: None,
+                attributes: json!({}),
+                source: TelemetrySource::Backend,
+            })
+            .unwrap();
+        store
+            .insert_log(&LogRecord {
+                session_id: session.id.clone(),
+                timestamp_unix_nanos: 250,
+                observed_timestamp_unix_nanos: None,
+                severity_text: Some("ERROR".to_string()),
+                severity_number: Some(17),
+                body: Some("post-span trace log".to_string()),
+                body_json: None,
+                trace_id: Some("trace-related".to_string()),
+                span_id: Some("span-related".to_string()),
+                scope_name: None,
+                scope_version: None,
+                attributes: json!({}),
+                source: TelemetrySource::Backend,
+            })
+            .unwrap();
+        store
+            .insert_tauri_window_state(&TauriWindowState {
+                session_id: session.id.clone(),
+                timestamp_unix_nanos: 150,
+                window_label: "main".to_string(),
+                webview_label: None,
+                url: None,
+                title: None,
+                focused: Some(true),
+                visible: Some(true),
+                width: None,
+                height: None,
+                scale_factor: None,
+                attributes: json!({}),
+            })
+            .unwrap();
+        store
+            .insert_tauri_window_state(&TauriWindowState {
+                session_id: session.id,
+                timestamp_unix_nanos: 250,
+                window_label: "late".to_string(),
+                webview_label: None,
+                url: None,
+                title: None,
+                focused: Some(false),
+                visible: Some(true),
+                width: None,
+                height: None,
+                scale_factor: None,
+                attributes: json!({}),
+            })
+            .unwrap();
+
+        let related = store
+            .related_telemetry(&RelatedTelemetryQuery {
+                trace_id: Some("trace-related".to_string()),
+                limit: Some(10),
+                ..RelatedTelemetryQuery::default()
+            })
+            .unwrap();
+
+        assert_eq!(related.logs.len(), 1);
+        assert_eq!(related.logs[0].body.as_deref(), Some("post-span trace log"));
+        assert_eq!(related.tauri_windows.len(), 1);
+        assert_eq!(related.tauri_windows[0].window_label, "main");
     }
 
     #[test]

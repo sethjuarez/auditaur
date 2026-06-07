@@ -35,6 +35,7 @@ fn reads_fixture_database_as_json() {
     assert_eq!(trace["spans"][0]["name"], "fixture span");
     assert_eq!(trace["logs"][0]["body"], "fixture log");
     assert_eq!(trace["frontendErrors"][0]["message"], "fixture error");
+    assert_eq!(trace["tauriWindows"][0]["windowLabel"], "main");
 
     let ipc = run_json(["ipc", "--db", db.path().to_str().unwrap(), "--json"]);
     assert_eq!(ipc[0]["command"], "fixture_command");
@@ -57,6 +58,19 @@ fn reads_fixture_database_as_json() {
     let timeline = run_json(["timeline", "--db", db.path().to_str().unwrap(), "--json"]);
     assert!(timeline.as_array().unwrap().len() >= 6);
     assert_eq!(timeline[0]["kind"], "span");
+
+    let related = run_json([
+        "related",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--trace",
+        "trace-fixture",
+        "--json",
+    ]);
+    assert_eq!(related["spans"][0]["name"], "fixture span");
+    assert_eq!(related["logs"][0]["body"], "fixture log");
+    assert_eq!(related["tauriIpcCalls"][0]["command"], "fixture_command");
+    assert_eq!(related["tauriWindows"][0]["windowLabel"], "main");
 
     let explain = run_json(["explain", "--db", db.path().to_str().unwrap(), "--json"]);
     assert_eq!(explain["failedIpcCount"], 1);
@@ -104,7 +118,14 @@ fn discovers_apps_and_reads_default_database() {
             pid: 42,
             started_at: "2026-05-18T18:00:00Z".to_string(),
             database_path: db_path.to_string_lossy().to_string(),
-            capabilities: vec!["logs".to_string(), "traces".to_string()],
+            capabilities: vec![
+                "logs".to_string(),
+                "traces".to_string(),
+                "frontend_errors".to_string(),
+                "ipc".to_string(),
+                "events".to_string(),
+                "windows".to_string(),
+            ],
             last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
         })
         .unwrap(),
@@ -115,8 +136,70 @@ fn discovers_apps_and_reads_default_database() {
     assert_eq!(apps[0]["status"], "active");
     assert_eq!(apps[0]["schemaValid"], true);
 
+    let health = run_json_with_env(["health", "--json"], temp.path().to_str().unwrap());
+    assert_eq!(health["ok"], true);
+    assert_eq!(health["apps"][0]["checks"][0]["name"], "heartbeat");
+
     let logs = run_json_with_env(["logs", "--json"], temp.path().to_str().unwrap());
     assert_eq!(logs[0]["body"], "fixture log");
+}
+
+#[test]
+fn health_ignores_stale_apps_but_fails_unhealthy_active_apps() {
+    let stale_temp = TempDir::new().unwrap();
+    write_discovery_file(
+        stale_temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-stale".to_string(),
+            session_id: "session-stale".to_string(),
+            service_name: "stale-app".to_string(),
+            service_version: None,
+            app_identifier: None,
+            pid: 1,
+            started_at: "2000-01-01T00:00:00Z".to_string(),
+            database_path: stale_temp
+                .path()
+                .join("missing.sqlite")
+                .to_string_lossy()
+                .to_string(),
+            capabilities: Vec::new(),
+            last_heartbeat_at: "2000-01-01T00:00:00Z".to_string(),
+        },
+    );
+
+    let stale_health = run_json_with_env(["health", "--json"], stale_temp.path().to_str().unwrap());
+    assert_eq!(stale_health["ok"], true);
+    assert_eq!(stale_health["apps"][0]["ok"], false);
+    assert_eq!(stale_health["apps"][0]["status"], "stale");
+
+    let active_temp = TempDir::new().unwrap();
+    write_discovery_file(
+        active_temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-active".to_string(),
+            session_id: "session-active".to_string(),
+            service_name: "active-bad-app".to_string(),
+            service_version: None,
+            app_identifier: None,
+            pid: 1,
+            started_at: "2099-01-01T00:00:00Z".to_string(),
+            database_path: active_temp
+                .path()
+                .join("missing.sqlite")
+                .to_string_lossy()
+                .to_string(),
+            capabilities: vec!["logs".to_string()],
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+        },
+    );
+
+    let active_health =
+        run_json_with_env(["health", "--json"], active_temp.path().to_str().unwrap());
+    assert_eq!(active_health["ok"], false);
+    assert_eq!(active_health["apps"][0]["ok"], false);
+    assert_eq!(active_health["apps"][0]["status"], "active");
 }
 
 #[test]
@@ -149,6 +232,16 @@ fn run_json_with_env<const N: usize>(args: [&str; N], data_dir: &str) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_auditaur"));
     command.args(args).env("AUDITAUR_DATA_DIR", data_dir);
     run_json_command(&mut command)
+}
+
+fn write_discovery_file(root: &std::path::Path, discovery: DiscoveryFile) {
+    let apps_dir = root.join("apps");
+    fs::create_dir_all(&apps_dir).unwrap();
+    fs::write(
+        apps_dir.join(format!("{}.json", discovery.instance_id)),
+        serde_json::to_vec_pretty(&discovery).unwrap(),
+    )
+    .unwrap();
 }
 
 fn run_json_command(command: &mut Command) -> Value {

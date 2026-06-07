@@ -8,7 +8,8 @@ use auditaur_collector::exporter_sqlite::SqliteStore;
 use auditaur_core::{
     protocol::TraceSummary,
     storage::{
-        FrontendErrorQuery, LogQuery, SpanQuery, TauriEventQuery, TauriIpcQuery, TauriWindowQuery,
+        FrontendErrorQuery, LogQuery, RelatedTelemetry, RelatedTelemetryQuery, TauriEventQuery,
+        TauriIpcQuery, TauriWindowQuery,
     },
 };
 use serde::Deserialize;
@@ -95,6 +96,7 @@ fn call_tool(params: Value) -> Result<Value> {
             let report = crate::commands::doctor::report(db.as_deref());
             Ok(serde_json::to_value(report)?)
         }
+        "get_health" => Ok(serde_json::to_value(crate::commands::health::report())?),
         "list_sessions" => {
             let store = open_store(&arguments)?;
             Ok(serde_json::to_value(store.list_sessions(limit(
@@ -132,34 +134,71 @@ fn call_tool(params: Value) -> Result<Value> {
         "get_trace" => {
             let store = open_store(&arguments)?;
             let trace_id = required_string(&arguments, "traceId")?;
-            let session_id = optional_string(&arguments, "sessionId");
+            let related = store.related_telemetry(&RelatedTelemetryQuery {
+                session_id: optional_string(&arguments, "sessionId"),
+                trace_id: Some(trace_id.clone()),
+                window_label: optional_string(&arguments, "windowLabel"),
+                start_time_unix_nanos: optional_i64(&arguments, "startTimeUnixNanos"),
+                end_time_unix_nanos: optional_i64(&arguments, "endTimeUnixNanos"),
+                limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
+            })?;
             Ok(json!({
                 "traceId": trace_id,
-                "spans": store.list_spans(&SpanQuery {
-                    session_id: session_id.clone(),
-                    trace_id: Some(trace_id.clone()),
-                    limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
-                })?,
-                "logs": store.list_logs(&LogQuery {
-                    session_id: session_id.clone(),
-                    trace_id: Some(trace_id.clone()),
-                    limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
-                })?,
-                "frontendErrors": store.list_frontend_errors(&FrontendErrorQuery {
-                    session_id: session_id.clone(),
-                    trace_id: Some(trace_id.clone()),
-                    limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
-                })?,
-                "tauriIpcCalls": store.list_tauri_ipc_calls(&TauriIpcQuery {
-                    session_id: session_id.clone(),
-                    trace_id: Some(trace_id.clone()),
-                    limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
-                })?,
-                "tauriEvents": store.list_tauri_events(&TauriEventQuery {
-                    session_id,
+                "spans": related.spans,
+                "logs": related.logs,
+                "frontendErrors": related.frontend_errors,
+                "tauriIpcCalls": related.tauri_ipc_calls,
+                "tauriEvents": related.tauri_events,
+                "tauriWindows": related.tauri_windows,
+            }))
+        }
+        "get_related_telemetry" => {
+            let store = open_store(&arguments)?;
+            Ok(serde_json::to_value(store.related_telemetry(
+                &RelatedTelemetryQuery {
+                    session_id: optional_string(&arguments, "sessionId"),
+                    trace_id: optional_string(&arguments, "traceId"),
+                    window_label: optional_string(&arguments, "windowLabel"),
+                    start_time_unix_nanos: optional_i64(&arguments, "startTimeUnixNanos"),
+                    end_time_unix_nanos: optional_i64(&arguments, "endTimeUnixNanos"),
+                    limit: limit(&arguments, 200, MAX_LIST_LIMIT),
+                },
+            )?)?)
+        }
+        "explain_recent_activity" => {
+            let store = open_store(&arguments)?;
+            let related = store.related_telemetry(&related_query_from_arguments(
+                &arguments,
+                200,
+                MAX_LIST_LIMIT,
+            ))?;
+            Ok(summarize_related(related))
+        }
+        "explain_failed_ipc" => {
+            let store = open_store(&arguments)?;
+            let related = store.related_telemetry(&related_query_from_arguments(
+                &arguments,
+                200,
+                MAX_LIST_LIMIT,
+            ))?;
+            let mut calls = related.tauri_ipc_calls.clone();
+            calls.retain(crate::commands::read::is_failed_ipc);
+            let latest_failure_related = match calls.first().and_then(|call| call.trace_id.clone())
+            {
+                Some(trace_id) => Some(store.related_telemetry(&RelatedTelemetryQuery {
+                    session_id: optional_string(&arguments, "sessionId"),
                     trace_id: Some(trace_id),
-                    limit: limit(&arguments, 500, MAX_TRACE_COMPONENT_LIMIT),
-                })?,
+                    window_label: optional_string(&arguments, "windowLabel"),
+                    start_time_unix_nanos: optional_i64(&arguments, "startTimeUnixNanos"),
+                    end_time_unix_nanos: optional_i64(&arguments, "endTimeUnixNanos"),
+                    limit: limit(&arguments, 200, MAX_LIST_LIMIT),
+                })?),
+                None => None,
+            };
+            Ok(json!({
+                "failedIpcCount": calls.len(),
+                "failedIpcCalls": calls,
+                "latestFailureRelatedTelemetry": latest_failure_related.map(summarize_related),
             }))
         }
         "list_apps" => Ok(serde_json::to_value(crate::discovery::list_apps()?)?),
@@ -220,6 +259,14 @@ fn optional_string(arguments: &Value, name: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn optional_i64(arguments: &Value, name: &str) -> Option<i64> {
+    arguments.get(name).and_then(Value::as_i64)
+}
+
+fn optional_u64(arguments: &Value, name: &str) -> Option<u64> {
+    arguments.get(name).and_then(Value::as_u64)
+}
+
 fn optional_path(arguments: &Value, name: &str) -> Result<Option<PathBuf>> {
     Ok(optional_string(arguments, name).map(PathBuf::from))
 }
@@ -233,6 +280,124 @@ fn limit(arguments: &Value, default: usize, max: usize) -> Option<usize> {
             .unwrap_or(default)
             .min(max),
     )
+}
+
+fn related_query_from_arguments(
+    arguments: &Value,
+    default_limit: usize,
+    max_limit: usize,
+) -> RelatedTelemetryQuery {
+    let since_start = optional_u64(arguments, "sinceSeconds").map(|seconds| {
+        crate::commands::read::current_time_unix_nanos().saturating_sub(
+            i64::try_from(seconds)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1_000_000_000),
+        )
+    });
+    RelatedTelemetryQuery {
+        session_id: optional_string(arguments, "sessionId"),
+        trace_id: optional_string(arguments, "traceId"),
+        window_label: optional_string(arguments, "windowLabel"),
+        start_time_unix_nanos: optional_i64(arguments, "startTimeUnixNanos").or(since_start),
+        end_time_unix_nanos: optional_i64(arguments, "endTimeUnixNanos"),
+        limit: limit(arguments, default_limit, max_limit),
+    }
+}
+
+fn summarize_related(related: RelatedTelemetry) -> Value {
+    let failed_ipc: Vec<_> = related
+        .tauri_ipc_calls
+        .iter()
+        .filter(|call| crate::commands::read::is_failed_ipc(call))
+        .map(|call| {
+            json!({
+                "command": call.command,
+                "status": call.status,
+                "errorMessage": call.error_message,
+                "traceId": call.trace_id,
+                "windowLabel": call.window_label,
+            })
+        })
+        .collect();
+    let failed_spans: Vec<_> = related
+        .spans
+        .iter()
+        .filter(|span| {
+            span.status_code
+                .as_deref()
+                .is_some_and(|status| status.eq_ignore_ascii_case("ERROR"))
+        })
+        .map(|span| {
+            json!({
+                "name": span.name,
+                "statusCode": span.status_code,
+                "statusMessage": span.status_message,
+                "traceId": span.trace_id,
+                "spanId": span.span_id,
+            })
+        })
+        .collect();
+    let error_logs: Vec<_> = related
+        .logs
+        .iter()
+        .filter(|log| {
+            log.severity_text.as_deref().is_some_and(|level| {
+                matches!(
+                    level.to_ascii_uppercase().as_str(),
+                    "ERROR" | "FATAL" | "CRITICAL"
+                )
+            })
+        })
+        .map(|log| {
+            json!({
+                "message": log.body,
+                "severityText": log.severity_text,
+                "traceId": log.trace_id,
+                "spanId": log.span_id,
+            })
+        })
+        .collect();
+    let findings: Vec<_> = related
+        .frontend_errors
+        .iter()
+        .map(|error| format!("Frontend error: {}", error.message))
+        .chain(failed_ipc.iter().filter_map(|item| {
+            item.get("command")
+                .and_then(Value::as_str)
+                .map(|command| format!("Failed IPC call: {command}"))
+        }))
+        .chain(failed_spans.iter().filter_map(|item| {
+            item.get("name")
+                .and_then(Value::as_str)
+                .map(|name| format!("Failed span: {name}"))
+        }))
+        .chain(error_logs.iter().filter_map(|item| {
+            item.get("message")
+                .and_then(Value::as_str)
+                .map(|message| format!("Error log: {message}"))
+        }))
+        .take(20)
+        .collect();
+
+    json!({
+        "summary": {
+            "spans": related.spans.len(),
+            "logs": related.logs.len(),
+            "frontendErrors": related.frontend_errors.len(),
+            "tauriIpcCalls": related.tauri_ipc_calls.len(),
+            "tauriEvents": related.tauri_events.len(),
+            "tauriWindows": related.tauri_windows.len(),
+            "failedIpcCalls": failed_ipc.len(),
+            "failedSpans": failed_spans.len(),
+            "errorLogs": error_logs.len(),
+        },
+        "filterNotes": related.filter_notes,
+        "findings": findings,
+        "failedIpcCalls": failed_ipc,
+        "failedSpans": failed_spans,
+        "errorLogs": error_logs,
+        "frontendErrors": related.frontend_errors,
+    })
 }
 
 fn tool_result(value: Value, is_error: bool) -> Value {
@@ -275,6 +440,11 @@ fn tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "get_health",
+            "Get Auditaur app health from local discovery files: heartbeat, database/schema, and collector capabilities.",
+            &[],
+        ),
+        tool(
             "list_sessions",
             "List sessions in a SQLite DB. Uses discovery when db is omitted.",
             &[],
@@ -298,6 +468,21 @@ fn tools() -> Vec<Value> {
             "get_trace",
             "Get spans, logs, frontend errors, IPC calls, and events for a trace. Requires traceId; uses discovery when db is omitted.",
             &["traceId"],
+        ),
+        tool(
+            "get_related_telemetry",
+            "Get correlated spans, logs, frontend errors, IPC calls, events, and windows by sessionId, traceId, windowLabel, and optional time bounds.",
+            &[],
+        ),
+        tool(
+            "explain_recent_activity",
+            "Summarize recent correlated telemetry with counts and likely failure findings. Supports sessionId, traceId, windowLabel, sinceSeconds, and time bounds.",
+            &[],
+        ),
+        tool(
+            "explain_failed_ipc",
+            "Find failed Tauri IPC calls and summarize related telemetry for the latest failed call with a trace.",
+            &[],
         ),
         tool(
             "list_apps",
@@ -332,6 +517,10 @@ fn tool(name: &str, description: &str, required: &[&str]) -> Value {
                 "db": { "type": "string" },
                 "sessionId": { "type": "string" },
                 "traceId": { "type": "string" },
+                "windowLabel": { "type": "string" },
+                "startTimeUnixNanos": { "type": "integer" },
+                "endTimeUnixNanos": { "type": "integer" },
+                "sinceSeconds": { "type": "integer", "minimum": 0 },
                 "limit": { "type": "integer", "minimum": 1 }
             },
             "required": required,
@@ -367,7 +556,7 @@ mod tests {
         let response = handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
         assert_eq!(response["result"]["tools"][0]["name"], "doctor");
         assert_eq!(
-            response["result"]["tools"][5]["inputSchema"]["required"],
+            response["result"]["tools"][6]["inputSchema"]["required"],
             json!(["traceId"])
         );
     }
