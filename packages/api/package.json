@@ -1,6 +1,6 @@
 {
   "name": "@auditaur/api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Frontend telemetry API for Auditaur-enabled Tauri apps.",
   "type": "module",
   "license": "MIT",
