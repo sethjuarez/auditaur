@@ -1,4 +1,4 @@
-name: Release Rust crates
+name: Rust Release
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   release-pr:
-    name: Prepare Rust release PR
+    name: Open release PR
     runs-on: ubuntu-latest
     if: "${{ github.event_name == 'push' && !contains(github.event.head_commit.message, 'chore: release') }}"
     steps:
@@ -63,7 +63,7 @@ jobs:
           )
           PY
       - uses: Swatinem/rust-cache@v2
-      - name: Open or update release PR
+      - name: Run release-plz PR
         uses: MarcoIeni/release-plz-action@v0.5
         with:
           command: release-pr
@@ -71,7 +71,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    name: Publish Rust crates
+    name: Publish if release PR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -124,7 +124,7 @@ jobs:
             librsvg2-dev \
             libwebkit2gtk-4.1-dev
       - uses: Swatinem/rust-cache@v2
-      - name: Publish changed crates
+      - name: Run release-plz publish
         uses: MarcoIeni/release-plz-action@v0.5
         with:
           command: release
