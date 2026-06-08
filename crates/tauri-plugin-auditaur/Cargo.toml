@@ -11,12 +11,12 @@ keywords = ["tauri", "plugin", "observability", "opentelemetry"]
 links = "tauri-plugin-auditaur"
 
 [dependencies]
-auditaur-collector = { version = "0.1.1", path = "../auditaur-collector" }
-auditaur-core = { version = "0.1.1", path = "../auditaur-core" }
+auditaur-collector = { version = "0.1.2", path = "../auditaur-collector" }
+auditaur-core = { version = "0.1.2", path = "../auditaur-core" }
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tauri-plugin-auditaur-macros = { version = "0.1.1", path = "../tauri-plugin-auditaur-macros" }
+tauri-plugin-auditaur-macros = { version = "0.1.2", path = "../tauri-plugin-auditaur-macros" }
 tauri.workspace = true
 time.workspace = true
 tracing.workspace = true
