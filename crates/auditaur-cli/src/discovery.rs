@@ -27,6 +27,9 @@ pub struct DiscoveredApp {
     pub schema_valid: bool,
     pub discovery_path: String,
     pub stale_reason: Option<String>,
+    pub superseded_by_session_id: Option<String>,
+    pub seconds_until_next_start: Option<i64>,
+    pub churn_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -57,6 +60,7 @@ pub fn list_apps() -> Result<Vec<DiscoveredApp>> {
         let discovery: DiscoveryFile = serde_json::from_slice(&bytes)?;
         apps.push(app_from_discovery(discovery, path));
     }
+    annotate_session_churn(&mut apps);
     apps.sort_by(|left, right| right.last_heartbeat_at.cmp(&left.last_heartbeat_at));
     Ok(apps)
 }
@@ -130,11 +134,67 @@ fn app_from_discovery(discovery: DiscoveryFile, discovery_path: PathBuf) -> Disc
         schema_valid,
         discovery_path: discovery_path.to_string_lossy().to_string(),
         stale_reason,
+        superseded_by_session_id: None,
+        seconds_until_next_start: None,
+        churn_hint: None,
     }
 }
 
 fn heartbeat_age(value: &str) -> Option<i64> {
-    let heartbeat = OffsetDateTime::parse(value, &Rfc3339).ok()?;
+    let heartbeat = parse_timestamp(value)?;
     let age = OffsetDateTime::now_utc() - heartbeat;
     Some(age.whole_seconds().max(0))
+}
+
+fn annotate_session_churn(apps: &mut [DiscoveredApp]) {
+    let snapshot = apps.to_vec();
+    for app in apps
+        .iter_mut()
+        .filter(|app| app.status == DiscoveryStatus::Stale)
+    {
+        let Some(started_at) = parse_timestamp(&app.started_at) else {
+            continue;
+        };
+        let Some((newer, newer_started_at)) = snapshot
+            .iter()
+            .filter(|candidate| candidate.instance_id != app.instance_id)
+            .filter(|candidate| same_app_identity(app, candidate))
+            .filter_map(|candidate| {
+                let candidate_started_at = parse_timestamp(&candidate.started_at)?;
+                (candidate_started_at > started_at).then_some((candidate, candidate_started_at))
+            })
+            .min_by_key(|(_, candidate_started_at)| *candidate_started_at)
+        else {
+            continue;
+        };
+
+        let seconds_until_next_start = (newer_started_at - started_at).whole_seconds().max(0);
+        app.superseded_by_session_id = Some(newer.session_id.clone());
+        app.seconds_until_next_start = Some(seconds_until_next_start);
+        app.churn_hint = Some(if newer.status == DiscoveryStatus::Active {
+            format!(
+                "stale session appears superseded by active session {} started {}s later; likely app restart or Tauri dev watcher rebuild if this followed source edits",
+                newer.session_id, seconds_until_next_start
+            )
+        } else {
+            format!(
+                "stale session has newer session {} started {}s later; inspect session chronology to distinguish app exit from repeated restarts",
+                newer.session_id, seconds_until_next_start
+            )
+        });
+    }
+}
+
+fn same_app_identity(left: &DiscoveredApp, right: &DiscoveredApp) -> bool {
+    match (
+        left.app_identifier.as_deref(),
+        right.app_identifier.as_deref(),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        _ => left.service_name == right.service_name,
+    }
+}
+
+fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(value, &Rfc3339).ok()
 }

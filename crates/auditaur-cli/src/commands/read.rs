@@ -317,17 +317,19 @@ fn print_sessions(sessions: &[Session]) -> Result<()> {
 }
 
 fn print_apps(apps: &[discovery::DiscoveredApp]) -> Result<()> {
-    println!("STATUS\tSERVICE\tSESSION\tPID\tHEARTBEAT_AGE\tDB");
+    println!("STATUS\tSERVICE\tSESSION\tPID\tSTARTED\tHEARTBEAT_AGE\tCHURN\tDB");
     for app in apps {
         println!(
-            "{:?}\t{}\t{}\t{}\t{}\t{}",
+            "{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             app.status,
             table_cell(&app.service_name, 80),
             table_cell(&app.session_id, 80),
             app.pid,
+            table_cell(&app.started_at, 40),
             app.heartbeat_age_seconds
                 .map(|age| age.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            table_cell(app.churn_hint.as_deref().unwrap_or("-"), 120),
             table_cell(&app.database_path, 160)
         );
     }

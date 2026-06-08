@@ -72,6 +72,13 @@ fn app_health(app: discovery::DiscoveredApp) -> AppHealth {
             .clone()
             .unwrap_or_else(|| "heartbeat is fresh".to_string()),
     });
+    if let Some(churn_hint) = &app.churn_hint {
+        checks.push(HealthCheck {
+            name: "session-churn".to_string(),
+            ok: true,
+            message: churn_hint.clone(),
+        });
+    }
     checks.push(HealthCheck {
         name: "database-readable".to_string(),
         ok: app.database_readable,

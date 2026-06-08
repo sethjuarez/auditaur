@@ -49,7 +49,7 @@ The server speaks stdio JSON-RPC and does not write non-MCP content to stdout. T
 | `doctor` | none | Accepts optional `db`. |
 | `list_sessions` | none | Optional `db`; uses discovery when omitted. |
 | `list_logs` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
-| `list_errors` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
+| `list_errors` | none | Optional `db`, `sessionId`, `traceId`, `limit`. Use the CLI `exceptions` command when grouped issue-ready exception reports are needed. |
 | `list_traces` | none | Optional `db`, `sessionId`, `limit`. |
 | `get_trace` | `traceId` | Optional `db`; returns spans, logs, frontend errors, IPC calls, and events. |
 | `list_apps` | none | Reads local discovery files. |

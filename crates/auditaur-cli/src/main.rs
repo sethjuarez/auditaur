@@ -72,6 +72,26 @@ enum Command {
         #[arg(long, default_value_t = 200)]
         limit: usize,
     },
+    Exceptions {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        fingerprint: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        markdown: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
     Traces {
         #[arg(long)]
         db: Option<PathBuf>,
@@ -253,6 +273,29 @@ fn main() -> Result<()> {
             json,
             limit,
         } => commands::read::errors(&db, session, trace, since, json, limit),
+        Command::Exceptions {
+            db,
+            session,
+            trace,
+            since,
+            fingerprint,
+            json,
+            markdown,
+            output,
+            limit,
+        } => commands::exceptions::run(
+            &db,
+            commands::exceptions::ExceptionOptions {
+                session_id: session,
+                trace_id: trace,
+                since,
+                fingerprint,
+                json,
+                markdown,
+                output,
+                limit,
+            },
+        ),
         Command::Traces {
             db,
             session,

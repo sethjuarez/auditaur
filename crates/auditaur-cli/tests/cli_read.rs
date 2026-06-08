@@ -76,6 +76,79 @@ fn reads_fixture_database_as_json() {
     assert_eq!(explain["failedIpcCount"], 1);
     assert!(explain["findings"].as_array().unwrap().len() >= 1);
 
+    let exceptions = run_json(["exceptions", "--db", db.path().to_str().unwrap(), "--json"]);
+    let exception_reports = exceptions.as_array().unwrap();
+    let frontend_report = exception_reports
+        .iter()
+        .find(|report| report["source"] == "frontend_error")
+        .unwrap();
+    let ipc_report = exception_reports
+        .iter()
+        .find(|report| report["source"] == "failed_ipc")
+        .unwrap();
+    let panic_report = exception_reports
+        .iter()
+        .find(|report| report["source"] == "rust_panic")
+        .unwrap();
+    assert_eq!(frontend_report["message"], "fixture error");
+    assert_eq!(ipc_report["message"], "fixture failure");
+    assert_eq!(panic_report["message"], "fixture panic");
+    assert!(frontend_report["issueBodyMarkdown"]
+        .as_str()
+        .unwrap()
+        .contains("Auditaur exception report"));
+
+    let exception_markdown = run_stdout([
+        "exceptions",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--markdown",
+    ]);
+    assert!(exception_markdown.contains("# Error: fixture error"));
+    assert!(exception_markdown.contains("# Tauri IPC fixture_command: fixture failure"));
+    assert!(exception_markdown.contains("Privacy note"));
+
+    let fingerprint = frontend_report["fingerprint"].as_str().unwrap();
+    let focused_exception = run_json([
+        "exceptions",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--fingerprint",
+        fingerprint,
+        "--json",
+    ]);
+    assert_eq!(focused_exception.as_array().unwrap().len(), 1);
+    assert_eq!(focused_exception[0]["fingerprint"], fingerprint);
+
+    let output_dir = TempDir::new().unwrap();
+    let output = output_dir.path().join("exception.md");
+    run_stdout([
+        "exceptions",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--fingerprint",
+        fingerprint,
+        "--markdown",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    let exported = fs::read_to_string(output).unwrap();
+    assert!(exported.contains("# Error: fixture error"));
+
+    let json_output = output_dir.path().join("exception.json");
+    run_stdout([
+        "exceptions",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--fingerprint",
+        fingerprint,
+        "--output",
+        json_output.to_str().unwrap(),
+    ]);
+    let exported_json: Value =
+        serde_json::from_str(&fs::read_to_string(json_output).unwrap()).unwrap();
+    assert_eq!(exported_json[0]["fingerprint"], fingerprint);
+
     let bundle = run_json(["bundle", "--db", db.path().to_str().unwrap(), "--redacted"]);
     assert_eq!(bundle["redacted"], true);
     assert_eq!(bundle["tauriIpcCalls"][0]["argsJson"], "[redacted]");
@@ -203,6 +276,85 @@ fn health_ignores_stale_apps_but_fails_unhealthy_active_apps() {
 }
 
 #[test]
+fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
+    let temp = TempDir::new().unwrap();
+    let stale_db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-stale")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(stale_db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&stale_db_path));
+    let active_db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-active")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(active_db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&active_db_path));
+
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-stale".to_string(),
+            session_id: "session-stale".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 41,
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            database_path: stale_db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2000-01-01T00:00:00Z".to_string(),
+        },
+    );
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-active".to_string(),
+            session_id: "session-active".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:12Z".to_string(),
+            database_path: active_db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+        },
+    );
+
+    let apps = run_json_with_env(["apps", "--json"], temp.path().to_str().unwrap());
+    let stale = apps
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|app| app["sessionId"] == "session-stale")
+        .unwrap();
+    assert_eq!(stale["supersededBySessionId"], "session-active");
+    assert_eq!(stale["secondsUntilNextStart"], 12);
+    assert!(stale["churnHint"]
+        .as_str()
+        .unwrap()
+        .contains("Tauri dev watcher rebuild"));
+
+    let health = run_json_with_env(["health", "--json"], temp.path().to_str().unwrap());
+    let stale_health = health["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|app| app["sessionId"] == "session-stale")
+        .unwrap();
+    assert!(stale_health["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|check| check["name"] == "session-churn"));
+}
+
+#[test]
 fn doctor_tauri_reports_dogfood_setup() {
     let dogfood_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -242,6 +394,17 @@ fn write_discovery_file(root: &std::path::Path, discovery: DiscoveryFile) {
         serde_json::to_vec_pretty(&discovery).unwrap(),
     )
     .unwrap();
+}
+
+fn expected_capabilities() -> Vec<String> {
+    vec![
+        "logs".to_string(),
+        "traces".to_string(),
+        "frontend_errors".to_string(),
+        "ipc".to_string(),
+        "events".to_string(),
+        "windows".to_string(),
+    ]
 }
 
 fn run_json_command(command: &mut Command) -> Value {
@@ -337,6 +500,22 @@ fn create_fixture_database_at(path: &std::path::Path) -> SqliteStore {
             span_id: Some("span-fixture".to_string()),
             window_label: Some("main".to_string()),
             attributes: json!({ "fixture": true }),
+        })
+        .unwrap();
+    store
+        .insert_frontend_error(&FrontendError {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 176,
+            message: "fixture panic".to_string(),
+            stack: Some("src/main.rs:10:2".to_string()),
+            filename: Some("src/main.rs".to_string()),
+            line_number: Some(10),
+            column_number: Some(2),
+            error_type: Some("RustPanic".to_string()),
+            trace_id: None,
+            span_id: None,
+            window_label: None,
+            attributes: json!({ "auditaur.source": "panic_hook" }),
         })
         .unwrap();
     store

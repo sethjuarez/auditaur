@@ -49,6 +49,8 @@ Then run:
 cargo run -p auditaur-cli -- apps --json
 cargo run -p auditaur-cli -- logs --json
 cargo run -p auditaur-cli -- errors --json
+cargo run -p auditaur-cli -- exceptions --json
+cargo run -p auditaur-cli -- exceptions --markdown --output issue.md
 cargo run -p auditaur-cli -- ipc --json
 cargo run -p auditaur-cli -- events --json
 cargo run -p auditaur-cli -- traces --json
@@ -63,12 +65,15 @@ Or pass the copied path explicitly:
 cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
 cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
 cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
+cargo run -p auditaur-cli -- exceptions --db "<databasePath>" --json
 cargo run -p auditaur-cli -- ipc --db "<databasePath>" --json
 cargo run -p auditaur-cli -- events --db "<databasePath>" --json
 cargo run -p auditaur-cli -- windows --db "<databasePath>" --json
 ```
 
 If multiple dogfood app instances are active, discovery intentionally refuses to guess which database to inspect. Use `apps --json`, copy the latest `databasePath`, and pass `--db`.
+
+If the dogfood app restarts while you are editing Rust or Tauri sources, `apps --json` annotates stale sessions with `supersededBySessionId`, `secondsUntilNextStart`, and `churnHint` when a newer session for the same app appears. Treat that as session chronology evidence, not proof that Auditaur itself restarted the app.
 
 `windows` returns the latest stored window rows per window. The plugin captures initial window state at startup and lifecycle rows for later window events. For event rows, `attributes.tauri.window.event` and related `attributes.tauri.window.event.*` fields describe the authoritative event payload; top-level fields such as `focused`, `visible`, `width`, and `height` are best-effort sampled state at capture time.
 
@@ -87,6 +92,7 @@ The latest local manual smoke used the dogfood app on Windows with an isolated `
 - `auditaur apps --json` discovered one active dogfood session with a readable SQLite database.
 - `auditaur logs --json` returned frontend console logs plus backend `tracing` logs.
 - `auditaur errors --json` returned the intentional frontend error.
+- `auditaur exceptions --json` grouped captured frontend exceptions and failed IPC calls into issue-ready local reports.
 - `auditaur ipc --json` returned `successful_command`, `failing_command`, and `emit_backend_event` rows.
 - `auditaur events --json` returned frontend emit/receive and backend receive rows.
 - `auditaur traces --json` returned frontend wrapper spans and backend Rust tracing spans.

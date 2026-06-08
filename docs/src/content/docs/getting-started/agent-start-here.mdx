@@ -14,16 +14,21 @@ auditaur apps --json
 
 If exactly one active readable session exists, Auditaur commands discover it automatically. If multiple sessions are active, copy `databasePath` from `auditaur apps --json` and pass it with `--db`.
 
+When debugging restarts, inspect `auditaur apps --json` before assuming Auditaur restarted the app. Stale entries can include `supersededBySessionId`, `secondsUntilNextStart`, and `churnHint` when a newer session for the same app appears, which often points to an app restart or Tauri dev watcher rebuild.
+
 ## Fast failure triage
 
 ```powershell
 auditaur errors --json
+auditaur exceptions --json
 auditaur traces --failed --json
 auditaur ipc --failed --json
 auditaur events --json
 ```
 
 Start with frontend errors, failed traces, failed IPC calls, and recent events. Prefer JSON when another tool or model will inspect the output.
+
+For production-style exception triage, use `auditaur exceptions --json` to group repeated frontend exceptions, Rust panic-hook records, and failed IPC calls by fingerprint. Use `auditaur exceptions --fingerprint <id> --markdown --output issue.md` when you need a GitHub issue-ready draft, and redact it before sharing outside the machine.
 
 ## Follow causality
 
