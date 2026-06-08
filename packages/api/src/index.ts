@@ -1,5 +1,9 @@
 export { initAuditaur } from './init';
 export {
+  AUDITAUR_TRACE_CONTEXT_ARG,
+  createAuditaurTraceContext,
+} from './invoke';
+export {
   createAuditaurSpanExporter,
   hrTimeToUnixNanos,
   readableSpanToSpanRecord,
@@ -23,4 +27,7 @@ export type {
   SpanRecord,
   TauriEventRecord,
   TauriIpcCallRecord,
+  AuditaurExportFailure,
+  AuditaurInvokeArgs,
+  AuditaurTraceContextCarrier,
 } from './types';

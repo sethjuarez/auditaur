@@ -22,6 +22,6 @@ metrics
 screenshots
 ```
 
-`logs`, `spans`, `frontend_errors`, `tauri_ipc_calls`, `tauri_events`, and `tauri_windows` are implemented and queryable through the CLI and MCP server. Frontend invoke/event wrappers write IPC and event rows. The plugin captures initial window state at startup; fuller lifecycle tracking remains planned.
+`logs`, `spans`, `frontend_errors`, `tauri_ipc_calls`, `tauri_events`, and `tauri_windows` are implemented and queryable through the CLI and MCP server. Frontend invoke/event wrappers write IPC and event rows. The plugin captures initial window state at startup and lifecycle rows for later window events. In `tauri_windows`, top-level state fields are best-effort samples at capture time, while `attributes.tauri.window.event` and `attributes.tauri.window.event.*` describe the authoritative event payload when the row came from a Tauri window event.
 
 Metrics and screenshots remain schema placeholders for future work. JSON attributes are stored as text. The store enables WAL mode, uses a busy timeout for multi-connection reads, and validates schema version `1` in `doctor --db`.

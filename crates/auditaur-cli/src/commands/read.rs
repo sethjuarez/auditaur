@@ -428,12 +428,13 @@ fn print_events(events: &[TauriEventRecord]) -> Result<()> {
 }
 
 fn print_windows(windows: &[TauriWindowState]) -> Result<()> {
-    println!("TIME\tWINDOW\tTITLE\tVISIBLE\tFOCUSED\tSIZE");
+    println!("TIME\tWINDOW\tEVENT\tTITLE\tVISIBLE\tFOCUSED\tSIZE");
     for window in windows {
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}x{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}x{}",
             window.timestamp_unix_nanos,
             table_cell(&window.window_label, 80),
+            table_cell(window_event(&window), 40),
             table_cell(window.title.as_deref().unwrap_or("-"), 120),
             window
                 .visible
@@ -448,6 +449,14 @@ fn print_windows(windows: &[TauriWindowState]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn window_event(window: &TauriWindowState) -> &str {
+    window
+        .attributes
+        .get("tauri.window.event")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
 }
 
 #[derive(Debug, Serialize)]

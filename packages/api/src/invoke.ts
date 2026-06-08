@@ -1,14 +1,22 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { AuditaurExporter } from './exporter';
-import type { SpanRecord, TauriIpcCallRecord } from './types';
+import type { AuditaurInvokeArgs, AuditaurTraceContextCarrier, SpanRecord, TauriIpcCallRecord } from './types';
 import { currentWindowLabel, errorRecordFields, maybePayload, nowUnixNanos, randomSpanId, randomTraceId, summarizePayload } from './utils';
 
-const IPC_CONTEXT_ARG = 'auditaurTraceContext';
+export const AUDITAUR_TRACE_CONTEXT_ARG = 'auditaurTraceContext';
+
+export function createAuditaurTraceContext(
+  traceId = randomTraceId(),
+  spanId = randomSpanId(),
+  traceFlags = '01',
+): AuditaurTraceContextCarrier {
+  return { traceparent: `00-${traceId}-${spanId}-${traceFlags}` };
+}
 
 export async function instrumentedInvoke<T>(
   exporter: AuditaurExporter,
   command: string,
-  args: Record<string, unknown> | undefined,
+  args: AuditaurInvokeArgs | undefined,
   maxPayloadBytes: number,
   captureFullPayloads: boolean,
   propagateTraceContext: boolean,
@@ -16,9 +24,9 @@ export async function instrumentedInvoke<T>(
   const start = nowUnixNanos();
   const traceId = randomTraceId();
   const spanId = randomSpanId();
-  const traceparent = `00-${traceId}-${spanId}-01`;
+  const traceContext = createAuditaurTraceContext(traceId, spanId);
   const windowLabel = currentWindowLabel();
-  const invokeArgs = propagateTraceContext ? argsWithTraceContext(args, traceparent) : args;
+  const invokeArgs = propagateTraceContext ? argsWithTraceContext(args, traceContext) : args;
   try {
     const result = await tauriInvoke<T>(command, invokeArgs);
     const end = nowUnixNanos();
@@ -34,13 +42,13 @@ export async function instrumentedInvoke<T>(
   }
 }
 
-function argsWithTraceContext(args: Record<string, unknown> | undefined, traceparent: string): Record<string, unknown> {
-  if (args && Object.prototype.hasOwnProperty.call(args, IPC_CONTEXT_ARG)) {
+function argsWithTraceContext(args: AuditaurInvokeArgs | undefined, traceContext: AuditaurTraceContextCarrier): AuditaurInvokeArgs {
+  if (args && Object.prototype.hasOwnProperty.call(args, AUDITAUR_TRACE_CONTEXT_ARG)) {
     return args;
   }
   return {
     ...(args ?? {}),
-    [IPC_CONTEXT_ARG]: { traceparent },
+    [AUDITAUR_TRACE_CONTEXT_ARG]: traceContext,
   };
 }
 

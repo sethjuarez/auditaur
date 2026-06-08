@@ -12,10 +12,11 @@ export interface AuditaurFrontendConfig {
   maxPayloadBytes?: number;
   batchIntervalMs?: number;
   maxBatchSize?: number;
+  onExportError?: (failure: AuditaurExportFailure) => void;
 }
 
 export interface AuditaurClient {
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  invoke<T>(command: string, args?: AuditaurInvokeArgs): Promise<T>;
   emit(event: string, payload?: unknown): Promise<void>;
   emitTo(target: string, event: string, payload?: unknown): Promise<void>;
   listen<T>(event: string, handler: (event: AuditaurEvent<T>) => void): Promise<() => void>;
@@ -28,6 +29,22 @@ export interface AuditaurEvent<T> {
   event: string;
   id: number;
   payload: T;
+}
+
+export interface AuditaurTraceContextCarrier {
+  traceparent?: string;
+}
+
+export type AuditaurInvokeArgs = Record<string, unknown> & {
+  auditaurTraceContext?: AuditaurTraceContextCarrier;
+};
+
+export interface AuditaurExportFailure {
+  error: unknown;
+  attemptedRecords: number;
+  queuedRecords: number;
+  retainedRecords: number;
+  droppedRecords: number;
 }
 
 export interface OTelBatch {

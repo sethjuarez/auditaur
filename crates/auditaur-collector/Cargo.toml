@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Local SQLite telemetry collector and query store for Auditaur."
+readme = "README.md"
 categories = ["development-tools::debugging"]
 keywords = ["tauri", "observability", "opentelemetry", "sqlite"]
 

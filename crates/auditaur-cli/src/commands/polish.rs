@@ -370,18 +370,25 @@ impl TimelineEntry {
     }
 
     fn from_window(window: TauriWindowState) -> Self {
+        let event = window
+            .attributes
+            .get("tauri.window.event")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string);
         Self {
             timestamp_unix_nanos: window.timestamp_unix_nanos,
             kind: "window".to_string(),
             session_id: window.session_id,
             trace_id: None,
             span_id: None,
-            status: window.focused.map(|focused| {
-                if focused {
-                    "focused".to_string()
-                } else {
-                    "unfocused".to_string()
-                }
+            status: event.or_else(|| {
+                window.focused.map(|focused| {
+                    if focused {
+                        "focused".to_string()
+                    } else {
+                        "unfocused".to_string()
+                    }
+                })
             }),
             summary: window.window_label,
         }

@@ -6,7 +6,7 @@ import { instrumentedEmit, instrumentedEmitTo, instrumentedListen } from './even
 import { AuditaurExporter } from './exporter';
 import { instrumentedInvoke } from './invoke';
 import { createAuditaurSpanExporter } from './otel';
-import type { AuditaurClient, AuditaurFrontendConfig } from './types';
+import type { AuditaurClient, AuditaurFrontendConfig, AuditaurInvokeArgs } from './types';
 
 export type { AuditaurClient, AuditaurFrontendConfig } from './types';
 
@@ -18,7 +18,12 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
   const maxPayloadBytes = config.maxPayloadBytes ?? 16_384;
   const captureFullPayloads = config.captureFullPayloads ?? false;
   const propagateTauriInvokeTraceContext = config.propagateTauriInvokeTraceContext ?? true;
-  const exporter = new AuditaurExporter(config.batchIntervalMs ?? 1_000, config.maxBatchSize ?? 64);
+  const exporter = new AuditaurExporter(
+    config.batchIntervalMs ?? 1_000,
+    config.maxBatchSize ?? 64,
+    undefined,
+    config.onExportError,
+  );
   const cleanup: Array<() => void> = [];
 
   if (config.instrumentConsole ?? true) {
@@ -29,7 +34,7 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
   }
 
   return {
-    invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    invoke<T>(command: string, args?: AuditaurInvokeArgs): Promise<T> {
       if (config.instrumentTauriInvoke ?? true) {
         return instrumentedInvoke<T>(
           exporter,

@@ -41,13 +41,10 @@ The plugin creates the SQLite session database, writes a discovery file, receive
 To continue frontend `invoke()` traces into backend command spans, opt commands into the experimental IPC trace bridge:
 
 ```rust
-use tauri_plugin_auditaur::{ipc_traceparent, IpcTraceContext};
+use tauri_plugin_auditaur::IpcTraceContext;
 
 #[tauri::command]
-#[tracing::instrument(
-    skip(auditaur_trace_context),
-    fields(traceparent = ipc_traceparent(auditaur_trace_context.as_ref()))
-)]
+#[tauri_plugin_auditaur::instrument_ipc]
 fn load_user(
     id: String,
     auditaur_trace_context: Option<IpcTraceContext>,
@@ -57,7 +54,7 @@ fn load_user(
 }
 ```
 
-The frontend wrapper sends W3C `traceparent` in the reserved `auditaurTraceContext` argument. The backend helper validates it and exposes it to Auditaur's tracing layer, so the backend command span is parented to the frontend invoke span without command-name or timestamp heuristics.
+The frontend wrapper sends W3C `traceparent` in the reserved `auditaurTraceContext` argument. The command stays a normal explicit `#[tauri::command]`; the `instrument_ipc` helper requires an optional parameter named `auditaur_trace_context` and adds the `tracing::instrument` fields needed for Auditaur's tracing layer, so the backend command span is parented to the frontend invoke span without command-name or timestamp heuristics. Existing tracing options can be passed through, for example `#[tauri_plugin_auditaur::instrument_ipc(err)]` or `#[tauri_plugin_auditaur::instrument_ipc(skip(app))]`.
 
 Add `auditaur:default` to the app capability so the frontend package can call the plugin command:
 

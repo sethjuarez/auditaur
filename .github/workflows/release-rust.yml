@@ -24,6 +24,44 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify Rust release graph
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          metadata = json.loads(subprocess.check_output([
+              "cargo",
+              "metadata",
+              "--no-deps",
+              "--format-version",
+              "1",
+          ]))
+          packages = {package["name"]: package for package in metadata["packages"]}
+          macro = packages.get("tauri-plugin-auditaur-macros")
+          plugin = packages.get("tauri-plugin-auditaur")
+          if macro is None:
+              sys.exit("tauri-plugin-auditaur-macros must be a workspace package")
+          if plugin is None:
+              sys.exit("tauri-plugin-auditaur must be a workspace package")
+
+          macro_dep = next(
+              (dep for dep in plugin["dependencies"] if dep["name"] == "tauri-plugin-auditaur-macros"),
+              None,
+          )
+          if macro_dep is None:
+              sys.exit("tauri-plugin-auditaur must depend on tauri-plugin-auditaur-macros")
+          if macro_dep["req"] != f"^{macro['version']}":
+              sys.exit(
+                  "tauri-plugin-auditaur-macros dependency version "
+                  f"{macro_dep['req']} does not match macro crate version {macro['version']}"
+              )
+          print(
+              "Verified tauri-plugin-auditaur depends on "
+              f"tauri-plugin-auditaur-macros {macro['version']}"
+          )
+          PY
       - uses: Swatinem/rust-cache@v2
       - name: Open or update release PR
         uses: MarcoIeni/release-plz-action@v0.5
@@ -40,6 +78,44 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify Rust release graph
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          metadata = json.loads(subprocess.check_output([
+              "cargo",
+              "metadata",
+              "--no-deps",
+              "--format-version",
+              "1",
+          ]))
+          packages = {package["name"]: package for package in metadata["packages"]}
+          macro = packages.get("tauri-plugin-auditaur-macros")
+          plugin = packages.get("tauri-plugin-auditaur")
+          if macro is None:
+              sys.exit("tauri-plugin-auditaur-macros must be a workspace package")
+          if plugin is None:
+              sys.exit("tauri-plugin-auditaur must be a workspace package")
+
+          macro_dep = next(
+              (dep for dep in plugin["dependencies"] if dep["name"] == "tauri-plugin-auditaur-macros"),
+              None,
+          )
+          if macro_dep is None:
+              sys.exit("tauri-plugin-auditaur must depend on tauri-plugin-auditaur-macros")
+          if macro_dep["req"] != f"^{macro['version']}":
+              sys.exit(
+                  "tauri-plugin-auditaur-macros dependency version "
+                  f"{macro_dep['req']} does not match macro crate version {macro['version']}"
+              )
+          print(
+              "Verified tauri-plugin-auditaur depends on "
+              f"tauri-plugin-auditaur-macros {macro['version']}"
+          )
+          PY
       - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update

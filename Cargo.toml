@@ -3,6 +3,7 @@ members = [
     "crates/auditaur-cli",
     "crates/auditaur-core",
     "crates/auditaur-collector",
+    "crates/tauri-plugin-auditaur-macros",
     "crates/tauri-plugin-auditaur",
 ]
 exclude = ["examples/dogfood/src-tauri"]
@@ -28,3 +29,7 @@ tauri = { version = "2.11.2", default-features = false }
 directories = "6"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+proc-macro-crate = "3"
+proc-macro2 = "1"
+quote = "1"
+syn = "2"

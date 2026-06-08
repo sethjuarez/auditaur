@@ -22,6 +22,9 @@ const auditaur = await initAuditaur({
   propagateTauriInvokeTraceContext: true,
   instrumentTauriEvents: true,
   captureFullPayloads: false,
+  onExportError(failure) {
+    console.warn('Auditaur export failed', failure.error);
+  },
 });
 
 export const invoke = auditaur.invoke;
@@ -41,6 +44,19 @@ The returned client exposes:
 Console and error instrumentation are enabled by default. Full payload capture is disabled by default; payload summaries and recursive key-based redaction help reduce accidental secret capture.
 
 The frontend invoke/event wrappers emit Auditaur's OTEL-shaped records directly and map them into SQLite spans plus Tauri-specific rows. When `instrumentTauriInvoke` is enabled, `propagateTauriInvokeTraceContext` defaults to `true` and sends W3C `traceparent` through a reserved `auditaurTraceContext` invoke argument. If your app already uses an argument named `auditaurTraceContext`, Auditaur leaves it untouched and skips propagation for that call; set `propagateTauriInvokeTraceContext: false` to disable this bridge globally.
+
+For custom invoke wrappers, import `AUDITAUR_TRACE_CONTEXT_ARG` and `createAuditaurTraceContext()` to use the same reserved carrier as Auditaur's built-in wrapper:
+
+```ts
+import { AUDITAUR_TRACE_CONTEXT_ARG, createAuditaurTraceContext } from '@auditaur/api';
+
+const args = {
+  id: 'user-1',
+  [AUDITAUR_TRACE_CONTEXT_ARG]: createAuditaurTraceContext(),
+};
+```
+
+`onExportError` is optional. Failed exports are requeued up to the exporter retention cap; the callback receives the original error plus attempted, queued, retained, and dropped record counts so development UIs or agents can surface collection problems.
 
 To sink spans emitted through an existing OpenTelemetry JS tracer provider, attach the Auditaur exporter as another span processor:
 

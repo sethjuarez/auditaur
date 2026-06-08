@@ -22,7 +22,7 @@ npm run tauri dev
 
 Click each button in the app. The failing-command button is intentionally useful for agents: it creates a frontend `tauri.invoke failing_command` span with `ERROR` status and a backend tracing error that contains `Intentional dogfood backend failure`.
 
-The dogfood commands also opt into Auditaur's experimental Tauri IPC trace context bridge. The frontend invoke wrapper sends W3C `traceparent` in a reserved `auditaurTraceContext` argument, and the Rust commands use `IpcTraceContext` plus `ipc_traceparent` to attach backend spans to the frontend invoke trace without command-name or timestamp heuristics.
+The dogfood commands also opt into Auditaur's experimental Tauri IPC trace context bridge. The frontend invoke wrapper sends W3C `traceparent` in a reserved `auditaurTraceContext` argument, and the Rust commands use `IpcTraceContext` plus `#[tauri_plugin_auditaur::instrument_ipc]` to attach backend spans to the frontend invoke trace without command-name or timestamp heuristics.
 
 Manual smoke path:
 
@@ -70,7 +70,7 @@ cargo run -p auditaur-cli -- windows --db "<databasePath>" --json
 
 If multiple dogfood app instances are active, discovery intentionally refuses to guess which database to inspect. Use `apps --json`, copy the latest `databasePath`, and pass `--db`.
 
-`windows` returns the latest stored window states. The plugin captures initial window state at startup; additional live window lifecycle capture is still a follow-up.
+`windows` returns the latest stored window rows per window. The plugin captures initial window state at startup and lifecycle rows for later window events. For event rows, `attributes.tauri.window.event` and related `attributes.tauri.window.event.*` fields describe the authoritative event payload; top-level fields such as `focused`, `visible`, `width`, and `height` are best-effort sampled state at capture time.
 
 For MCP, start:
 
@@ -94,9 +94,9 @@ The latest local manual smoke used the dogfood app on Windows with an isolated `
 - `auditaur timeline --json` returned a chronological view across spans, logs, errors, IPC calls, events, and window state.
 - `auditaur explain` summarized the intentional failing command path.
 - MCP `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, and `get_trace` returned real dogfood telemetry from the same SQLite DB.
-- MCP `list_windows` returned stored window state rows when startup window capture was available.
+- MCP `list_windows` returned stored startup and lifecycle window rows when window capture was available.
 
 Exact caveats:
 
 - If multiple dogfood instances are active, discovery refuses to choose a default DB. Pass `--db`.
-- `windows` currently captures initial window state, not every later lifecycle transition.
+- Window lifecycle rows include authoritative event attributes separately from best-effort sampled state fields.

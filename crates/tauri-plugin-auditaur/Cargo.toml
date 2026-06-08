@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Development-first Tauri plugin for collecting Auditaur local telemetry."
+readme = "README.md"
 categories = ["development-tools::debugging"]
 keywords = ["tauri", "plugin", "observability", "opentelemetry"]
 links = "tauri-plugin-auditaur"
@@ -15,6 +16,7 @@ auditaur-core = { version = "0.1.1", path = "../auditaur-core" }
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tauri-plugin-auditaur-macros = { version = "0.1.1", path = "../tauri-plugin-auditaur-macros" }
 tauri.workspace = true
 time.workspace = true
 tracing.workspace = true

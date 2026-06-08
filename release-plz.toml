@@ -1,0 +1,6 @@
+[workspace]
+# Only publish Rust crates after merging a release-plz release PR. This keeps
+# normal pushes from attempting cargo publishes and lets release-plz evaluate the
+# workspace dependency graph from the release commit.
+release_always = false
+

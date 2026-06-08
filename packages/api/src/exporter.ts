@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { FrontendErrorRecord, LogRecord, OTelBatch, SpanRecord, TauriEventRecord, TauriIpcCallRecord } from './types';
+import type { AuditaurExportFailure, FrontendErrorRecord, LogRecord, OTelBatch, SpanRecord, TauriEventRecord, TauriIpcCallRecord } from './types';
 
 const EXPORT_COMMAND = 'plugin:auditaur|export_otel_batch';
 
@@ -11,6 +11,7 @@ export class AuditaurExporter {
     private readonly batchIntervalMs: number,
     private readonly maxBatchSize: number,
     private readonly command = EXPORT_COMMAND,
+    private readonly onExportError?: (failure: AuditaurExportFailure) => void,
   ) {
     this.timer = setInterval(() => {
       void this.flush().catch(() => {
@@ -53,7 +54,17 @@ export class AuditaurExporter {
     try {
       await invoke(this.command, { batch });
     } catch (error) {
+      const queuedRecords = batchSize(this.batch);
+      const attemptedRecords = batchSize(batch);
       this.batch = mergeBatches(batch, this.batch, this.maxBatchSize * 4);
+      const retainedRecords = this.size;
+      this.reportExportError({
+        error,
+        attemptedRecords,
+        queuedRecords,
+        retainedRecords,
+        droppedRecords: Math.max(0, attemptedRecords + queuedRecords - retainedRecords),
+      });
       throw error;
     }
   }
@@ -67,11 +78,7 @@ export class AuditaurExporter {
   }
 
   private get size(): number {
-    return this.batch.spans.length
-      + this.batch.logs.length
-      + this.batch.frontendErrors.length
-      + this.batch.tauriIpcCalls.length
-      + this.batch.tauriEvents.length;
+    return batchSize(this.batch);
   }
 
   private async flushIfFull(): Promise<void> {
@@ -81,6 +88,22 @@ export class AuditaurExporter {
       });
     }
   }
+
+  private reportExportError(failure: AuditaurExportFailure): void {
+    try {
+      this.onExportError?.(failure);
+    } catch {
+      // Export diagnostics must not replace the original export failure.
+    }
+  }
+}
+
+function batchSize(batch: OTelBatch): number {
+  return batch.spans.length
+    + batch.logs.length
+    + batch.frontendErrors.length
+    + batch.tauriIpcCalls.length
+    + batch.tauriEvents.length;
 }
 
 function mergeBatches(first: OTelBatch, second: OTelBatch, maxRecords: number): OTelBatch {

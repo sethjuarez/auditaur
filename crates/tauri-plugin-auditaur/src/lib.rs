@@ -8,11 +8,12 @@ pub mod tracing;
 use auditaur_core::model::TauriWindowState;
 pub use auditaur_core::AuditaurConfig;
 pub use ipc::{ipc_traceparent, IpcTraceContext, IPC_CONTEXT_ARG};
-use serde_json::json;
+use serde_json::{json, Map, Value};
 use tauri::{
     plugin::{Builder as TauriPluginBuilder, TauriPlugin},
     Manager, Runtime, WebviewWindow, Window, WindowEvent,
 };
+pub use tauri_plugin_auditaur_macros::instrument_ipc;
 pub use tracing::tracing_layer;
 
 #[cfg(test)]
@@ -106,24 +107,14 @@ fn register_window_lifecycle<R: Runtime>(window: Window<R>) {
 }
 
 fn record_window_ready<R: Runtime>(window: &Window<R>) {
-    record_window_state(window, "window_ready", None, None);
+    record_window_state(window, "window_ready", None);
 }
 
 fn record_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
-    record_window_state(
-        window,
-        "window_event",
-        Some(window_event_kind(event)),
-        Some(format!("{event:?}")),
-    );
+    record_window_state(window, "window_event", Some(event));
 }
 
-fn record_window_state<R: Runtime>(
-    window: &Window<R>,
-    capture: &str,
-    event_kind: Option<&str>,
-    event_debug: Option<String>,
-) {
+fn record_window_state<R: Runtime>(window: &Window<R>, capture: &str, event: Option<&WindowEvent>) {
     let Some(state) = window.try_state::<state::AuditaurState>() else {
         return;
     };
@@ -137,6 +128,7 @@ fn record_window_state<R: Runtime>(
         return;
     };
     let size = window.inner_size().ok();
+    let attributes = window_attributes(capture, event);
     let record = TauriWindowState {
         session_id: session_id.to_string(),
         timestamp_unix_nanos: now_unix_nanos(),
@@ -149,13 +141,61 @@ fn record_window_state<R: Runtime>(
         width: size.as_ref().map(|size| f64::from(size.width)),
         height: size.as_ref().map(|size| f64::from(size.height)),
         scale_factor: window.scale_factor().ok(),
-        attributes: json!({
-            "auditaur.capture": capture,
-            "tauri.window.event": event_kind,
-            "tauri.window.event_debug": event_debug,
-        }),
+        attributes,
     };
     let _ = store.insert_tauri_window_state(&record);
+}
+
+fn window_attributes(capture: &str, event: Option<&WindowEvent>) -> Value {
+    let mut attributes = Map::new();
+    attributes.insert("auditaur.capture".to_string(), json!(capture));
+
+    if let Some(event) = event {
+        attributes.extend(window_event_attributes(event));
+    }
+
+    Value::Object(attributes)
+}
+
+fn window_event_attributes(event: &WindowEvent) -> Map<String, Value> {
+    let mut attributes = Map::new();
+    attributes.insert(
+        "tauri.window.event".to_string(),
+        json!(window_event_kind(event)),
+    );
+    attributes.insert(
+        "tauri.window.event_debug".to_string(),
+        json!(format!("{event:?}")),
+    );
+
+    match event {
+        WindowEvent::Resized(size) => {
+            attributes.insert("tauri.window.event.width".to_string(), json!(size.width));
+            attributes.insert("tauri.window.event.height".to_string(), json!(size.height));
+        }
+        WindowEvent::Moved(position) => {
+            attributes.insert("tauri.window.event.x".to_string(), json!(position.x));
+            attributes.insert("tauri.window.event.y".to_string(), json!(position.y));
+        }
+        WindowEvent::Focused(focused) => {
+            attributes.insert("tauri.window.event.focused".to_string(), json!(focused));
+        }
+        WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+            attributes.insert(
+                "tauri.window.event.scale_factor".to_string(),
+                json!(scale_factor),
+            );
+        }
+        WindowEvent::ThemeChanged(theme) => {
+            attributes.insert(
+                "tauri.window.event.theme".to_string(),
+                json!(format!("{theme:?}")),
+            );
+        }
+        _ => {}
+    }
+
+    attributes
 }
 
 fn window_event_kind(event: &WindowEvent) -> &'static str {
@@ -196,4 +236,47 @@ fn now_unix_nanos() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     i64::try_from(now.as_nanos()).unwrap_or(i64::MAX)
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::{window_attributes, window_event_attributes};
+
+    #[test]
+    fn focused_window_events_record_authoritative_event_state() {
+        let attributes = window_event_attributes(&tauri::WindowEvent::Focused(false));
+
+        assert_eq!(attributes["tauri.window.event"], "blurred");
+        assert_eq!(attributes["tauri.window.event.focused"], false);
+    }
+
+    #[test]
+    fn resize_window_events_record_authoritative_event_size() {
+        let attributes = window_event_attributes(&tauri::WindowEvent::Resized(
+            tauri::PhysicalSize::new(800, 600),
+        ));
+
+        assert_eq!(attributes["tauri.window.event"], "resized");
+        assert_eq!(attributes["tauri.window.event.width"], 800);
+        assert_eq!(attributes["tauri.window.event.height"], 600);
+    }
+
+    #[test]
+    fn moved_window_events_record_authoritative_event_position() {
+        let attributes = window_event_attributes(&tauri::WindowEvent::Moved(
+            tauri::PhysicalPosition::new(12, 34),
+        ));
+
+        assert_eq!(attributes["tauri.window.event"], "moved");
+        assert_eq!(attributes["tauri.window.event.x"], 12);
+        assert_eq!(attributes["tauri.window.event.y"], 34);
+    }
+
+    #[test]
+    fn capture_only_window_attributes_do_not_claim_an_event() {
+        let attributes = window_attributes("window_ready", None);
+
+        assert_eq!(attributes["auditaur.capture"], "window_ready");
+        assert!(attributes.get("tauri.window.event").is_none());
+    }
 }

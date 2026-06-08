@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared models, configuration, redaction, and local discovery types for Auditaur."
+readme = "README.md"
 categories = ["development-tools::debugging"]
 keywords = ["tauri", "observability", "opentelemetry", "sqlite"]
 

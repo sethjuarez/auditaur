@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuditaurExporter } from './exporter';
-import { instrumentedInvoke } from './invoke';
+import { AUDITAUR_TRACE_CONTEXT_ARG, createAuditaurTraceContext, instrumentedInvoke } from './invoke';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -18,6 +18,18 @@ vi.mock('@tauri-apps/api/window', () => ({
 describe('instrumentedInvoke', () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('exports the reserved trace context carrier helpers for custom wrappers', () => {
+    const context = createAuditaurTraceContext(
+      '00112233445566778899aabbccddeeff',
+      '0123456789abcdef',
+    );
+
+    expect(AUDITAUR_TRACE_CONTEXT_ARG).toBe('auditaurTraceContext');
+    expect(context).toEqual({
+      traceparent: '00-00112233445566778899aabbccddeeff-0123456789abcdef-01',
+    });
   });
 
   it('sends W3C trace context across Tauri invoke without recording carrier metadata', async () => {

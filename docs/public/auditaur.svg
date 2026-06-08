@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Auditaur">
   <rect width="128" height="128" rx="28" fill="#10253f"/>
-  <path d="M27 78c14-34 29-51 45-51 17 0 27 15 29 44" fill="none" stroke="#2f8cff" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="51" cy="77" r="12" fill="#c7ddff"/>
-  <circle cx="86" cy="77" r="12" fill="#c7ddff"/>
-  <path d="M47 98h35" stroke="#c7ddff" stroke-width="8" stroke-linecap="round"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 100a50 50 0 1 1 84 0" stroke="#c7ddff" stroke-width="9"/>
+    <path d="M42 82a26 26 0 1 1 44 0" stroke="#c7ddff" stroke-width="9" opacity="0.75"/>
+    <path d="M64 64l36-36" stroke="#2f8cff" stroke-width="9"/>
+    <circle cx="64" cy="64" r="8" stroke="#2f8cff" stroke-width="7"/>
+  </g>
 </svg>

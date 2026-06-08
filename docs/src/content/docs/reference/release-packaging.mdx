@@ -12,6 +12,7 @@ Auditaur packages are published publicly and the repository is configured for se
 | CLI crate | `auditaur-cli` | Published to crates.io; installs a binary named `auditaur`. |
 | Core crate | `auditaur-core` | Published to crates.io for shared models and config. |
 | Collector crate | `auditaur-collector` | Published to crates.io for SQLite store and receiver types. |
+| Tauri plugin macro crate | `tauri-plugin-auditaur-macros` | Published to crates.io before the plugin crate; re-exported by `tauri-plugin-auditaur`. |
 | Tauri plugin crate | `tauri-plugin-auditaur` | Published to crates.io for Tauri v2 apps. |
 | Frontend package | `@auditaur/api` | Published to npm. |
 
@@ -48,9 +49,11 @@ Rust crates use release-plz:
 
 1. `.github/workflows/release-rust.yml` opens or updates a Rust release PR on pushes to `main`.
 2. Merging the release PR updates versions and changelogs according to Conventional Commits plus release-plz semver checks.
-3. Merging the release PR runs release-plz publish for changed Rust crates.
-4. Publishing requires a `CARGO_REGISTRY_TOKEN` repository secret until crates.io trusted publishing is configured for existing crates.
-5. `.github/workflows/release-binaries.yml` uploads Windows x64, Windows ARM64, macOS ARM64, and Linux x64 `auditaur` binaries for `auditaur-cli-v*` GitHub releases.
+3. `release-plz.toml` sets `release_always = false`, so normal pushes only prepare release PRs and publishing happens from release PR merges.
+4. Merging the release PR runs release-plz publish for changed Rust crates.
+5. The release workflow verifies that `tauri-plugin-auditaur` depends on `tauri-plugin-auditaur-macros` at the same version before release-plz runs. Cargo and release-plz then use the workspace dependency graph, so the macro crate must be available before the plugin crate can publish.
+6. Publishing requires a `CARGO_REGISTRY_TOKEN` repository secret until crates.io trusted publishing is configured for existing crates.
+7. `.github/workflows/release-binaries.yml` uploads Windows x64, Windows ARM64, macOS ARM64, and Linux x64 `auditaur` binaries for `auditaur-cli-v*` GitHub releases.
 
 The frontend package uses release-please:
 
@@ -64,6 +67,7 @@ Manual dry runs are available locally:
 ```powershell
 cargo publish -p auditaur-core --dry-run
 cargo publish -p auditaur-collector --dry-run
+cargo publish -p tauri-plugin-auditaur-macros --dry-run
 cargo publish -p tauri-plugin-auditaur --dry-run
 cargo publish -p auditaur-cli --dry-run
 
@@ -80,4 +84,5 @@ npm publish --dry-run --access public
    - Workflow: `publish-api.yml`.
    - Environment: leave blank unless this workflow is later updated to use one.
 2. Keep `CARGO_REGISTRY_TOKEN` available until crates.io trusted publishing is configured for all Rust crates.
-3. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
+3. For the first release that includes `tauri-plugin-auditaur-macros`, confirm the release-plz run lists the macro crate before `tauri-plugin-auditaur`.
+4. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.

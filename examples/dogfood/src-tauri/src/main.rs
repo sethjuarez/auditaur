@@ -1,5 +1,5 @@
 use tauri::Emitter;
-use tauri_plugin_auditaur::{ipc_traceparent, IpcTraceContext};
+use tauri_plugin_auditaur::IpcTraceContext;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -9,10 +9,7 @@ struct DogfoodEvent {
 }
 
 #[tauri::command]
-#[tracing::instrument(
-    skip(auditaur_trace_context),
-    fields(traceparent = ipc_traceparent(auditaur_trace_context.as_ref()))
-)]
+#[tauri_plugin_auditaur::instrument_ipc]
 fn successful_command(
     message: String,
     auditaur_trace_context: Option<IpcTraceContext>,
@@ -22,11 +19,7 @@ fn successful_command(
 }
 
 #[tauri::command]
-#[tracing::instrument(
-    err,
-    skip(auditaur_trace_context),
-    fields(traceparent = ipc_traceparent(auditaur_trace_context.as_ref()))
-)]
+#[tauri_plugin_auditaur::instrument_ipc(err)]
 fn failing_command(
     reason: String,
     auditaur_trace_context: Option<IpcTraceContext>,
@@ -37,10 +30,7 @@ fn failing_command(
 }
 
 #[tauri::command]
-#[tracing::instrument(
-    skip(app, auditaur_trace_context),
-    fields(traceparent = ipc_traceparent(auditaur_trace_context.as_ref()))
-)]
+#[tauri_plugin_auditaur::instrument_ipc(skip(app))]
 fn emit_backend_event(
     app: tauri::AppHandle<tauri::Wry>,
     auditaur_trace_context: Option<IpcTraceContext>,
