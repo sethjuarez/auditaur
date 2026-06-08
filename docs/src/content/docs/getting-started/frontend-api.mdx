@@ -6,7 +6,7 @@ description: Capture frontend console logs, errors, invokes, and events.
 Install the frontend package:
 
 ```powershell
-npm install @auditaur/api
+npm install @auditaur/api@0.2.1
 ```
 
 Initialize Auditaur once in the Tauri webview:
@@ -29,6 +29,8 @@ const auditaur = await initAuditaur({
 
 export const invoke = auditaur.invoke;
 ```
+
+For existing apps with many direct `@tauri-apps/api/core` imports, prefer a local wrapper such as `src\services\tauri.ts` that exports `auditaur.invoke`. Auditaur does not globally monkey-patch Tauri's `invoke`, so direct imports continue to work but are not captured until migrated.
 
 The returned client exposes:
 

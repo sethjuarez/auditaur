@@ -29,4 +29,4 @@ description: Auditaur plugin and frontend configuration.
 | `batchIntervalMs` | `1000` | Flush cadence. |
 | `maxBatchSize` | `64` | Flush when the in-memory batch reaches this size. |
 
-Important defaults: redaction is enabled, full payload capture is disabled in the frontend package, retention defaults to 256 MiB, and release builds are blocked unless explicitly allowed.
+Important defaults: redaction is enabled, full payload capture is disabled in the frontend package, retention defaults to 256 MiB, and release builds are blocked unless explicitly allowed. Auditaur is intended to be dev/debug first; production collection should be an explicit product decision with consent, redaction, retention, and export handling reviewed.

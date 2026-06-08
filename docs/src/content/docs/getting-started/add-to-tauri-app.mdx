@@ -1,0 +1,178 @@
+---
+title: Add Auditaur to a Tauri App
+description: Install Auditaur in an existing Tauri v2 app.
+sidebar:
+  order: 2
+---
+
+Use this guide when you already have a Tauri v2 app and want Auditaur telemetry available to humans and coding agents.
+
+Current published packages:
+
+| Package | Version |
+| --- | --- |
+| `tauri-plugin-auditaur` | `0.1.3` |
+| `@auditaur/api` | `0.2.1` |
+
+## 1. Install the CLI
+
+```powershell
+cargo install auditaur-cli
+auditaur doctor
+```
+
+## 2. Add the Rust plugin
+
+In `src-tauri\Cargo.toml`:
+
+```toml
+[dependencies]
+tauri-plugin-auditaur = "0.1.3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+Register the plugin in `src-tauri\src\main.rs`:
+
+```rust
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+fn main() {
+    tracing_subscriber::registry()
+        .with(tauri_plugin_auditaur::tracing_layer())
+        .init();
+
+    tauri::Builder::default()
+        .plugin(
+            tauri_plugin_auditaur::Builder::new()
+                .service_name("my-tauri-app")
+                .session_name("dev")
+                .redact_defaults(true)
+                .max_session_bytes(256 * 1024 * 1024)
+                .build(),
+        )
+        .run(tauri::generate_context!())
+        .expect("failed to run app");
+}
+```
+
+Auditaur is development-first. Release builds are blocked by default; only set `allow_release_builds(true)` after reviewing the data your app emits and the privacy expectations for your users.
+
+## 3. Allow the frontend plugin command
+
+In `src-tauri\capabilities\default.json`, include `auditaur:default`:
+
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": ["core:default", "auditaur:default"]
+}
+```
+
+## 4. Add the frontend package
+
+```powershell
+npm install @auditaur/api@0.2.1
+```
+
+Initialize Auditaur once near app startup:
+
+```ts
+import { initAuditaur } from '@auditaur/api';
+
+export const auditaur = await initAuditaur({
+  serviceName: 'my-tauri-app',
+  instrumentConsole: true,
+  instrumentErrors: true,
+  instrumentTauriInvoke: true,
+  propagateTauriInvokeTraceContext: true,
+  instrumentTauriEvents: true,
+  captureFullPayloads: false,
+});
+```
+
+## 5. Adopt `invoke()` gradually
+
+Auditaur does not globally monkey-patch `@tauri-apps/api/core`. Prefer a local wrapper and migrate imports over time.
+
+Create `src\services\tauri.ts`:
+
+```ts
+import { initAuditaur } from '@auditaur/api';
+
+const auditaur = await initAuditaur({
+  serviceName: 'my-tauri-app',
+});
+
+export const invoke = auditaur.invoke;
+export const emit = auditaur.emit;
+export const emitTo = auditaur.emitTo;
+export const listen = auditaur.listen;
+export const flushAuditaur = () => auditaur.flush();
+```
+
+Then replace direct imports:
+
+```diff
+- import { invoke } from '@tauri-apps/api/core';
++ import { invoke } from './services/tauri';
+```
+
+You can migrate command-by-command. Direct `@tauri-apps/api/core` calls still work; they just will not get Auditaur invoke spans or trace propagation until routed through the wrapper.
+
+## 6. Opt backend commands into IPC trace continuation
+
+For commands you want parented under frontend invoke traces:
+
+```rust
+use tauri_plugin_auditaur::IpcTraceContext;
+
+#[tauri::command]
+#[tauri_plugin_auditaur::instrument_ipc(err)]
+fn load_user(
+    id: String,
+    auditaur_trace_context: Option<IpcTraceContext>,
+) -> Result<String, String> {
+    tracing::info!(user.id = %id, "loading user");
+    Ok(id)
+}
+```
+
+Keep the explicit `#[tauri::command]`. The optional parameter must be named `auditaur_trace_context`.
+
+## 7. Verify with doctor and read commands
+
+Run these while the app is open in `tauri dev`:
+
+```powershell
+auditaur doctor tauri --path src-tauri --json
+auditaur apps --json
+auditaur health --json
+auditaur logs --json
+auditaur traces --failed --json
+auditaur exceptions --json
+```
+
+Healthy discovery looks like:
+
+```json
+[
+  {
+    "serviceName": "my-tauri-app",
+    "status": "active",
+    "databaseReadable": true,
+    "schemaValid": true,
+    "databasePath": "..."
+  }
+]
+```
+
+If multiple active sessions exist, copy `databasePath` from `auditaur apps --json` and pass it explicitly:
+
+```powershell
+auditaur logs --db "<databasePath>" --json
+auditaur exceptions --db "<databasePath>" --json
+```
+
