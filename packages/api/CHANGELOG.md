@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/sethjuarez/auditaur/compare/api-v0.2.1...api-v0.3.0) (2026-06-09)
+
+
+### Features
+
+* **api:** improve Tauri IPC trace propagation ([cb4362c](https://github.com/sethjuarez/auditaur/commit/cb4362ce68d4f15fa2871a43e53c017e6ebb76e6))
+
 ## [0.2.1](https://github.com/sethjuarez/auditaur/compare/api-v0.2.0...api-v0.2.1) (2026-06-08)
 
 
