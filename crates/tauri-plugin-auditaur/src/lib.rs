@@ -3,17 +3,21 @@ pub mod desktop;
 pub mod error;
 pub mod ipc;
 pub mod state;
+pub mod test_helpers;
 pub mod tracing;
 
 use auditaur_core::model::TauriWindowState;
 pub use auditaur_core::AuditaurConfig;
-pub use ipc::{ipc_traceparent, IpcTraceContext, IPC_CONTEXT_ARG};
+pub use ipc::{
+    ipc_traceparent, ipc_traceparent_from_request, ipc_traceparent_from_request_or_context,
+    IpcTraceContext, IPC_CONTEXT_ARG, IPC_TRACEPARENT_HEADER,
+};
 use serde_json::{json, Map, Value};
 use tauri::{
     plugin::{Builder as TauriPluginBuilder, TauriPlugin},
     Manager, Runtime, WebviewWindow, Window, WindowEvent,
 };
-pub use tauri_plugin_auditaur_macros::instrument_ipc;
+pub use tauri_plugin_auditaur_macros::{auditaur_command, instrument_ipc};
 pub use tracing::tracing_layer;
 
 #[cfg(test)]

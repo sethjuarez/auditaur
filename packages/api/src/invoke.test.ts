@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuditaurExporter } from './exporter';
-import { AUDITAUR_TRACE_CONTEXT_ARG, createAuditaurTraceContext, instrumentedInvoke } from './invoke';
+import { AUDITAUR_TRACE_CONTEXT_ARG, AUDITAUR_TRACEPARENT_HEADER, createAuditaurTraceContext, instrumentedInvoke } from './invoke';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -27,6 +27,7 @@ describe('instrumentedInvoke', () => {
     );
 
     expect(AUDITAUR_TRACE_CONTEXT_ARG).toBe('auditaurTraceContext');
+    expect(AUDITAUR_TRACEPARENT_HEADER).toBe('traceparent');
     expect(context).toEqual({
       traceparent: '00-00112233445566778899aabbccddeeff-0123456789abcdef-01',
     });
@@ -48,16 +49,28 @@ describe('instrumentedInvoke', () => {
     await exporter.shutdown();
 
     expect(result).toBe('ok');
-    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'successful_command', {
-      message: 'hello',
-    auditaurTraceContext: {
-        traceparent: expect.stringMatching(
-          /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/,
-        ),
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      1,
+      'successful_command',
+      {
+        message: 'hello',
+        auditaurTraceContext: {
+          traceparent: expect.stringMatching(
+            /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/,
+          ),
+        },
       },
-    });
+      {
+        headers: {
+          traceparent: expect.stringMatching(
+            /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/,
+          ),
+        },
+      },
+    );
 
     const traceparent = mocks.invoke.mock.calls[0][1].auditaurTraceContext.traceparent as string;
+    expect(mocks.invoke.mock.calls[0][2].headers.traceparent).toBe(traceparent);
     const [, traceId, spanId] = traceparent.split('-');
     expect(mocks.invoke).toHaveBeenNthCalledWith(
       2,
@@ -94,13 +107,24 @@ describe('instrumentedInvoke', () => {
     await exporter.flush();
     await exporter.shutdown();
 
-    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'emit_backend_event', {
-      auditaurTraceContext: {
-        traceparent: expect.stringMatching(
-          /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/,
-        ),
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      1,
+      'emit_backend_event',
+      {
+        auditaurTraceContext: {
+          traceparent: expect.stringMatching(
+            /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/,
+          ),
+        },
       },
-    });
+      {
+        headers: {
+          traceparent: expect.stringMatching(
+            /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/,
+          ),
+        },
+      },
+    );
     expect(mocks.invoke.mock.calls[1][1].batch.tauriIpcCalls[0].argsJson).toEqual({});
   });
 
@@ -116,7 +140,7 @@ describe('instrumentedInvoke', () => {
     await exporter.flush();
     await exporter.shutdown();
 
-    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'successful_command', args);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'successful_command', args, undefined);
     expect(mocks.invoke.mock.calls[1][1].batch.tauriIpcCalls[0].argsJson).toEqual(args);
   });
 
@@ -129,7 +153,7 @@ describe('instrumentedInvoke', () => {
     await exporter.flush();
     await exporter.shutdown();
 
-    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'successful_command', args);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'successful_command', args, undefined);
     expect(mocks.invoke.mock.calls[1][1].batch.spans[0]).toMatchObject({
       name: 'tauri.invoke successful_command',
       attributes: expect.objectContaining({

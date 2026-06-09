@@ -166,6 +166,156 @@ fn reads_fixture_database_as_json() {
 }
 
 #[test]
+fn explain_flags_missing_backend_trace_continuation() {
+    let db = fixture_database();
+    let store = SqliteStore::open(db.path()).unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: "session-fixture".to_string(),
+            trace_id: "trace-missing-backend".to_string(),
+            span_id: "frontend-span".to_string(),
+            parent_span_id: None,
+            name: "tauri.invoke missing_backend_command".to_string(),
+            kind: Some("client".to_string()),
+            start_time_unix_nanos: 300,
+            end_time_unix_nanos: Some(400),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "tauri.command": "missing_backend_command" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: "session-fixture".to_string(),
+            trace_id: "trace-missing-backend".to_string(),
+            span_id: "frontend-child-span".to_string(),
+            parent_span_id: Some("frontend-span".to_string()),
+            name: "frontend child".to_string(),
+            kind: Some("internal".to_string()),
+            start_time_unix_nanos: 320,
+            end_time_unix_nanos: Some(330),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "auditaur.source": "frontend" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: "session-fixture".to_string(),
+            timestamp_unix_nanos: 310,
+            duration_ms: Some(5.0),
+            command: "missing_backend_command".to_string(),
+            status: "OK".to_string(),
+            error_message: None,
+            trace_id: Some("trace-missing-backend".to_string()),
+            span_id: Some("frontend-span".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: None,
+            args_redacted: false,
+            result_summary: Some("\"ok\"".to_string()),
+        })
+        .unwrap();
+    drop(store);
+
+    let explain = run_json([
+        "explain",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--trace",
+        "trace-missing-backend",
+        "--json",
+    ]);
+    let findings = explain["findings"].as_array().unwrap();
+    assert!(findings.iter().any(|finding| {
+        finding
+            .as_str()
+            .unwrap()
+            .contains("Missing backend trace continuation for tauri.invoke missing_backend_command")
+    }));
+}
+
+#[test]
+fn explain_does_not_flag_stitched_backend_trace_continuation() {
+    let db = fixture_database();
+    let store = SqliteStore::open(db.path()).unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: "session-fixture".to_string(),
+            trace_id: "trace-stitched-backend".to_string(),
+            span_id: "frontend-span".to_string(),
+            parent_span_id: None,
+            name: "tauri.invoke stitched_backend_command".to_string(),
+            kind: Some("client".to_string()),
+            start_time_unix_nanos: 300,
+            end_time_unix_nanos: Some(350),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "tauri.command": "stitched_backend_command" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: "session-fixture".to_string(),
+            trace_id: "trace-stitched-backend".to_string(),
+            span_id: "backend-span".to_string(),
+            parent_span_id: Some("frontend-span".to_string()),
+            name: "stitched_backend_command".to_string(),
+            kind: Some("internal".to_string()),
+            start_time_unix_nanos: 320,
+            end_time_unix_nanos: Some(340),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("backend".to_string()),
+            scope_version: None,
+            attributes: json!({ "traceparent": "00-trace-stitched-backend-frontend-span-01" }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: "session-fixture".to_string(),
+            timestamp_unix_nanos: 310,
+            duration_ms: Some(5.0),
+            command: "stitched_backend_command".to_string(),
+            status: "OK".to_string(),
+            error_message: None,
+            trace_id: Some("trace-stitched-backend".to_string()),
+            span_id: Some("frontend-span".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: None,
+            args_redacted: false,
+            result_summary: Some("\"ok\"".to_string()),
+        })
+        .unwrap();
+    drop(store);
+
+    let explain = run_json([
+        "explain",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--trace",
+        "trace-stitched-backend",
+        "--json",
+    ]);
+    let findings = explain["findings"].as_array().unwrap();
+    assert!(!findings.iter().any(|finding| {
+        finding
+            .as_str()
+            .unwrap()
+            .contains("Missing backend trace continuation")
+    }));
+}
+
+#[test]
 fn discovers_apps_and_reads_default_database() {
     let temp = TempDir::new().unwrap();
     let db_path = temp

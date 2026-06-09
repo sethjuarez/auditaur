@@ -40,20 +40,25 @@ fn main() {
 Backend commands can opt into frontend-to-backend trace continuation:
 
 ```rust
-use tauri_plugin_auditaur::IpcTraceContext;
-
-#[tauri::command]
-#[tauri_plugin_auditaur::instrument_ipc]
-fn load_user(
-    id: String,
-    auditaur_trace_context: Option<IpcTraceContext>,
-) -> Result<String, String> {
+#[tauri_plugin_auditaur::auditaur_command]
+fn load_user(id: String) -> Result<String, String> {
     tracing::info!(user.id = %id, "loading user");
     Ok(id)
 }
 ```
 
-The frontend wrapper sends W3C `traceparent` through the reserved `auditaurTraceContext` invoke argument. The `instrument_ipc` macro keeps normal `#[tauri::command]` compatibility while adding the `tracing::instrument` fields Auditaur needs.
+The frontend wrapper sends W3C `traceparent` through the Tauri invoke request headers and keeps the older reserved `auditaurTraceContext` invoke argument as a compatibility fallback. The `auditaur_command` macro wraps `#[tauri::command]`, injects both IPC carriers, prefers the request header, falls back to the reserved argument, and adds the `tracing::instrument` fields Auditaur needs.
+
+If you need to keep an explicit `#[tauri::command]`, use the lower-level `#[tauri_plugin_auditaur::instrument_ipc]` macro with an optional `auditaur_trace_context: Option<IpcTraceContext>` argument.
+
+A healthy invoke trace has a frontend `tauri.invoke load_user` span, a `tauri_ipc_calls` row with the same trace/span ids, and a backend child span with the same trace id and `parent_span_id` set to the frontend span id. App integration tests can assert that shape with:
+
+```rust
+tauri_plugin_auditaur::test_helpers::assert_trace_stitched(
+    "path/to/telemetry.sqlite",
+    "load_user",
+);
+```
 
 ## Safety note
 

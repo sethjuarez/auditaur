@@ -2,12 +2,14 @@ use anyhow::Result;
 use auditaur_core::{
     model::{
         FrontendError, LogRecord, SpanRecord, TauriEventRecord, TauriIpcCall, TauriWindowState,
+        TelemetrySource,
     },
     storage::{RelatedTelemetry, RelatedTelemetryQuery},
 };
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
+    collections::HashSet,
     fs,
     path::PathBuf,
     thread,
@@ -60,8 +62,16 @@ pub fn explain(
     limit: usize,
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
-    let entries = load_timeline(&db, session_id, trace_id.clone(), since.as_deref(), limit)?;
-    let report = ExplainReport::from_timeline(trace_id, &entries);
+    let related = load_related(
+        &db,
+        session_id,
+        trace_id.clone(),
+        None,
+        since.as_deref(),
+        limit,
+    )?;
+    let entries = timeline_entries(related.clone(), limit);
+    let report = ExplainReport::from_related(trace_id, &related, &entries);
     read::print_json_or_table(json, &report, || print_explain(&report))
 }
 
@@ -407,6 +417,19 @@ struct ExplainReport {
 }
 
 impl ExplainReport {
+    fn from_related(
+        trace_id: Option<String>,
+        related: &RelatedTelemetry,
+        entries: &[TimelineEntry],
+    ) -> Self {
+        let mut report = Self::from_timeline(trace_id, entries);
+        let mut continuation_findings = Self::missing_backend_continuation_findings(related);
+        continuation_findings.extend(report.findings);
+        report.findings = continuation_findings;
+        report.findings.truncate(20);
+        report
+    }
+
     fn from_timeline(trace_id: Option<String>, entries: &[TimelineEntry]) -> Self {
         let mut findings = Vec::new();
         let mut error_count = 0;
@@ -443,7 +466,6 @@ impl ExplainReport {
                 _ => {}
             }
         }
-        findings.truncate(20);
         Self {
             trace_id,
             total_events: entries.len(),
@@ -452,6 +474,45 @@ impl ExplainReport {
             failed_span_count,
             findings,
         }
+    }
+
+    fn missing_backend_continuation_findings(related: &RelatedTelemetry) -> Vec<String> {
+        let mut findings = Vec::new();
+        let mut reported = HashSet::new();
+        for call in &related.tauri_ipc_calls {
+            if call.command.contains(':') || call.command.contains('|') {
+                continue;
+            }
+            let Some(trace_id) = call.trace_id.as_deref() else {
+                continue;
+            };
+            let Some(frontend_span_id) = call.span_id.as_deref() else {
+                continue;
+            };
+            let has_frontend_invoke_span = related.spans.iter().any(|span| {
+                span.trace_id == trace_id
+                    && span.span_id == frontend_span_id
+                    && span.name == format!("tauri.invoke {}", call.command)
+            });
+            if !has_frontend_invoke_span {
+                continue;
+            }
+            let has_backend_child_span = related.spans.iter().any(|span| {
+                span.trace_id == trace_id
+                    && span.source == TelemetrySource::Backend
+                    && span.parent_span_id.as_deref() == Some(frontend_span_id)
+            });
+            if has_backend_child_span {
+                continue;
+            }
+            if reported.insert((trace_id.to_string(), call.command.clone())) {
+                findings.push(format!(
+                    "Missing backend trace continuation for tauri.invoke {}; add #[tauri_plugin_auditaur::auditaur_command] or #[tauri_plugin_auditaur::instrument_ipc] to the Tauri command.",
+                    call.command
+                ));
+            }
+        }
+        findings
     }
 }
 

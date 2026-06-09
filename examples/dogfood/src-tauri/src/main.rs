@@ -1,5 +1,4 @@
 use tauri::Emitter;
-use tauri_plugin_auditaur::IpcTraceContext;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -8,33 +7,21 @@ struct DogfoodEvent {
     message: String,
 }
 
-#[tauri::command]
-#[tauri_plugin_auditaur::instrument_ipc]
-fn successful_command(
-    message: String,
-    auditaur_trace_context: Option<IpcTraceContext>,
-) -> Result<String, String> {
+#[tauri_plugin_auditaur::auditaur_command]
+fn successful_command(message: String) -> Result<String, String> {
     tracing::info!(auditaur.example.message = %message, "successful command invoked");
     Ok(format!("Backend received: {message}"))
 }
 
-#[tauri::command]
-#[tauri_plugin_auditaur::instrument_ipc(err)]
-fn failing_command(
-    reason: String,
-    auditaur_trace_context: Option<IpcTraceContext>,
-) -> Result<(), String> {
+#[tauri_plugin_auditaur::auditaur_command(err)]
+fn failing_command(reason: String) -> Result<(), String> {
     let error = format!("Intentional dogfood backend failure: {reason}");
     tracing::error!(error = %error, "failing command rejected request");
     Err(error)
 }
 
-#[tauri::command]
-#[tauri_plugin_auditaur::instrument_ipc(skip(app))]
-fn emit_backend_event(
-    app: tauri::AppHandle<tauri::Wry>,
-    auditaur_trace_context: Option<IpcTraceContext>,
-) -> Result<(), String> {
+#[tauri_plugin_auditaur::auditaur_command(skip(app))]
+fn emit_backend_event(app: tauri::AppHandle<tauri::Wry>) -> Result<(), String> {
     let payload = DogfoodEvent {
         source: "backend",
         message: "hello from Rust".to_string(),
