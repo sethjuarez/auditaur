@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.1.3...tauri-plugin-auditaur-v0.1.4) - 2026-06-09
+
+### Other
+
+- Improve Tauri IPC trace ergonomics
+
 ## [0.1.2](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.1.1...tauri-plugin-auditaur-v0.1.2) - 2026-06-08
 
 ### Added
