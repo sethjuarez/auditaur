@@ -4,7 +4,7 @@ pub mod mcp;
 pub mod output;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -35,6 +35,12 @@ enum Command {
     Health {
         #[arg(long)]
         json: bool,
+    },
+    Drive {
+        #[command(flatten)]
+        args: DriveArgs,
+        #[command(subcommand)]
+        command: Option<DriveCommand>,
     },
     Sessions {
         #[arg(long)]
@@ -271,6 +277,132 @@ enum DoctorCommand {
     },
 }
 
+#[derive(Debug, Args)]
+struct DriveArgs {
+    #[arg(long, global = true)]
+    app: Option<String>,
+    #[arg(long, global = true)]
+    session_id: Option<String>,
+    #[arg(long, global = true)]
+    instance_id: Option<String>,
+    #[arg(long, global = true)]
+    pid: Option<u32>,
+    #[arg(long, global = true)]
+    latest: bool,
+    #[arg(long, global = true)]
+    active: bool,
+    #[arg(long, global = true)]
+    cdp_port: Option<u16>,
+    #[arg(long, global = true)]
+    json: bool,
+}
+
+impl DriveArgs {
+    fn selector(&self) -> commands::drive::DriveAppSelector {
+        commands::drive::DriveAppSelector {
+            app: self.app.clone(),
+            session_id: self.session_id.clone(),
+            instance_id: self.instance_id.clone(),
+            pid: self.pid,
+            latest: self.latest,
+            active: self.active,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum DriveCommand {
+    Inspect,
+    Wait {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, default_value_t = 5000)]
+        timeout_ms: u64,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Exists {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Text {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Screenshot {
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Click {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Fill {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        value: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Press {
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -283,6 +415,166 @@ fn main() -> Result<()> {
         },
         Command::Apps { json } => commands::read::apps(json),
         Command::Health { json } => commands::health::run(json),
+        Command::Drive { args, command } => match command {
+            None => {
+                let selector = args.selector();
+                commands::drive::run(selector, args.cdp_port, args.json)
+            }
+            Some(DriveCommand::Inspect) => {
+                let selector = args.selector();
+                commands::drive::inspect(selector, args.cdp_port, args.json)
+            }
+            Some(DriveCommand::Wait {
+                selector,
+                target,
+                timeout_ms,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::wait(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::WaitOptions {
+                        selector,
+                        target_id: target,
+                        timeout_ms,
+                        test_id,
+                        step_id,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Exists {
+                selector,
+                target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::exists(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SelectorActionOptions {
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: false,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Text {
+                selector,
+                target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::text(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SelectorActionOptions {
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: false,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Screenshot {
+                output,
+                target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::screenshot(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::ScreenshotOptions {
+                        output,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Click {
+                selector,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::click(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SelectorActionOptions {
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Fill {
+                selector,
+                value,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::fill(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::FillOptions {
+                        selector,
+                        value,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Press {
+                key,
+                selector,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::press(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::PressOptions {
+                        key,
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        json: args.json,
+                    },
+                )
+            }
+        },
         Command::Sessions { db, json, limit } => commands::read::sessions(&db, json, limit),
         Command::Logs {
             db,
