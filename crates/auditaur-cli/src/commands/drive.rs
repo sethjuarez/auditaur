@@ -25,10 +25,12 @@ use crate::{
 const DEFAULT_CDP_PORTS: &[u16] = &[9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229, 9230];
 const CDP_HOST: &str = "127.0.0.1";
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const CDP_AUTO_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+const CDP_EXPLICIT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CDP_READ_TIMEOUT: Duration = Duration::from_millis(500);
 
-pub fn run(app: Option<String>, cdp_port: Option<u16>, json: bool) -> Result<()> {
-    let target = resolve_target(app.as_deref())?;
+pub fn run(selector: DriveAppSelector, cdp_port: Option<u16>, json: bool) -> Result<()> {
+    let target = resolve_target(&selector)?;
     let attach = DriveAttachInfo::discover(target, cdp_port)?;
     read::print_json_or_table(json, &attach, || print_attach_info(&attach, false))
 }
@@ -37,19 +39,19 @@ fn bounded_timeout(timeout: Duration) -> Duration {
     timeout.min(CDP_READ_TIMEOUT)
 }
 
-pub fn inspect(app: Option<String>, cdp_port: Option<u16>, json: bool) -> Result<()> {
-    let target = resolve_target(app.as_deref())?;
+pub fn inspect(selector: DriveAppSelector, cdp_port: Option<u16>, json: bool) -> Result<()> {
+    let target = resolve_target(&selector)?;
     let attach = DriveAttachInfo::discover(target, cdp_port)?;
     read::print_json_or_table(json, &attach, || print_attach_info(&attach, true))
 }
 
-pub fn wait(app: Option<String>, cdp_port: Option<u16>, options: WaitOptions) -> Result<()> {
+pub fn wait(selector: DriveAppSelector, cdp_port: Option<u16>, options: WaitOptions) -> Result<()> {
     if cdp_port.is_none() {
         return Err(anyhow!(
             "`auditaur drive wait` requires --cdp-port <port>. Run `auditaur drive inspect` first, then pass the WebView remote-debugging port explicitly."
         ));
     }
-    let target = resolve_target(app.as_deref())?;
+    let target = resolve_target(&selector)?;
     let attach = DriveAttachInfo::discover(target, cdp_port)?;
     let cdp_target = select_cdp_target(&attach.cdp.targets, options.target_id.as_deref())?;
     let websocket_url = cdp_target
@@ -78,12 +80,12 @@ pub fn wait(app: Option<String>, cdp_port: Option<u16>, options: WaitOptions) ->
 }
 
 pub fn exists(
-    app: Option<String>,
+    selector: DriveAppSelector,
     cdp_port: Option<u16>,
     options: SelectorActionOptions,
 ) -> Result<()> {
     let (attach, target, websocket_url) =
-        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), "exists")?;
+        resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "exists")?;
     let selector_json = serde_json::to_string(&options.selector)?;
     let expression = format!("Boolean(document.querySelector({selector_json}))");
     let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
@@ -107,12 +109,12 @@ pub fn exists(
 }
 
 pub fn text(
-    app: Option<String>,
+    selector: DriveAppSelector,
     cdp_port: Option<u16>,
     options: SelectorActionOptions,
 ) -> Result<()> {
     let (attach, target, websocket_url) =
-        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), "text")?;
+        resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "text")?;
     let selector_json = serde_json::to_string(&options.selector)?;
     let expression = format!(
         "(() => {{ const el = document.querySelector({selector_json}); return el ? {{ found: true, text: (el.innerText ?? el.textContent ?? '') }} : {{ found: false, text: null }}; }})()"
@@ -145,7 +147,7 @@ pub fn text(
 }
 
 pub fn click(
-    app: Option<String>,
+    selector: DriveAppSelector,
     cdp_port: Option<u16>,
     options: SelectorActionOptions,
 ) -> Result<()> {
@@ -153,10 +155,10 @@ pub fn click(
     let expression = format!(
         "(() => {{ const el = document.querySelector({selector_json}); if (!el) return {{ ok: false, error: 'selector not found' }}; el.scrollIntoView({{ block: 'center', inline: 'center' }}); el.click(); return {{ ok: true }}; }})()"
     );
-    run_dom_action(app, cdp_port, &options, "click", expression)
+    run_dom_action(selector, cdp_port, &options, "click", expression)
 }
 
-pub fn fill(app: Option<String>, cdp_port: Option<u16>, options: FillOptions) -> Result<()> {
+pub fn fill(selector: DriveAppSelector, cdp_port: Option<u16>, options: FillOptions) -> Result<()> {
     let selector_json = serde_json::to_string(&options.selector)?;
     let value_json = serde_json::to_string(&options.value)?;
     let expression = format!(
@@ -169,10 +171,14 @@ pub fn fill(app: Option<String>, cdp_port: Option<u16>, options: FillOptions) ->
         step_id: options.step_id,
         json: options.json,
     };
-    run_dom_action(app, cdp_port, &selector_options, "fill", expression)
+    run_dom_action(selector, cdp_port, &selector_options, "fill", expression)
 }
 
-pub fn press(app: Option<String>, cdp_port: Option<u16>, options: PressOptions) -> Result<()> {
+pub fn press(
+    selector: DriveAppSelector,
+    cdp_port: Option<u16>,
+    options: PressOptions,
+) -> Result<()> {
     let key_json = serde_json::to_string(&options.key)?;
     let selector_json = match &options.selector {
         Some(selector) => serde_json::to_string(selector)?,
@@ -190,16 +196,20 @@ pub fn press(app: Option<String>, cdp_port: Option<u16>, options: PressOptions) 
         step_id: options.step_id,
         json: options.json,
     };
-    run_dom_action(app, cdp_port, &selector_options, "press", expression)
+    run_dom_action(selector, cdp_port, &selector_options, "press", expression)
 }
 
 pub fn screenshot(
-    app: Option<String>,
+    selector: DriveAppSelector,
     cdp_port: Option<u16>,
     options: ScreenshotOptions,
 ) -> Result<()> {
-    let (attach, target, websocket_url) =
-        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), "screenshot")?;
+    let (attach, target, websocket_url) = resolve_drive_target(
+        selector,
+        cdp_port,
+        options.target_id.as_deref(),
+        "screenshot",
+    )?;
     let mut socket = connect_cdp_websocket(&websocket_url, Duration::from_secs(10))?;
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut next_id = 1_u64;
@@ -348,10 +358,28 @@ impl CdpAttachInfo {
         let ports: Vec<u16> = cdp_port
             .map(|port| vec![port])
             .unwrap_or_else(|| DEFAULT_CDP_PORTS.to_vec());
+        let explicit_port = cdp_port.is_some();
+        let mut probe_errors = Vec::new();
 
         for port in ports {
-            let Some(version) = get_cdp_json(port, "/json/version")? else {
-                continue;
+            let probe_timeout = if explicit_port {
+                CDP_EXPLICIT_PROBE_TIMEOUT
+            } else {
+                CDP_AUTO_PROBE_TIMEOUT
+            };
+            let version = match get_cdp_json(port, "/json/version", probe_timeout) {
+                Ok(Some(version)) => version,
+                Ok(None) => continue,
+                Err(error) => {
+                    let reason = format!(
+                        "CDP probe failed for http://{CDP_HOST}:{port}/json/version: {error}"
+                    );
+                    if explicit_port {
+                        return Ok(unavailable_cdp(cdp_port, reason));
+                    }
+                    probe_errors.push(reason);
+                    continue;
+                }
             };
             let (targets, target_discovery_error) = match list_cdp_targets(port) {
                 Ok(targets) => (bind_targets_to_windows(targets, app), None),
@@ -380,13 +408,50 @@ impl CdpAttachInfo {
             port: cdp_port,
             product: None,
             browser_protocol_version: None,
-            reason: Some("No Chrome DevTools Protocol /json/version endpoint responded on the probed localhost port(s).".to_string()),
+            reason: Some(auto_probe_reason(&probe_errors)),
             launch_hint: launch_hint(cdp_port),
             target_binding_status: "unavailable".to_string(),
-            target_binding_note: "No CDP endpoint was available to bind to the observed app.".to_string(),
+            target_binding_note: "No CDP endpoint was available to bind to the observed app."
+                .to_string(),
             target_discovery_error: None,
             targets: Vec::new(),
         })
+    }
+}
+
+fn auto_probe_reason(probe_errors: &[String]) -> String {
+    if probe_errors.is_empty() {
+        return "No Chrome DevTools Protocol /json/version endpoint responded on the probed localhost port(s).".to_string();
+    }
+    let mut reason = format!(
+        "No Chrome DevTools Protocol /json/version endpoint responded on the probed localhost port(s). Probe errors: {}",
+        probe_errors
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    if probe_errors.len() > 3 {
+        reason.push_str(&format!("; plus {} more", probe_errors.len() - 3));
+    }
+    reason
+}
+
+fn unavailable_cdp(cdp_port: Option<u16>, reason: String) -> CdpAttachInfo {
+    CdpAttachInfo {
+        status: "unavailable".to_string(),
+        endpoint: None,
+        port: cdp_port,
+        product: None,
+        browser_protocol_version: None,
+        reason: Some(reason),
+        launch_hint: launch_hint(cdp_port),
+        target_binding_status: "unavailable".to_string(),
+        target_binding_note: "No CDP endpoint was available to bind to the observed app."
+            .to_string(),
+        target_discovery_error: None,
+        targets: Vec::new(),
     }
 }
 
@@ -460,11 +525,40 @@ struct ActionResult {
     telemetry_attributes: Value,
 }
 
-fn resolve_target(app: Option<&str>) -> Result<DiscoveredApp> {
+#[derive(Debug, Clone)]
+pub struct DriveAppSelector {
+    pub app: Option<String>,
+    pub session_id: Option<String>,
+    pub instance_id: Option<String>,
+    pub pid: Option<u32>,
+    pub latest: bool,
+    pub active: bool,
+}
+
+fn resolve_target(selector: &DriveAppSelector) -> Result<DiscoveredApp> {
     let mut candidates: Vec<_> = discovery::list_apps()?
         .into_iter()
         .filter(|candidate| candidate.database_readable && candidate.schema_valid)
-        .filter(|candidate| app.is_none_or(|needle| app_matches(candidate, needle)))
+        .filter(|candidate| {
+            selector
+                .app
+                .as_deref()
+                .is_none_or(|needle| app_matches(candidate, needle))
+        })
+        .filter(|candidate| {
+            selector
+                .session_id
+                .as_deref()
+                .is_none_or(|needle| candidate.session_id.contains(needle))
+        })
+        .filter(|candidate| {
+            selector
+                .instance_id
+                .as_deref()
+                .is_none_or(|needle| candidate.instance_id.contains(needle))
+        })
+        .filter(|candidate| selector.pid.is_none_or(|pid| candidate.pid == pid))
+        .filter(|candidate| !selector.active || candidate.status == DiscoveryStatus::Active)
         .collect();
 
     candidates.sort_by(|left, right| {
@@ -475,6 +569,15 @@ fn resolve_target(app: Option<&str>) -> Result<DiscoveredApp> {
             .then_with(|| right.last_heartbeat_at.cmp(&left.last_heartbeat_at))
     });
 
+    if selector.latest {
+        return candidates.into_iter().next().ok_or_else(|| {
+            anyhow!(
+                "No discoverable Auditaur app matched {}.",
+                selector_description(selector)
+            )
+        });
+    }
+
     let active_count = candidates
         .iter()
         .filter(|candidate| candidate.status == DiscoveryStatus::Active)
@@ -483,7 +586,7 @@ fn resolve_target(app: Option<&str>) -> Result<DiscoveredApp> {
     match candidates.as_slice() {
         [] => Err(anyhow!(
             "No discoverable Auditaur app matched {}. Run `auditaur apps` to inspect available sessions.",
-            app.map(|value| format!("`{value}`")).unwrap_or_else(|| "the active app".to_string())
+            selector_description(selector)
         )),
         [candidate] => Ok(candidate.clone()),
         _ if active_count == 1 => Ok(candidates
@@ -491,9 +594,54 @@ fn resolve_target(app: Option<&str>) -> Result<DiscoveredApp> {
             .find(|candidate| candidate.status == DiscoveryStatus::Active)
             .expect("counted one active candidate")),
         _ => Err(anyhow!(
-            "Multiple Auditaur apps matched. Run `auditaur apps` and pass a more specific `--app <name>`."
+            "Multiple Auditaur apps matched {}. Pass --session-id, --instance-id, --pid, --latest, or --active.\n{}",
+            selector_description(selector),
+            format_candidate_hints(&candidates)
         )),
     }
+}
+
+fn selector_description(selector: &DriveAppSelector) -> String {
+    let mut parts = Vec::new();
+    if let Some(app) = &selector.app {
+        parts.push(format!("app `{app}`"));
+    }
+    if let Some(session_id) = &selector.session_id {
+        parts.push(format!("session id `{session_id}`"));
+    }
+    if let Some(instance_id) = &selector.instance_id {
+        parts.push(format!("instance id `{instance_id}`"));
+    }
+    if let Some(pid) = selector.pid {
+        parts.push(format!("pid `{pid}`"));
+    }
+    if selector.latest {
+        parts.push("--latest".to_string());
+    }
+    if selector.active {
+        parts.push("--active".to_string());
+    }
+    if parts.is_empty() {
+        "the active app".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn format_candidate_hints(candidates: &[DiscoveredApp]) -> String {
+    let mut lines = vec!["Top matches:".to_string()];
+    for candidate in candidates.iter().take(5) {
+        lines.push(format!(
+            "- service={} session={} instance={} pid={} status={:?} db={}",
+            candidate.service_name,
+            candidate.session_id,
+            candidate.instance_id,
+            candidate.pid,
+            candidate.status,
+            candidate.database_path
+        ));
+    }
+    lines.join("\n")
 }
 
 fn app_matches(candidate: &DiscoveredApp, needle: &str) -> bool {
@@ -510,7 +658,7 @@ fn app_matches(candidate: &DiscoveredApp, needle: &str) -> bool {
 }
 
 fn list_cdp_targets(port: u16) -> Result<Vec<CdpTarget>> {
-    let Some(value) = get_cdp_json(port, "/json/list")? else {
+    let Some(value) = get_cdp_json(port, "/json/list", CDP_EXPLICIT_PROBE_TIMEOUT)? else {
         return Ok(Vec::new());
     };
     serde_json::from_value(value).context("CDP /json/list did not return a target array")
@@ -639,62 +787,50 @@ fn target_binding_summary(targets: &[CdpTarget]) -> (String, String) {
     }
 }
 
-fn get_cdp_json(port: u16, path: &str) -> Result<Option<Value>> {
-    let response = http_get(port, path)?;
+fn get_cdp_json(port: u16, path: &str, timeout: Duration) -> Result<Option<Value>> {
+    let response = http_get(port, path, timeout)?;
     let Some(response) = response else {
         return Ok(None);
     };
     if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        return Ok(None);
+        let status = response.lines().next().unwrap_or("<missing status line>");
+        return Err(anyhow!("unexpected HTTP status `{status}`"));
     }
     let Some((_, body)) = response.split_once("\r\n\r\n") else {
-        return Ok(None);
+        return Err(anyhow!(
+            "HTTP response did not include a header/body separator"
+        ));
     };
-    Ok(serde_json::from_str(body).ok())
+    Ok(Some(serde_json::from_str(body).with_context(|| {
+        format!("CDP endpoint {path} returned invalid JSON")
+    })?))
 }
 
-fn http_get(port: u16, path: &str) -> Result<Option<String>> {
+fn http_get(port: u16, path: &str, timeout: Duration) -> Result<Option<String>> {
     let mut addrs = (CDP_HOST, port)
         .to_socket_addrs()
         .with_context(|| format!("could not resolve {CDP_HOST}:{port}"))?;
     let Some(addr) = addrs.next() else {
         return Ok(None);
     };
-    let timeout = Duration::from_millis(150);
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
-        return Ok(None);
-    };
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)
+        .with_context(|| format!("could not connect to {CDP_HOST}:{port} within {timeout:?}"))?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
-    if let Err(error) = stream.write_all(
-        format!("GET {path} HTTP/1.1\r\nHost: {CDP_HOST}:{port}\r\nConnection: close\r\n\r\n")
-            .as_bytes(),
-    ) {
-        if is_probe_io_miss(&error) {
-            return Ok(None);
-        }
-        return Err(error.into());
-    }
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: {CDP_HOST}:{port}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .with_context(|| {
+            format!("could not write HTTP probe request to {CDP_HOST}:{port}{path}")
+        })?;
 
     let mut response = String::new();
-    if let Err(error) = stream.read_to_string(&mut response) {
-        if is_probe_io_miss(&error) {
-            return Ok(None);
-        }
-        return Err(error.into());
-    }
+    stream.read_to_string(&mut response).with_context(|| {
+        format!("could not read HTTP probe response from {CDP_HOST}:{port}{path}")
+    })?;
     Ok(Some(response))
-}
-
-fn is_probe_io_miss(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        ErrorKind::WouldBlock
-            | ErrorKind::TimedOut
-            | ErrorKind::ConnectionAborted
-            | ErrorKind::ConnectionReset
-            | ErrorKind::UnexpectedEof
-    )
 }
 
 fn select_cdp_target<'a>(
@@ -765,7 +901,7 @@ fn is_driveable_target(target: &CdpTarget) -> bool {
 }
 
 fn resolve_drive_target(
-    app: Option<String>,
+    selector: DriveAppSelector,
     cdp_port: Option<u16>,
     target_id: Option<&str>,
     action: &str,
@@ -775,7 +911,7 @@ fn resolve_drive_target(
             "`auditaur drive {action}` requires --cdp-port <port>. Run `auditaur drive inspect` first, then pass the WebView remote-debugging port explicitly."
         ));
     }
-    let app = resolve_target(app.as_deref())?;
+    let app = resolve_target(&selector)?;
     let attach = DriveAttachInfo::discover(app, cdp_port)?;
     let cdp_target = select_cdp_target(&attach.cdp.targets, target_id)?.clone();
     let websocket_url = cdp_target.web_socket_debugger_url.clone().ok_or_else(|| {
@@ -819,14 +955,14 @@ fn evaluate_expression(websocket_url: &str, expression: &str, timeout: Duration)
 }
 
 fn run_dom_action(
-    app: Option<String>,
+    selector: DriveAppSelector,
     cdp_port: Option<u16>,
     options: &SelectorActionOptions,
     action: &str,
     expression: String,
 ) -> Result<()> {
     let (attach, target, websocket_url) =
-        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), action)?;
+        resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), action)?;
     let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
     let payload = value
         .get("value")
@@ -1279,7 +1415,7 @@ fn print_action_result(result: &ActionResult) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ws_endpoint, selector_expression};
+    use super::{auto_probe_reason, parse_ws_endpoint, selector_expression};
 
     #[test]
     fn selector_expression_escapes_css_selector_as_javascript_string() {
@@ -1295,5 +1431,19 @@ mod tests {
             parse_ws_endpoint("ws://127.0.0.1:9222/devtools/page/1").unwrap(),
             ("127.0.0.1".to_string(), 9222)
         );
+    }
+
+    #[test]
+    fn auto_probe_reason_summarizes_multiple_port_failures() {
+        let reason = auto_probe_reason(&[
+            "port 9222 refused".to_string(),
+            "port 9223 timed out".to_string(),
+            "port 9224 invalid JSON".to_string(),
+            "port 9225 refused".to_string(),
+        ]);
+        assert!(reason.contains("port 9222 refused"));
+        assert!(reason.contains("port 9223 timed out"));
+        assert!(reason.contains("port 9224 invalid JSON"));
+        assert!(reason.contains("plus 1 more"));
     }
 }

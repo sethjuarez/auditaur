@@ -503,6 +503,129 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
 }
 
 #[test]
+fn drive_resolves_explicit_session_id_when_app_name_is_ambiguous() {
+    let temp = TempDir::new().unwrap();
+    let first_db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-first")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(first_db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&first_db_path));
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-first".to_string(),
+            session_id: "session-first".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 41,
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            database_path: first_db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2000-01-01T00:00:00Z".to_string(),
+        },
+    );
+    let second_db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-second")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(second_db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&second_db_path));
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-second".to_string(),
+            session_id: "session-second".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:01:00Z".to_string(),
+            database_path: second_db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2000-01-01T00:00:00Z".to_string(),
+        },
+    );
+
+    let ambiguous =
+        run_failure_with_env(["drive", "--app", "fixture"], temp.path().to_str().unwrap());
+    assert!(ambiguous.contains("Multiple Auditaur apps matched"));
+    assert!(ambiguous.contains("--session-id"));
+    assert!(ambiguous.contains("session-first"));
+    assert!(ambiguous.contains("session-second"));
+
+    let selected = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--session-id",
+            "second",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    assert_eq!(selected["sessionId"], "session-second");
+    assert_eq!(selected["pid"], 42);
+}
+
+#[test]
+fn drive_cdp_probe_waits_for_realistic_local_endpoint_latency() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-delayed-cdp");
+    let (port, server) = start_fake_cdp_delayed_endpoint();
+    let port_arg = port.to_string();
+
+    let attach = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(attach["cdp"]["status"], "available");
+    assert_eq!(attach["cdp"]["targets"][0]["id"], "target-fixture");
+}
+
+#[test]
+fn drive_cdp_probe_reports_explicit_endpoint_errors() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-bad-cdp");
+    let (port, server) = start_fake_cdp_invalid_version_endpoint();
+    let port_arg = port.to_string();
+
+    let attach = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(attach["cdp"]["status"], "unavailable");
+    assert!(attach["cdp"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("invalid JSON"));
+}
+
+#[test]
 fn drive_wait_requires_explicit_cdp_port() {
     let failure = run_failure(["drive", "wait", "--selector", "[data-testid=ready]"]);
     assert!(failure.contains("requires --cdp-port"));
@@ -772,6 +895,33 @@ fn drive_exists_and_text_report_dom_values() {
     assert_eq!(text["payload"]["text"], "Ready");
     assert_eq!(text["action"], "text");
     assert_eq!(text["mutatesApp"], false);
+}
+
+#[test]
+fn drive_action_accepts_json_after_subcommand() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-subcommand-json");
+    let (port, server) = start_fake_cdp_runtime_value_endpoint(json!(true));
+    let port_arg = port.to_string();
+
+    let exists = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "exists",
+            "--selector",
+            "[data-testid=ready]",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(exists["ok"], true);
+    assert_eq!(exists["payload"]["exists"], true);
 }
 
 #[test]
@@ -1213,6 +1363,33 @@ fn start_fake_cdp_endpoint() -> (u16, thread::JoinHandle<()>) {
     (port, handle)
 }
 
+fn start_fake_cdp_delayed_endpoint() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json_after_delay(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+            std::time::Duration::from_millis(300),
+        );
+        respond_http_json_after_delay(
+            &listener,
+            &target_list_json(port),
+            std::time::Duration::from_millis(300),
+        );
+    });
+    (port, handle)
+}
+
+fn start_fake_cdp_invalid_version_endpoint() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(&listener, "{not-json");
+    });
+    (port, handle)
+}
+
 fn start_fake_cdp_wait_endpoint() -> (u16, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1487,9 +1664,14 @@ fn target_list_json(port: u16) -> String {
 }
 
 fn respond_http_json(listener: &TcpListener, body: &str) {
+    respond_http_json_after_delay(listener, body, std::time::Duration::ZERO);
+}
+
+fn respond_http_json_after_delay(listener: &TcpListener, body: &str, delay: std::time::Duration) {
     let (mut stream, _) = listener.accept().unwrap();
     let mut request = [0_u8; 512];
     let _ = stream.read(&mut request).unwrap();
+    thread::sleep(delay);
     write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
