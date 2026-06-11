@@ -826,11 +826,54 @@ fn http_get(port: u16, path: &str, timeout: Duration) -> Result<Option<String>> 
             format!("could not write HTTP probe request to {CDP_HOST}:{port}{path}")
         })?;
 
-    let mut response = String::new();
-    stream.read_to_string(&mut response).with_context(|| {
+    let response = read_http_response(&mut stream).with_context(|| {
         format!("could not read HTTP probe response from {CDP_HOST}:{port}{path}")
     })?;
     Ok(Some(response))
+}
+
+fn read_http_response(stream: &mut TcpStream) -> Result<String> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if http_response_complete(&bytes)? {
+            break;
+        }
+    }
+    String::from_utf8(bytes).context("HTTP probe response was not valid UTF-8")
+}
+
+fn http_response_complete(bytes: &[u8]) -> Result<bool> {
+    let Some(header_end) = find_header_end(bytes) else {
+        return Ok(false);
+    };
+    let headers = std::str::from_utf8(&bytes[..header_end])
+        .context("HTTP probe response headers were not valid UTF-8")?;
+    let Some(content_length) = content_length(headers)? else {
+        return Ok(false);
+    };
+    Ok(bytes.len() >= header_end + 4 + content_length)
+}
+
+fn find_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn content_length(headers: &str) -> Result<Option<usize>> {
+    for line in headers.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("content-length") {
+            return Ok(Some(value.trim().parse()?));
+        }
+    }
+    Ok(None)
 }
 
 fn select_cdp_target<'a>(

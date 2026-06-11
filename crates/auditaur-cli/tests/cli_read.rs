@@ -599,6 +599,30 @@ fn drive_cdp_probe_waits_for_realistic_local_endpoint_latency() {
 }
 
 #[test]
+fn drive_cdp_probe_reads_content_length_without_waiting_for_socket_close() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-keepalive-cdp");
+    let (port, server) = start_fake_cdp_keep_alive_endpoint();
+    let port_arg = port.to_string();
+
+    let attach = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(attach["cdp"]["status"], "available");
+    assert_eq!(attach["cdp"]["targets"][0]["id"], "target-fixture");
+}
+
+#[test]
 fn drive_cdp_probe_reports_explicit_endpoint_errors() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-bad-cdp");
@@ -1381,6 +1405,19 @@ fn start_fake_cdp_delayed_endpoint() -> (u16, thread::JoinHandle<()>) {
     (port, handle)
 }
 
+fn start_fake_cdp_keep_alive_endpoint() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json_keep_alive(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json_keep_alive(&listener, &target_list_json(port));
+    });
+    (port, handle)
+}
+
 fn start_fake_cdp_invalid_version_endpoint() -> (u16, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1665,6 +1702,23 @@ fn target_list_json(port: u16) -> String {
 
 fn respond_http_json(listener: &TcpListener, body: &str) {
     respond_http_json_after_delay(listener, body, std::time::Duration::ZERO);
+}
+
+fn respond_http_json_keep_alive(listener: &TcpListener, body: &str) {
+    let (mut stream, _) = listener.accept().unwrap();
+    let mut request = [0_u8; 512];
+    let _ = stream.read(&mut request).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .unwrap();
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_secs(3));
+        drop(stream);
+    });
 }
 
 fn respond_http_json_after_delay(listener: &TcpListener, body: &str, delay: std::time::Duration) {
