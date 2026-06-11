@@ -485,12 +485,21 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
     assert_eq!(attach["cdp"]["port"], port);
     assert_eq!(attach["cdp"]["product"], "Chrome/125.0.0.0");
     assert_eq!(attach["cdp"]["targetBindingStatus"], "matched");
+    assert_eq!(
+        attach["cdp"]["targetOwnershipStatus"],
+        "matched_window_telemetry"
+    );
     assert_eq!(attach["cdp"]["targets"][0]["id"], "target-fixture");
     assert_eq!(
         attach["cdp"]["targets"][0]["bindingStatus"],
         "matched_window_title"
     );
     assert_eq!(attach["cdp"]["targets"][0]["windowLabel"], "main");
+    assert_eq!(
+        attach["cdp"]["targets"][0]["ownershipStatus"],
+        "matched_window_telemetry"
+    );
+    assert_eq!(attach["cdp"]["targets"][0]["ownershipProven"], false);
     assert!(attach["futureActions"]
         .as_array()
         .unwrap()
@@ -500,6 +509,44 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
         .as_array()
         .unwrap()
         .contains(&json!("auditaur.test_id")));
+}
+
+#[test]
+fn drive_inspect_reports_probable_unproven_target_ownership_guidance() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-probable-ownership");
+    let (port, server) = start_fake_cdp_probable_endpoint();
+    let port_arg = port.to_string();
+
+    let attach = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "inspect",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(attach["cdp"]["targetBindingStatus"], "probable");
+    assert_eq!(attach["cdp"]["targetOwnershipStatus"], "probable_unproven");
+    assert!(attach["cdp"]["targetOwnershipNote"]
+        .as_str()
+        .unwrap()
+        .contains("--allow-probable-target"));
+    assert_eq!(
+        attach["cdp"]["targets"][0]["ownershipProof"],
+        "single_window_single_target"
+    );
+    assert_eq!(attach["cdp"]["targets"][0]["ownershipProven"], false);
+    assert!(attach["cdp"]["targets"][0]["ownershipGuidance"]
+        .as_str()
+        .unwrap()
+        .contains("Mutating actions require --allow-probable-target"));
 }
 
 #[test]
@@ -949,6 +996,34 @@ fn drive_action_accepts_json_after_subcommand() {
 }
 
 #[test]
+fn drive_read_action_allows_probable_target_without_mutation_opt_in() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-probable-read");
+    let (port, server) = start_fake_cdp_probable_runtime_value_endpoint(json!(true));
+    let port_arg = port.to_string();
+
+    let exists = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "exists",
+            "--selector",
+            "[data-testid=ready]",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(exists["ok"], true);
+    assert_eq!(exists["targetOwnershipStatus"], "probable_unproven");
+    assert_eq!(exists["ownershipProven"], false);
+}
+
+#[test]
 fn drive_read_actions_report_not_found_as_json_failure() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-read-failures");
@@ -1082,6 +1157,96 @@ fn drive_click_fill_and_press_report_action_telemetry() {
     assert_eq!(press["ok"], true);
     assert_eq!(press["action"], "press");
     assert_eq!(press["selector"], "<active-element>");
+}
+
+#[test]
+fn drive_mutating_action_requires_opt_in_for_probable_target() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-probable-mutation-blocked");
+    let (port, server) = start_fake_cdp_probable_endpoint();
+    let port_arg = port.to_string();
+
+    let failure = run_failure_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "click",
+            "--selector",
+            "button.save",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert!(failure.contains("probable but unproven CDP target"));
+    assert!(failure.contains("--allow-probable-target"));
+}
+
+#[test]
+fn drive_mutating_action_requires_opt_in_for_unverified_target() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture_without_windows(temp.path(), "instance-drive-unverified-mutation-blocked");
+    let (port, server) = start_fake_cdp_probable_endpoint();
+    let port_arg = port.to_string();
+
+    let failure = run_failure_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "click",
+            "--selector",
+            "button.save",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert!(failure.contains("target without matched ownership evidence"));
+    assert!(failure.contains("--allow-probable-target"));
+}
+
+#[test]
+fn drive_mutating_action_can_opt_into_probable_target() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-probable-mutation-allowed");
+    let (port, server) = start_fake_cdp_probable_runtime_value_endpoint(json!({
+        "ok": true,
+        "matched": true
+    }));
+    let port_arg = port.to_string();
+
+    let click = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "click",
+            "--selector",
+            "button.save",
+            "--allow-probable-target",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(click["ok"], true);
+    assert_eq!(click["targetOwnershipStatus"], "probable_unproven");
+    assert_eq!(click["ownershipProven"], false);
+    assert_eq!(
+        click["telemetryAttributes"]["auditaur.driver.target_ownership_status"],
+        "probable_unproven"
+    );
 }
 
 #[test]
@@ -1363,6 +1528,32 @@ fn write_drive_fixture(root: &std::path::Path, instance_id: &str) -> PathBuf {
     db_path
 }
 
+fn write_drive_fixture_without_windows(root: &std::path::Path, instance_id: &str) -> PathBuf {
+    let db_path = root
+        .join("sessions")
+        .join("session-fixture")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_without_windows_at(&db_path));
+    write_discovery_file(
+        root,
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: instance_id.to_string(),
+            session_id: "session-fixture".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            database_path: db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+        },
+    );
+    db_path
+}
+
 fn expected_capabilities() -> Vec<String> {
     vec![
         "logs".to_string(),
@@ -1383,6 +1574,19 @@ fn start_fake_cdp_endpoint() -> (u16, thread::JoinHandle<()>) {
             r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
         );
         respond_http_json(&listener, &target_list_json(port));
+    });
+    (port, handle)
+}
+
+fn start_fake_cdp_probable_endpoint() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &probable_target_list_json(port));
     });
     (port, handle)
 }
@@ -1513,6 +1717,20 @@ fn start_fake_cdp_runtime_value_endpoint(value: Value) -> (u16, thread::JoinHand
     (port, handle)
 }
 
+fn start_fake_cdp_probable_runtime_value_endpoint(value: Value) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &probable_target_list_json(port));
+        respond_websocket_runtime_value(&listener, value);
+    });
+    (port, handle)
+}
+
 fn start_fake_cdp_screenshot_endpoint(data: &'static str) -> (u16, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1551,6 +1769,39 @@ fn start_fake_cdp_screenshot_endpoint(data: &'static str) -> (u16, thread::JoinH
         }
     });
     (port, handle)
+}
+
+fn respond_websocket_runtime_value(listener: &TcpListener, value: Value) {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap();
+        let response = match method {
+            "Runtime.enable" => json!({ "id": id, "result": {} }),
+            "Runtime.evaluate" => json!({
+                "id": id,
+                "result": {
+                    "result": {
+                        "type": cdp_runtime_type(&value),
+                        "value": value
+                    }
+                }
+            }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Runtime.evaluate" {
+            break;
+        }
+    }
 }
 
 fn cdp_runtime_type(value: &Value) -> &'static str {
@@ -1695,6 +1946,19 @@ fn target_list_json(port: u16) -> String {
             "title": "Fixture",
             "url": "tauri://localhost/",
             "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/page/target-fixture")
+        }
+    ])
+    .to_string()
+}
+
+fn probable_target_list_json(port: u16) -> String {
+    json!([
+        {
+            "id": "target-probable",
+            "type": "page",
+            "title": "Auditaur Drive Test",
+            "url": "http://127.0.0.1/driver-test",
+            "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/page/target-probable")
         }
     ])
     .to_string()
@@ -1906,6 +2170,28 @@ fn create_fixture_database_at(path: &std::path::Path) -> SqliteStore {
             height: Some(600.0),
             scale_factor: Some(1.0),
             attributes: json!({}),
+        })
+        .unwrap();
+
+    store
+}
+
+fn create_fixture_database_without_windows_at(path: &std::path::Path) -> SqliteStore {
+    let store = SqliteStore::open(path).unwrap();
+    store.migrate().unwrap();
+
+    store
+        .create_session(&Session {
+            id: "session-fixture".to_string(),
+            session_name: Some("fixture".to_string()),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: Some(42),
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            ended_at: None,
+            schema_version: SQLITE_SCHEMA_VERSION,
+            auditaur_version: Some("0.1.0".to_string()),
         })
         .unwrap();
 

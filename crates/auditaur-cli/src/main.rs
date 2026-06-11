@@ -361,6 +361,8 @@ enum DriveCommand {
         #[arg(long)]
         target: Option<String>,
         #[arg(long)]
+        allow_probable_target: bool,
+        #[arg(long)]
         test_id: Option<String>,
         #[arg(long)]
         step_id: Option<String>,
@@ -373,6 +375,8 @@ enum DriveCommand {
         #[arg(long)]
         target: Option<String>,
         #[arg(long)]
+        allow_probable_target: bool,
+        #[arg(long)]
         test_id: Option<String>,
         #[arg(long)]
         step_id: Option<String>,
@@ -384,6 +388,8 @@ enum DriveCommand {
         selector: Option<String>,
         #[arg(long)]
         target: Option<String>,
+        #[arg(long)]
+        allow_probable_target: bool,
         #[arg(long)]
         test_id: Option<String>,
         #[arg(long)]
@@ -448,6 +454,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
+                        allow_probable_target: false,
                         json: args.json,
                     },
                 )
@@ -467,6 +474,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
+                        allow_probable_target: false,
                         json: args.json,
                     },
                 )
@@ -493,6 +501,7 @@ fn main() -> Result<()> {
             Some(DriveCommand::Click {
                 selector,
                 target,
+                allow_probable_target,
                 test_id,
                 step_id,
             }) => {
@@ -505,6 +514,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
+                        allow_probable_target,
                         json: args.json,
                     },
                 )
@@ -513,6 +523,7 @@ fn main() -> Result<()> {
                 selector,
                 value,
                 target,
+                allow_probable_target,
                 test_id,
                 step_id,
             }) => {
@@ -526,6 +537,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
+                        allow_probable_target,
                         json: args.json,
                     },
                 )
@@ -534,6 +546,7 @@ fn main() -> Result<()> {
                 key,
                 selector,
                 target,
+                allow_probable_target,
                 test_id,
                 step_id,
             }) => {
@@ -547,6 +560,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
+                        allow_probable_target,
                         json: args.json,
                     },
                 )

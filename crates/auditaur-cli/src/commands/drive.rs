@@ -169,6 +169,7 @@ pub fn fill(selector: DriveAppSelector, cdp_port: Option<u16>, options: FillOpti
         target_id: options.target_id,
         test_id: options.test_id,
         step_id: options.step_id,
+        allow_probable_target: options.allow_probable_target,
         json: options.json,
     };
     run_dom_action(selector, cdp_port, &selector_options, "fill", expression)
@@ -194,6 +195,7 @@ pub fn press(
         target_id: options.target_id,
         test_id: options.test_id,
         step_id: options.step_id,
+        allow_probable_target: options.allow_probable_target,
         json: options.json,
     };
     run_dom_action(selector, cdp_port, &selector_options, "press", expression)
@@ -259,6 +261,7 @@ pub struct SelectorActionOptions {
     pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
+    pub allow_probable_target: bool,
     pub json: bool,
 }
 
@@ -269,6 +272,7 @@ pub struct FillOptions {
     pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
+    pub allow_probable_target: bool,
     pub json: bool,
 }
 
@@ -279,6 +283,7 @@ pub struct PressOptions {
     pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
+    pub allow_probable_target: bool,
     pub json: bool,
 }
 
@@ -349,6 +354,8 @@ struct CdpAttachInfo {
     launch_hint: String,
     target_binding_status: String,
     target_binding_note: String,
+    target_ownership_status: String,
+    target_ownership_note: String,
     target_discovery_error: Option<String>,
     targets: Vec<CdpTarget>,
 }
@@ -386,6 +393,8 @@ impl CdpAttachInfo {
                 Err(error) => (Vec::new(), Some(error.to_string())),
             };
             let (target_binding_status, target_binding_note) = target_binding_summary(&targets);
+            let (target_ownership_status, target_ownership_note) =
+                target_ownership_summary(&targets);
             return Ok(Self {
                 status: "available".to_string(),
                 endpoint: Some(format!("http://{CDP_HOST}:{port}")),
@@ -397,6 +406,8 @@ impl CdpAttachInfo {
                 launch_hint: launch_hint(cdp_port),
                 target_binding_status,
                 target_binding_note,
+                target_ownership_status,
+                target_ownership_note,
                 target_discovery_error,
                 targets,
             });
@@ -413,6 +424,8 @@ impl CdpAttachInfo {
             target_binding_status: "unavailable".to_string(),
             target_binding_note: "No CDP endpoint was available to bind to the observed app."
                 .to_string(),
+            target_ownership_status: "unavailable".to_string(),
+            target_ownership_note: "No CDP endpoint was available to prove ownership.".to_string(),
             target_discovery_error: None,
             targets: Vec::new(),
         })
@@ -450,6 +463,8 @@ fn unavailable_cdp(cdp_port: Option<u16>, reason: String) -> CdpAttachInfo {
         target_binding_status: "unavailable".to_string(),
         target_binding_note: "No CDP endpoint was available to bind to the observed app."
             .to_string(),
+        target_ownership_status: "unavailable".to_string(),
+        target_ownership_note: "No CDP endpoint was available to prove ownership.".to_string(),
         target_discovery_error: None,
         targets: Vec::new(),
     }
@@ -473,6 +488,14 @@ struct CdpTarget {
     window_label: Option<String>,
     #[serde(default)]
     webview_label: Option<String>,
+    #[serde(default)]
+    ownership_status: String,
+    #[serde(default)]
+    ownership_proof: Option<String>,
+    #[serde(default)]
+    ownership_proven: bool,
+    #[serde(default)]
+    ownership_guidance: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -500,6 +523,9 @@ struct WaitResult {
     target_title: Option<String>,
     target_url: Option<String>,
     window_label: Option<String>,
+    target_binding_status: String,
+    target_ownership_status: String,
+    ownership_proven: bool,
     test_id: Option<String>,
     step_id: Option<String>,
     telemetry_attributes: Value,
@@ -518,6 +544,9 @@ struct ActionResult {
     target_title: Option<String>,
     target_url: Option<String>,
     window_label: Option<String>,
+    target_binding_status: String,
+    target_ownership_status: String,
+    ownership_proven: bool,
     mutates_app: bool,
     payload: Value,
     test_id: Option<String>,
@@ -680,6 +709,7 @@ fn bind_targets_to_windows(mut targets: Vec<CdpTarget>, app: &DiscoveredApp) -> 
                 target.binding_reason = Some(format!(
                     "Could not read observed Tauri window telemetry for binding: {error}"
                 ));
+                mark_unverified_ownership(target);
             }
             return targets;
         }
@@ -708,6 +738,10 @@ fn bind_target_to_windows(
         ));
         target.window_label = Some(window.window_label.clone());
         target.webview_label = window.webview_label.clone();
+        target.ownership_status = "matched_window_telemetry".to_string();
+        target.ownership_proof = Some("window_title".to_string());
+        target.ownership_proven = false;
+        target.ownership_guidance = Some("CDP target title matched observed Auditaur window telemetry, but Auditaur has not independently proven that the CDP endpoint belongs to the observed process/session.".to_string());
         return;
     }
 
@@ -719,6 +753,10 @@ fn bind_target_to_windows(
         ));
         target.window_label = Some(window.window_label.clone());
         target.webview_label = window.webview_label.clone();
+        target.ownership_status = "matched_window_telemetry".to_string();
+        target.ownership_proof = Some("window_url".to_string());
+        target.ownership_proven = false;
+        target.ownership_guidance = Some("CDP target URL matched observed Auditaur window telemetry, but Auditaur has not independently proven that the CDP endpoint belongs to the observed process/session.".to_string());
         return;
     }
 
@@ -730,12 +768,26 @@ fn bind_target_to_windows(
         ));
         target.window_label = Some(windows[0].window_label.clone());
         target.webview_label = windows[0].webview_label.clone();
+        target.ownership_status = "probable_unproven".to_string();
+        target.ownership_proof = Some("single_window_single_target".to_string());
+        target.ownership_proven = false;
+        target.ownership_guidance = Some("Only one observed window and one driveable CDP target were present, so this is probable but unproven. Mutating actions require --allow-probable-target.".to_string());
         return;
     }
 
     target.binding_status = "unverified".to_string();
     target.binding_reason =
         Some("No observed Tauri window title or URL matched this CDP target.".to_string());
+    mark_unverified_ownership(target);
+}
+
+fn mark_unverified_ownership(target: &mut CdpTarget) {
+    target.ownership_status = "unverified".to_string();
+    target.ownership_proof = None;
+    target.ownership_proven = false;
+    target.ownership_guidance = Some(
+        "Auditaur could not prove this CDP target belongs to the observed app session.".to_string(),
+    );
 }
 
 fn title_matches(target: &CdpTarget, window: &TauriWindowState) -> bool {
@@ -783,6 +835,39 @@ fn target_binding_summary(targets: &[CdpTarget]) -> (String, String) {
         (
             "unverified".to_string(),
             "CDP targets were discovered, but none matched observed Auditaur window title or URL telemetry.".to_string(),
+        )
+    }
+}
+
+fn target_ownership_summary(targets: &[CdpTarget]) -> (String, String) {
+    if targets.is_empty() {
+        return (
+            "unavailable".to_string(),
+            "No CDP targets were available to prove ownership.".to_string(),
+        );
+    }
+    let matched = targets
+        .iter()
+        .filter(|target| target.ownership_status == "matched_window_telemetry")
+        .count();
+    let probable = targets
+        .iter()
+        .filter(|target| target.ownership_status == "probable_unproven")
+        .count();
+    if matched > 0 {
+        (
+            "matched_window_telemetry".to_string(),
+            "One or more CDP targets matched observed window telemetry, but endpoint PID/session ownership is not independently proven yet.".to_string(),
+        )
+    } else if probable > 0 {
+        (
+            "probable_unproven".to_string(),
+            "CDP target ownership is probable from single-window/single-target context, not proven. Mutating actions require --allow-probable-target.".to_string(),
+        )
+    } else {
+        (
+            "unverified".to_string(),
+            "No CDP target ownership evidence matched the observed app session.".to_string(),
         )
     }
 }
@@ -1006,6 +1091,7 @@ fn run_dom_action(
 ) -> Result<()> {
     let (attach, target, websocket_url) =
         resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), action)?;
+    require_mutation_allowed(&target, action, options.allow_probable_target)?;
     let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
     let payload = value
         .get("value")
@@ -1034,6 +1120,25 @@ fn run_dom_action(
                 .unwrap_or("unknown error")
         ))
     }
+}
+
+fn require_mutation_allowed(
+    target: &CdpTarget,
+    action: &str,
+    allow_probable_target: bool,
+) -> Result<()> {
+    if target.ownership_status != "matched_window_telemetry" && !allow_probable_target {
+        return Err(anyhow!(
+            "`auditaur drive {action}` selected a {} CDP target (`{}`). Re-run `auditaur drive inspect` to review ownership guidance, pass --target <target-id> if needed, and add --allow-probable-target to acknowledge the target is not PID/session-proven.",
+            if target.ownership_status == "probable_unproven" {
+                "probable but unproven"
+            } else {
+                "target without matched ownership evidence"
+            },
+            target.id,
+        ));
+    }
+    Ok(())
 }
 
 fn wait_for_selector(
@@ -1215,6 +1320,9 @@ fn wait_result(
         target_title: target.title.clone(),
         target_url: target.url.clone(),
         window_label: target.window_label.clone(),
+        target_binding_status: target.binding_status.clone(),
+        target_ownership_status: target.ownership_status.clone(),
+        ownership_proven: target.ownership_proven,
         test_id: options.test_id.clone(),
         step_id: options.step_id.clone(),
         telemetry_attributes: json!({
@@ -1223,6 +1331,9 @@ fn wait_result(
             "auditaur.driver.action": "wait",
             "auditaur.driver.selector": options.selector,
             "auditaur.driver.target_id": target.id,
+            "auditaur.driver.target_binding_status": target.binding_status,
+            "auditaur.driver.target_ownership_status": target.ownership_status,
+            "auditaur.driver.ownership_proven": target.ownership_proven,
             "tauri.window.label": target.window_label,
             "trace_id": null,
             "span_id": null,
@@ -1264,6 +1375,9 @@ fn action_result(
         target_title: target.title.clone(),
         target_url: target.url.clone(),
         window_label: target.window_label.clone(),
+        target_binding_status: target.binding_status.clone(),
+        target_ownership_status: target.ownership_status.clone(),
+        ownership_proven: target.ownership_proven,
         mutates_app,
         payload,
         test_id: test_id.clone(),
@@ -1274,6 +1388,9 @@ fn action_result(
             "auditaur.driver.action": action,
             "auditaur.driver.selector": selector,
             "auditaur.driver.target_id": target.id,
+            "auditaur.driver.target_binding_status": target.binding_status,
+            "auditaur.driver.target_ownership_status": target.ownership_status,
+            "auditaur.driver.ownership_proven": target.ownership_proven,
             "tauri.window.label": target.window_label,
             "trace_id": null,
             "span_id": null,
@@ -1354,6 +1471,9 @@ fn required_action_telemetry() -> Vec<&'static str> {
         "auditaur.driver.action",
         "auditaur.driver.selector",
         "auditaur.driver.target_id",
+        "auditaur.driver.target_binding_status",
+        "auditaur.driver.target_ownership_status",
+        "auditaur.driver.ownership_proven",
         "tauri.window.label",
         "trace_id",
         "span_id",
@@ -1389,6 +1509,11 @@ fn print_attach_info(info: &DriveAttachInfo, show_targets: bool) -> Result<()> {
         table_cell(&info.cdp.target_binding_status, 40),
         table_cell(&info.cdp.target_binding_note, 180)
     );
+    println!(
+        "Target ownership: {} - {}",
+        table_cell(&info.cdp.target_ownership_status, 40),
+        table_cell(&info.cdp.target_ownership_note, 180)
+    );
     if show_targets {
         print_targets(&info.cdp.targets);
     }
@@ -1400,16 +1525,17 @@ fn print_attach_info(info: &DriveAttachInfo, show_targets: bool) -> Result<()> {
 }
 
 fn print_targets(targets: &[CdpTarget]) {
-    println!("TARGET\tTYPE\tTITLE\tURL\tWINDOW\tBINDING\tWEBSOCKET");
+    println!("TARGET\tTYPE\tTITLE\tURL\tWINDOW\tBINDING\tOWNERSHIP\tWEBSOCKET");
     for target in targets {
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             table_cell(&target.id, 80),
             table_cell(target.target_type.as_deref().unwrap_or("-"), 24),
             table_cell(target.title.as_deref().unwrap_or("-"), 80),
             table_cell(target.url.as_deref().unwrap_or("-"), 120),
             table_cell(target.window_label.as_deref().unwrap_or("-"), 80),
             table_cell(&target.binding_status, 40),
+            table_cell(&target.ownership_status, 40),
             if target.web_socket_debugger_url.is_some() {
                 "yes"
             } else {
