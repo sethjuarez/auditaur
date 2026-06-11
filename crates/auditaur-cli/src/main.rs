@@ -4,7 +4,7 @@ pub mod mcp;
 pub mod output;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -37,12 +37,10 @@ enum Command {
         json: bool,
     },
     Drive {
-        #[arg(long)]
-        app: Option<String>,
-        #[arg(long)]
-        cdp_port: Option<u16>,
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        args: DriveArgs,
+        #[command(subcommand)]
+        command: Option<DriveCommand>,
     },
     Sessions {
         #[arg(long)]
@@ -279,6 +277,33 @@ enum DoctorCommand {
     },
 }
 
+#[derive(Debug, Args)]
+struct DriveArgs {
+    #[arg(long)]
+    app: Option<String>,
+    #[arg(long)]
+    cdp_port: Option<u16>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum DriveCommand {
+    Inspect,
+    Wait {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, default_value_t = 5000)]
+        timeout_ms: u64,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -291,11 +316,30 @@ fn main() -> Result<()> {
         },
         Command::Apps { json } => commands::read::apps(json),
         Command::Health { json } => commands::health::run(json),
-        Command::Drive {
-            app,
-            cdp_port,
-            json,
-        } => commands::drive::run(app, cdp_port, json),
+        Command::Drive { args, command } => match command {
+            None => commands::drive::run(args.app, args.cdp_port, args.json),
+            Some(DriveCommand::Inspect) => {
+                commands::drive::inspect(args.app, args.cdp_port, args.json)
+            }
+            Some(DriveCommand::Wait {
+                selector,
+                target,
+                timeout_ms,
+                test_id,
+                step_id,
+            }) => commands::drive::wait(
+                args.app,
+                args.cdp_port,
+                commands::drive::WaitOptions {
+                    selector,
+                    target_id: target,
+                    timeout_ms,
+                    test_id,
+                    step_id,
+                    json: args.json,
+                },
+            ),
+        },
         Command::Sessions { db, json, limit } => commands::read::sessions(&db, json, limit),
         Command::Logs {
             db,
