@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.1.4...auditaur-cli-v0.2.0) - 2026-06-11
+
+### Added
+
+- *(cli)* add agent run observability pivots
+
 ## [0.1.4](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.1.3...auditaur-cli-v0.1.4) - 2026-06-09
 
 ### Other
