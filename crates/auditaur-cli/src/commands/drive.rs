@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use auditaur_core::{model::TauriWindowState, storage::TauriWindowQuery};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tungstenite::{
@@ -105,7 +106,7 @@ struct DriveAttachInfo {
 
 impl DriveAttachInfo {
     fn discover(app: DiscoveredApp, cdp_port: Option<u16>) -> Result<Self> {
-        let cdp = CdpAttachInfo::discover(cdp_port)?;
+        let cdp = CdpAttachInfo::discover(cdp_port, &app)?;
         Ok(Self {
             status: match app.status {
                 DiscoveryStatus::Active => "active".to_string(),
@@ -146,7 +147,7 @@ struct CdpAttachInfo {
 }
 
 impl CdpAttachInfo {
-    fn discover(cdp_port: Option<u16>) -> Result<Self> {
+    fn discover(cdp_port: Option<u16>, app: &DiscoveredApp) -> Result<Self> {
         let ports: Vec<u16> = cdp_port
             .map(|port| vec![port])
             .unwrap_or_else(|| DEFAULT_CDP_PORTS.to_vec());
@@ -156,9 +157,10 @@ impl CdpAttachInfo {
                 continue;
             };
             let (targets, target_discovery_error) = match list_cdp_targets(port) {
-                Ok(targets) => (targets, None),
+                Ok(targets) => (bind_targets_to_windows(targets, app), None),
                 Err(error) => (Vec::new(), Some(error.to_string())),
             };
+            let (target_binding_status, target_binding_note) = target_binding_summary(&targets);
             return Ok(Self {
                 status: "available".to_string(),
                 endpoint: Some(format!("http://{CDP_HOST}:{port}")),
@@ -168,8 +170,8 @@ impl CdpAttachInfo {
                 browser_protocol_version: json_string(&version, "Protocol-Version"),
                 reason: None,
                 launch_hint: launch_hint(cdp_port),
-                target_binding_status: "unverified".to_string(),
-                target_binding_note: "Auditaur can discover localhost CDP targets, but this slice cannot yet prove the endpoint belongs to the observed app PID/session.".to_string(),
+                target_binding_status,
+                target_binding_note,
                 target_discovery_error,
                 targets,
             });
@@ -201,6 +203,14 @@ struct CdpTarget {
     url: Option<String>,
     #[serde(rename = "webSocketDebuggerUrl")]
     web_socket_debugger_url: Option<String>,
+    #[serde(default)]
+    binding_status: String,
+    #[serde(default)]
+    binding_reason: Option<String>,
+    #[serde(default)]
+    window_label: Option<String>,
+    #[serde(default)]
+    webview_label: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -227,6 +237,7 @@ struct WaitResult {
     target_id: String,
     target_title: Option<String>,
     target_url: Option<String>,
+    window_label: Option<String>,
     test_id: Option<String>,
     step_id: Option<String>,
     telemetry_attributes: Value,
@@ -286,6 +297,129 @@ fn list_cdp_targets(port: u16) -> Result<Vec<CdpTarget>> {
         return Ok(Vec::new());
     };
     serde_json::from_value(value).context("CDP /json/list did not return a target array")
+}
+
+fn bind_targets_to_windows(mut targets: Vec<CdpTarget>, app: &DiscoveredApp) -> Vec<CdpTarget> {
+    let windows = match read::open_validated_store(std::path::Path::new(&app.database_path))
+        .and_then(|store| {
+            Ok(store.list_tauri_windows(&TauriWindowQuery {
+                session_id: Some(app.session_id.clone()),
+                latest_only: true,
+                limit: Some(50),
+            })?)
+        }) {
+        Ok(windows) => windows,
+        Err(error) => {
+            for target in &mut targets {
+                target.binding_status = "unverified".to_string();
+                target.binding_reason = Some(format!(
+                    "Could not read observed Tauri window telemetry for binding: {error}"
+                ));
+            }
+            return targets;
+        }
+    };
+    let driveable_target_count = targets
+        .iter()
+        .filter(|target| is_driveable_target(target))
+        .count();
+    let allow_probable_single_window = driveable_target_count == 1 && windows.len() == 1;
+    for target in &mut targets {
+        bind_target_to_windows(target, &windows, allow_probable_single_window);
+    }
+    targets
+}
+
+fn bind_target_to_windows(
+    target: &mut CdpTarget,
+    windows: &[TauriWindowState],
+    allow_probable_single_window: bool,
+) {
+    if let Some(window) = windows.iter().find(|window| title_matches(target, window)) {
+        target.binding_status = "matched_window_title".to_string();
+        target.binding_reason = Some(format!(
+            "CDP target title matched observed Tauri window `{}` title.",
+            window.window_label
+        ));
+        target.window_label = Some(window.window_label.clone());
+        target.webview_label = window.webview_label.clone();
+        return;
+    }
+
+    if let Some(window) = windows.iter().find(|window| url_matches(target, window)) {
+        target.binding_status = "matched_window_url".to_string();
+        target.binding_reason = Some(format!(
+            "CDP target URL matched observed Tauri window `{}` URL.",
+            window.window_label
+        ));
+        target.window_label = Some(window.window_label.clone());
+        target.webview_label = window.webview_label.clone();
+        return;
+    }
+
+    if allow_probable_single_window {
+        target.binding_status = "probable_single_window".to_string();
+        target.binding_reason = Some(format!(
+            "Only one observed Tauri window (`{}`) is available for this session; treat as probable, not proven.",
+            windows[0].window_label
+        ));
+        target.window_label = Some(windows[0].window_label.clone());
+        target.webview_label = windows[0].webview_label.clone();
+        return;
+    }
+
+    target.binding_status = "unverified".to_string();
+    target.binding_reason =
+        Some("No observed Tauri window title or URL matched this CDP target.".to_string());
+}
+
+fn title_matches(target: &CdpTarget, window: &TauriWindowState) -> bool {
+    normalized(target.title.as_deref())
+        .zip(normalized(window.title.as_deref()))
+        .is_some_and(|(target_title, window_title)| target_title == window_title)
+}
+
+fn url_matches(target: &CdpTarget, window: &TauriWindowState) -> bool {
+    normalized(target.url.as_deref())
+        .zip(normalized(window.url.as_deref()))
+        .is_some_and(|(target_url, window_url)| target_url == window_url)
+}
+
+fn normalized(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    (!value.is_empty()).then(|| value.to_ascii_lowercase())
+}
+
+fn target_binding_summary(targets: &[CdpTarget]) -> (String, String) {
+    let matched = targets
+        .iter()
+        .filter(|target| target.binding_status.starts_with("matched_"))
+        .count();
+    let probable = targets
+        .iter()
+        .filter(|target| target.binding_status == "probable_single_window")
+        .count();
+    if matched > 0 {
+        (
+            "matched".to_string(),
+            format!("{matched} CDP target(s) matched observed Auditaur window telemetry."),
+        )
+    } else if probable > 0 {
+        (
+            "probable".to_string(),
+            format!("{probable} CDP target(s) were associated by single-window session context."),
+        )
+    } else if targets.is_empty() {
+        (
+            "unavailable".to_string(),
+            "No CDP targets were available to bind.".to_string(),
+        )
+    } else {
+        (
+            "unverified".to_string(),
+            "CDP targets were discovered, but none matched observed Auditaur window title or URL telemetry.".to_string(),
+        )
+    }
 }
 
 fn get_cdp_json(port: u16, path: &str) -> Result<Option<Value>> {
@@ -361,15 +495,24 @@ fn select_cdp_target<'a>(
 
     let driveable: Vec<_> = targets
         .iter()
-        .filter(|target| {
-            target.web_socket_debugger_url.is_some()
-                && target
-                    .target_type
-                    .as_deref()
-                    .map(|kind| matches!(kind, "page" | "webview"))
-                    .unwrap_or(true)
-        })
+        .filter(|target| is_driveable_target(target))
         .collect();
+    if driveable.len() > 1 {
+        let bound: Vec<_> = driveable
+            .iter()
+            .copied()
+            .filter(|target| is_bound_target(target))
+            .collect();
+        match bound.as_slice() {
+            [target] => return Ok(target),
+            [] => {}
+            _ => {
+                return Err(anyhow!(
+                    "Multiple bound CDP targets found. Run `auditaur drive inspect` and pass --target <target-id>."
+                ))
+            }
+        }
+    }
     match driveable.as_slice() {
         [target] => Ok(target),
         [] => match targets
@@ -388,6 +531,20 @@ fn select_cdp_target<'a>(
             "Multiple driveable CDP targets found. Run `auditaur drive inspect` and pass --target <target-id>."
         )),
     }
+}
+
+fn is_bound_target(target: &CdpTarget) -> bool {
+    target.binding_status.starts_with("matched_")
+        || target.binding_status == "probable_single_window"
+}
+
+fn is_driveable_target(target: &CdpTarget) -> bool {
+    target.web_socket_debugger_url.is_some()
+        && target
+            .target_type
+            .as_deref()
+            .map(|kind| matches!(kind, "page" | "webview"))
+            .unwrap_or(true)
 }
 
 fn wait_for_selector(
@@ -568,6 +725,7 @@ fn wait_result(
         target_id: target.id.clone(),
         target_title: target.title.clone(),
         target_url: target.url.clone(),
+        window_label: target.window_label.clone(),
         test_id: options.test_id.clone(),
         step_id: options.step_id.clone(),
         telemetry_attributes: json!({
@@ -576,7 +734,7 @@ fn wait_result(
             "auditaur.driver.action": "wait",
             "auditaur.driver.selector": options.selector,
             "auditaur.driver.target_id": target.id,
-            "tauri.window.label": null,
+            "tauri.window.label": target.window_label,
             "trace_id": null,
             "span_id": null,
         }),
@@ -668,6 +826,11 @@ fn print_attach_info(info: &DriveAttachInfo, show_targets: bool) -> Result<()> {
     if let Some(error) = &info.cdp.target_discovery_error {
         println!("Target discovery: {}", table_cell(error, 180));
     }
+    println!(
+        "Target binding: {} - {}",
+        table_cell(&info.cdp.target_binding_status, 40),
+        table_cell(&info.cdp.target_binding_note, 180)
+    );
     if show_targets {
         print_targets(&info.cdp.targets);
     }
@@ -679,14 +842,16 @@ fn print_attach_info(info: &DriveAttachInfo, show_targets: bool) -> Result<()> {
 }
 
 fn print_targets(targets: &[CdpTarget]) {
-    println!("TARGET\tTYPE\tTITLE\tURL\tWEBSOCKET");
+    println!("TARGET\tTYPE\tTITLE\tURL\tWINDOW\tBINDING\tWEBSOCKET");
     for target in targets {
         println!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             table_cell(&target.id, 80),
             table_cell(target.target_type.as_deref().unwrap_or("-"), 24),
             table_cell(target.title.as_deref().unwrap_or("-"), 80),
             table_cell(target.url.as_deref().unwrap_or("-"), 120),
+            table_cell(target.window_label.as_deref().unwrap_or("-"), 80),
+            table_cell(&target.binding_status, 40),
             if target.web_socket_debugger_url.is_some() {
                 "yes"
             } else {

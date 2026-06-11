@@ -449,7 +449,7 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
         DiscoveryFile {
             schema_version: 1,
             instance_id: "instance-drive".to_string(),
-            session_id: "session-drive".to_string(),
+            session_id: "session-fixture".to_string(),
             service_name: "auditaur-fixture".to_string(),
             service_version: Some("0.1.0".to_string()),
             app_identifier: Some("dev.auditaur.fixture".to_string()),
@@ -478,13 +478,18 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
     server.join().unwrap();
     assert_eq!(attach["serviceName"], "auditaur-fixture");
     assert_eq!(attach["pid"], 42);
-    assert_eq!(attach["sessionId"], "session-drive");
+    assert_eq!(attach["sessionId"], "session-fixture");
     assert_eq!(attach["dbPath"], db_path.to_string_lossy().to_string());
     assert_eq!(attach["cdp"]["status"], "available");
     assert_eq!(attach["cdp"]["port"], port);
     assert_eq!(attach["cdp"]["product"], "Chrome/125.0.0.0");
-    assert_eq!(attach["cdp"]["targetBindingStatus"], "unverified");
+    assert_eq!(attach["cdp"]["targetBindingStatus"], "matched");
     assert_eq!(attach["cdp"]["targets"][0]["id"], "target-fixture");
+    assert_eq!(
+        attach["cdp"]["targets"][0]["bindingStatus"],
+        "matched_window_title"
+    );
+    assert_eq!(attach["cdp"]["targets"][0]["windowLabel"], "main");
     assert!(attach["futureActions"]
         .as_array()
         .unwrap()
@@ -517,7 +522,7 @@ fn drive_wait_rejects_ambiguous_cdp_targets_without_target_id() {
         DiscoveryFile {
             schema_version: 1,
             instance_id: "instance-drive-ambiguous".to_string(),
-            session_id: "session-drive-ambiguous".to_string(),
+            session_id: "session-fixture".to_string(),
             service_name: "auditaur-fixture".to_string(),
             service_version: Some("0.1.0".to_string()),
             app_identifier: Some("dev.auditaur.fixture".to_string()),
@@ -564,7 +569,7 @@ fn drive_wait_uses_cdp_runtime_evaluate_without_mutating_observability_store() {
         DiscoveryFile {
             schema_version: 1,
             instance_id: "instance-drive-wait".to_string(),
-            session_id: "session-drive-wait".to_string(),
+            session_id: "session-fixture".to_string(),
             service_name: "auditaur-fixture".to_string(),
             service_version: Some("0.1.0".to_string()),
             app_identifier: Some("dev.auditaur.fixture".to_string()),
@@ -601,13 +606,65 @@ fn drive_wait_uses_cdp_runtime_evaluate_without_mutating_observability_store() {
     assert_eq!(wait["ok"], true);
     assert_eq!(wait["action"], "wait");
     assert_eq!(wait["selector"], "[data-testid=ready]");
-    assert_eq!(wait["sessionId"], "session-drive-wait");
+    assert_eq!(wait["sessionId"], "session-fixture");
     assert_eq!(wait["targetId"], "target-fixture");
+    assert_eq!(wait["windowLabel"], "main");
     assert_eq!(
         wait["telemetryAttributes"]["auditaur.driver.action"],
         "wait"
     );
+    assert_eq!(wait["telemetryAttributes"]["tauri.window.label"], "main");
     assert_eq!(wait["telemetryAttributes"]["auditaur.test_id"], "test-1");
+}
+
+#[test]
+fn drive_wait_auto_selects_single_target_bound_to_observed_window() {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-fixture")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&db_path));
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-drive-bound".to_string(),
+            session_id: "session-fixture".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            database_path: db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+        },
+    );
+    let (port, server) = start_fake_cdp_one_bound_target_endpoint();
+    let port_arg = port.to_string();
+
+    let wait = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "wait",
+            "--selector",
+            "[data-testid=ready]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(wait["ok"], true);
+    assert_eq!(wait["targetId"], "target-fixture");
+    assert_eq!(wait["windowLabel"], "main");
 }
 
 #[test]
@@ -625,7 +682,7 @@ fn drive_wait_timeout_prints_structured_json_and_exits_nonzero() {
         DiscoveryFile {
             schema_version: 1,
             instance_id: "instance-drive-timeout".to_string(),
-            session_id: "session-drive-timeout".to_string(),
+            session_id: "session-fixture".to_string(),
             service_name: "auditaur-fixture".to_string(),
             service_version: Some("0.1.0".to_string()),
             app_identifier: Some("dev.auditaur.fixture".to_string()),
@@ -952,6 +1009,39 @@ fn start_fake_cdp_multi_target_endpoint() -> (u16, thread::JoinHandle<()>) {
     (port, handle)
 }
 
+fn start_fake_cdp_one_bound_target_endpoint() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(
+            &listener,
+            &json!([
+                {
+                    "id": "target-unrelated",
+                    "type": "page",
+                    "title": "Other",
+                    "url": "tauri://localhost/other",
+                    "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/page/other")
+                },
+                {
+                    "id": "target-fixture",
+                    "type": "page",
+                    "title": "Fixture",
+                    "url": "tauri://localhost/",
+                    "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/page/target-fixture")
+                }
+            ])
+            .to_string(),
+        );
+        respond_websocket_evaluate_true(&listener);
+    });
+    (port, handle)
+}
+
 fn start_fake_cdp_timeout_endpoint() -> (u16, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -976,6 +1066,39 @@ fn start_fake_cdp_timeout_endpoint() -> (u16, thread::JoinHandle<()>) {
         thread::sleep(std::time::Duration::from_millis(400));
     });
     (port, handle)
+}
+
+fn respond_websocket_evaluate_true(listener: &TcpListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap();
+        let response = match method {
+            "Runtime.enable" => json!({ "id": id, "result": {} }),
+            "Runtime.evaluate" => json!({
+                "id": id,
+                "result": {
+                    "result": {
+                        "type": "boolean",
+                        "value": true
+                    }
+                }
+            }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Runtime.evaluate" {
+            break;
+        }
+    }
 }
 
 fn target_list_json(port: u16) -> String {
