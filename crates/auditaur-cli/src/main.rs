@@ -36,6 +36,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Drive {
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long)]
+        cdp_port: Option<u16>,
+        #[arg(long)]
+        json: bool,
+    },
     Sessions {
         #[arg(long)]
         db: Option<PathBuf>,
@@ -283,6 +291,11 @@ fn main() -> Result<()> {
         },
         Command::Apps { json } => commands::read::apps(json),
         Command::Health { json } => commands::health::run(json),
+        Command::Drive {
+            app,
+            cdp_port,
+            json,
+        } => commands::drive::run(app, cdp_port, json),
         Command::Sessions { db, json, limit } => commands::read::sessions(&db, json, limit),
         Command::Logs {
             db,

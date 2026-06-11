@@ -7,7 +7,13 @@ use auditaur_core::{
     },
 };
 use serde_json::{json, Value};
-use std::{fs, process::Command};
+use std::{
+    fs,
+    io::{Read, Write},
+    net::TcpListener,
+    process::Command,
+    thread,
+};
 use tempfile::{NamedTempFile, TempDir};
 
 #[test]
@@ -428,6 +434,66 @@ fn discovers_apps_and_reads_default_database() {
 }
 
 #[test]
+fn drive_reports_attach_info_and_cdp_endpoint() {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-fixture")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&db_path));
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: "instance-drive".to_string(),
+            session_id: "session-drive".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            database_path: db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+        },
+    );
+    let (port, server) = start_fake_cdp_endpoint();
+    let port_arg = port.to_string();
+
+    let attach = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(attach["serviceName"], "auditaur-fixture");
+    assert_eq!(attach["pid"], 42);
+    assert_eq!(attach["sessionId"], "session-drive");
+    assert_eq!(attach["dbPath"], db_path.to_string_lossy().to_string());
+    assert_eq!(attach["cdp"]["status"], "available");
+    assert_eq!(attach["cdp"]["port"], port);
+    assert_eq!(attach["cdp"]["product"], "Chrome/125.0.0.0");
+    assert!(attach["futureActions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| action["name"] == "click"));
+    assert!(attach["requiredActionTelemetry"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("auditaur.test_id")));
+}
+
+#[test]
 fn health_ignores_stale_apps_but_fails_unhealthy_active_apps() {
     let stale_temp = TempDir::new().unwrap();
     write_discovery_file(
@@ -615,6 +681,25 @@ fn expected_capabilities() -> Vec<String> {
         "events".to_string(),
         "windows".to_string(),
     ]
+}
+
+fn start_fake_cdp_endpoint() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 512];
+        let _ = stream.read(&mut request).unwrap();
+        let body = r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    (port, handle)
 }
 
 fn run_json_command(command: &mut Command) -> Value {
