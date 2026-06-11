@@ -36,12 +36,14 @@ pub fn related(
     db: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
+    run_id: Option<String>,
     window_label: Option<String>,
     since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
     let db = discovery::resolve_db(db.clone())?;
+    let trace_id = resolve_related_trace(&db, session_id.as_deref(), trace_id, run_id)?;
     let related = load_related(
         &db,
         session_id,
@@ -51,6 +53,22 @@ pub fn related(
         limit,
     )?;
     read::print_json_or_table(json, &related, || print_related(&related))
+}
+
+fn resolve_related_trace(
+    db: &PathBuf,
+    session_id: Option<&str>,
+    trace_id: Option<String>,
+    run_id: Option<String>,
+) -> Result<Option<String>> {
+    if trace_id.is_some() || run_id.is_none() {
+        return Ok(trace_id);
+    }
+    let run_id = run_id.expect("checked above");
+    let store = read::open_validated_store(db)?;
+    crate::commands::agent::find_run_trace_id(&store, session_id, &run_id)?
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("No agent run `{run_id}` found. Try `auditaur agent-runs`."))
 }
 
 pub fn explain(
@@ -96,6 +114,7 @@ pub fn bundle(
         "sessions": sessions,
         "logs": related.logs,
         "spans": related.spans,
+        "spanEvents": related.span_events,
         "frontendErrors": related.frontend_errors,
         "tauriIpcCalls": related.tauri_ipc_calls,
         "tauriEvents": related.tauri_events,
@@ -197,6 +216,12 @@ fn timeline_entries(related: RelatedTelemetry, limit: usize) -> Vec<TimelineEntr
     entries.extend(related.spans.into_iter().map(TimelineEntry::from_span));
     entries.extend(
         related
+            .span_events
+            .into_iter()
+            .map(TimelineEntry::from_span_event),
+    );
+    entries.extend(
+        related
             .frontend_errors
             .into_iter()
             .map(TimelineEntry::from_error),
@@ -265,6 +290,7 @@ fn print_explain(report: &ExplainReport) -> Result<()> {
 fn print_related(related: &RelatedTelemetry) -> Result<()> {
     println!("TYPE\tCOUNT");
     println!("spans\t{}", related.spans.len());
+    println!("span_events\t{}", related.span_events.len());
     println!("logs\t{}", related.logs.len());
     println!("frontend_errors\t{}", related.frontend_errors.len());
     println!("tauri_ipc_calls\t{}", related.tauri_ipc_calls.len());
@@ -336,6 +362,18 @@ impl TimelineEntry {
             span_id: Some(span.span_id),
             status: span.status_code,
             summary: span.name,
+        }
+    }
+
+    fn from_span_event(event: auditaur_core::model::SpanEventRecord) -> Self {
+        Self {
+            timestamp_unix_nanos: event.timestamp_unix_nanos,
+            kind: "span_event".to_string(),
+            session_id: event.session_id,
+            trace_id: Some(event.trace_id),
+            span_id: Some(event.span_id),
+            status: None,
+            summary: event.name,
         }
     }
 

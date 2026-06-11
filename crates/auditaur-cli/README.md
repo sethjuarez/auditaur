@@ -18,6 +18,9 @@ auditaur apps --json
 auditaur logs --json
 auditaur traces --json
 auditaur trace <trace-id> --json
+auditaur agent-runs --app cutready --json
+auditaur agent-run <run-id> --json
+auditaur related --run-id <run-id> --json
 auditaur windows --json
 auditaur timeline --json
 auditaur explain

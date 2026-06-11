@@ -1,5 +1,6 @@
 use crate::model::{
-    FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall, TauriWindowState,
+    FrontendError, LogRecord, Session, SpanEventRecord, SpanRecord, TauriEventRecord, TauriIpcCall,
+    TauriWindowState,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -14,6 +15,7 @@ pub trait TelemetryStore {
     fn create_session(&self, session: &Session) -> Result<(), StorageError>;
     fn insert_log(&self, log: &LogRecord) -> Result<(), StorageError>;
     fn insert_span(&self, span: &SpanRecord) -> Result<(), StorageError>;
+    fn insert_span_event(&self, event: &SpanEventRecord) -> Result<(), StorageError>;
     fn insert_frontend_error(&self, error: &FrontendError) -> Result<(), StorageError>;
     fn insert_tauri_ipc_call(&self, call: &TauriIpcCall) -> Result<(), StorageError>;
     fn insert_tauri_event(&self, event: &TauriEventRecord) -> Result<(), StorageError>;
@@ -29,6 +31,13 @@ pub struct LogQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SpanQuery {
+    pub session_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpanEventQuery {
     pub session_id: Option<String>,
     pub trace_id: Option<String>,
     pub limit: Option<usize>,
@@ -78,6 +87,7 @@ pub struct RelatedTelemetryQuery {
 pub struct RelatedTelemetry {
     pub filter_notes: Vec<String>,
     pub spans: Vec<SpanRecord>,
+    pub span_events: Vec<SpanEventRecord>,
     pub logs: Vec<LogRecord>,
     pub frontend_errors: Vec<FrontendError>,
     pub tauri_ipc_calls: Vec<TauriIpcCall>,

@@ -2,8 +2,8 @@ use auditaur_collector::exporter_sqlite::{SqliteStore, SQLITE_SCHEMA_VERSION};
 use auditaur_core::{
     discovery::DiscoveryFile,
     model::{
-        FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall,
-        TauriWindowState, TelemetrySource,
+        FrontendError, LogRecord, Session, SpanEventRecord, SpanRecord, TauriEventRecord,
+        TauriIpcCall, TauriWindowState, TelemetrySource,
     },
 };
 use serde_json::{json, Value};
@@ -68,6 +68,7 @@ fn reads_fixture_database_as_json() {
         "--json",
     ]);
     assert_eq!(related["spans"][0]["name"], "fixture span");
+    assert_eq!(related["spanEvents"].as_array().unwrap().len(), 0);
     assert_eq!(related["logs"][0]["body"], "fixture log");
     assert_eq!(related["tauriIpcCalls"][0]["command"], "fixture_command");
     assert_eq!(related["tauriWindows"][0]["windowLabel"], "main");
@@ -163,6 +164,65 @@ fn reads_fixture_database_as_json() {
         "--json",
     ]);
     assert!(tail.contains("\"kind\":\"ipc\""));
+}
+
+#[test]
+fn agentive_runs_group_model_tool_events_and_related_by_run_id() {
+    let db = fixture_database();
+    let store = SqliteStore::open(db.path()).unwrap();
+    insert_agentive_fixture(&store);
+    drop(store);
+
+    let runs = run_json(["agent-runs", "--db", db.path().to_str().unwrap(), "--json"]);
+    let run = runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["runId"] == "10ed86a4-d559-4b6d-8319-9bdba2c0ff78")
+        .unwrap();
+    assert_eq!(run["traceId"], "a9ba86b6ef5906a2b7af3c8423ea9001");
+    assert_eq!(run["rootCommand"], "agent_chat_with_tools");
+    assert_eq!(run["modelCallCount"], 3);
+    assert_eq!(run["toolCallCount"], 2);
+    assert_eq!(run["agentEventCount"], 2);
+    assert_eq!(run["provider"], "openai");
+    assert_eq!(run["model"], "gpt-4.1-mini");
+    assert!(run["finalSummary"]
+        .as_str()
+        .unwrap()
+        .contains("Wrote sketch"));
+
+    let detail = run_json([
+        "agent-run",
+        "10ed86a4-d559-4b6d-8319-9bdba2c0ff78",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(detail["run"]["modelCallCount"], 3);
+    assert_eq!(detail["modelCalls"].as_array().unwrap().len(), 3);
+    assert_eq!(detail["toolCalls"].as_array().unwrap().len(), 2);
+    assert_eq!(detail["toolCalls"][0]["toolName"], "list_project_files");
+    assert_eq!(detail["toolCalls"][1]["toolName"], "write_sketch");
+    assert_eq!(
+        detail["agentEvents"][1]["summary"],
+        "Wrote sketch successfully"
+    );
+
+    let related = run_json([
+        "related",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--run-id",
+        "10ed86a4-d559-4b6d-8319-9bdba2c0ff78",
+        "--json",
+    ]);
+    assert!(related["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|span| span["name"] == "tauri.invoke agent_chat_with_tools"));
+    assert_eq!(related["spanEvents"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -717,4 +777,169 @@ fn create_fixture_database_at(path: &std::path::Path) -> SqliteStore {
         .unwrap();
 
     store
+}
+
+fn insert_agentive_fixture(store: &SqliteStore) {
+    let session_id = "session-fixture";
+    let trace_id = "a9ba86b6ef5906a2b7af3c8423ea9001";
+    let run_id = "10ed86a4-d559-4b6d-8319-9bdba2c0ff78";
+    store
+        .insert_span(&SpanRecord {
+            session_id: session_id.to_string(),
+            trace_id: trace_id.to_string(),
+            span_id: "root-tauri".to_string(),
+            parent_span_id: None,
+            name: "tauri.invoke agent_chat_with_tools".to_string(),
+            kind: Some("client".to_string()),
+            start_time_unix_nanos: 1_000,
+            end_time_unix_nanos: Some(2_000),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "tauri.command": "agent_chat_with_tools" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: session_id.to_string(),
+            timestamp_unix_nanos: 1_000,
+            duration_ms: Some(1.0),
+            command: "agent_chat_with_tools".to_string(),
+            status: "OK".to_string(),
+            error_message: None,
+            trace_id: Some(trace_id.to_string()),
+            span_id: Some("root-tauri".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: None,
+            args_redacted: true,
+            result_summary: Some("Wrote sketch successfully".to_string()),
+        })
+        .unwrap();
+    insert_agentive_span(
+        store,
+        "agent-run",
+        Some("root-tauri"),
+        "agentive.run",
+        1_050,
+        1_950,
+        json!({ "agentive.run_id": run_id, "agentive.status": "done" }),
+    );
+    for (index, (span_id, model)) in [
+        ("model-1", ""),
+        ("model-2", "gpt-4.1-mini"),
+        ("model-3", "gpt-4.1-mini"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        insert_agentive_span(
+            store,
+            span_id,
+            Some("agent-run"),
+            "agentive.model_call",
+            1_100 + i64::try_from(index).unwrap() * 100,
+            1_150 + i64::try_from(index).unwrap() * 100,
+            json!({
+                "agentive.run_id": run_id,
+                "agentive.iteration": index + 1,
+                "gen_ai.system": "openai",
+                "gen_ai.request.model": model,
+                "gen_ai.response.model": "gpt-4.1-mini",
+                "gen_ai.usage.input_tokens": 10 + index,
+                "gen_ai.usage.output_tokens": 20 + index,
+                "gen_ai.usage.total_tokens": 30 + index
+            }),
+        );
+    }
+    insert_agentive_span(
+        store,
+        "tool-1",
+        Some("agent-run"),
+        "agentive.tool_call",
+        1_300,
+        1_325,
+        json!({
+            "agentive.run_id": run_id,
+            "agentive.iteration": 1,
+            "agentive.tool_name": "list_project_files",
+            "agentive.tool_call_id": "call-list"
+        }),
+    );
+    insert_agentive_span(
+        store,
+        "tool-2",
+        Some("agent-run"),
+        "agentive.tool_call",
+        1_500,
+        1_550,
+        json!({
+            "agentive.run_id": run_id,
+            "agentive.iteration": 2,
+            "agentive.tool_name": "write_sketch",
+            "agentive.tool_call_id": "call-write"
+        }),
+    );
+    for (timestamp, summary) in [
+        (1_200, "Listed project files"),
+        (1_900, "Wrote sketch successfully"),
+    ] {
+        store
+            .insert_span_event(&SpanEventRecord {
+                session_id: session_id.to_string(),
+                trace_id: trace_id.to_string(),
+                span_id: "agent-run".to_string(),
+                name: "agent-event".to_string(),
+                timestamp_unix_nanos: timestamp,
+                attributes: json!({ "summary": summary }),
+            })
+            .unwrap();
+    }
+    store
+        .insert_log(&LogRecord {
+            session_id: session_id.to_string(),
+            timestamp_unix_nanos: 1_910,
+            observed_timestamp_unix_nanos: None,
+            severity_text: Some("INFO".to_string()),
+            severity_number: Some(9),
+            body: Some("agent run done".to_string()),
+            body_json: None,
+            trace_id: Some(trace_id.to_string()),
+            span_id: Some("agent-run".to_string()),
+            scope_name: Some("agentive".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "agentive.run_id": run_id }),
+            source: TelemetrySource::ThirdPartyOtel,
+        })
+        .unwrap();
+}
+
+fn insert_agentive_span(
+    store: &SqliteStore,
+    span_id: &str,
+    parent_span_id: Option<&str>,
+    name: &str,
+    start_time_unix_nanos: i64,
+    end_time_unix_nanos: i64,
+    attributes: Value,
+) {
+    store
+        .insert_span(&SpanRecord {
+            session_id: "session-fixture".to_string(),
+            trace_id: "a9ba86b6ef5906a2b7af3c8423ea9001".to_string(),
+            span_id: span_id.to_string(),
+            parent_span_id: parent_span_id.map(ToString::to_string),
+            name: name.to_string(),
+            kind: Some("internal".to_string()),
+            start_time_unix_nanos,
+            end_time_unix_nanos: Some(end_time_unix_nanos),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("agentive".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes,
+            source: TelemetrySource::ThirdPartyOtel,
+        })
+        .unwrap();
 }

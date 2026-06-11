@@ -1,4 +1,6 @@
-use auditaur_core::model::{FrontendError, LogRecord, SpanRecord, TauriEventRecord, TauriIpcCall};
+use auditaur_core::model::{
+    FrontendError, LogRecord, SpanEventRecord, SpanRecord, TauriEventRecord, TauriIpcCall,
+};
 use serde::{Deserialize, Serialize};
 
 pub mod otlp {
@@ -9,6 +11,7 @@ pub mod otlp {
 #[serde(rename_all = "camelCase")]
 pub struct OTelBatch {
     pub spans: Vec<SpanRecord>,
+    pub span_events: Vec<SpanEventRecord>,
     pub logs: Vec<LogRecord>,
     pub frontend_errors: Vec<FrontendError>,
     pub tauri_ipc_calls: Vec<TauriIpcCall>,

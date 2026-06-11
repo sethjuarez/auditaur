@@ -1,12 +1,12 @@
 use auditaur_core::{
     model::{
-        FrontendError, LogRecord, Session, SpanRecord, TauriEventRecord, TauriIpcCall,
-        TauriWindowState, TelemetrySource,
+        FrontendError, LogRecord, Session, SpanEventRecord, SpanRecord, TauriEventRecord,
+        TauriIpcCall, TauriWindowState, TelemetrySource,
     },
     protocol::TraceSummary,
     storage::{
-        FrontendErrorQuery, LogQuery, RelatedTelemetry, RelatedTelemetryQuery, SpanQuery,
-        TauriEventQuery, TauriIpcQuery, TauriWindowQuery, TelemetryStore,
+        FrontendErrorQuery, LogQuery, RelatedTelemetry, RelatedTelemetryQuery, SpanEventQuery,
+        SpanQuery, TauriEventQuery, TauriIpcQuery, TauriWindowQuery, TelemetryStore,
     },
 };
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
@@ -211,6 +211,23 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub fn insert_span_event(&self, event: &SpanEventRecord) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO span_events (
+                session_id, trace_id, span_id, name, timestamp_unix_nanos, attributes_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                event.session_id,
+                event.trace_id,
+                event.span_id,
+                event.name,
+                event.timestamp_unix_nanos,
+                serde_json::to_string(&event.attributes)?,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_frontend_error(&self, error: &FrontendError) -> Result<()> {
         self.conn.execute(
             "INSERT INTO frontend_errors (
@@ -409,6 +426,34 @@ impl SqliteStore {
         }
     }
 
+    pub fn list_span_events(&self, query: &SpanEventQuery) -> Result<Vec<SpanEventRecord>> {
+        let limit = bounded_limit(query.limit, 200);
+        match (&query.session_id, &query.trace_id) {
+            (Some(session_id), Some(trace_id)) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(SPAN_EVENTS_SELECT_WITH_SESSION_AND_TRACE)?;
+                let rows = stmt.query_map(params![session_id, trace_id, limit], map_span_event)?;
+                collect_rows(rows)
+            }
+            (Some(session_id), None) => {
+                let mut stmt = self.conn.prepare(SPAN_EVENTS_SELECT_WITH_SESSION)?;
+                let rows = stmt.query_map(params![session_id, limit], map_span_event)?;
+                collect_rows(rows)
+            }
+            (None, Some(trace_id)) => {
+                let mut stmt = self.conn.prepare(SPAN_EVENTS_SELECT_WITH_TRACE)?;
+                let rows = stmt.query_map(params![trace_id, limit], map_span_event)?;
+                collect_rows(rows)
+            }
+            (None, None) => {
+                let mut stmt = self.conn.prepare(SPAN_EVENTS_SELECT)?;
+                let rows = stmt.query_map(params![limit], map_span_event)?;
+                collect_rows(rows)
+            }
+        }
+    }
+
     pub fn list_trace_summaries(
         &self,
         session_id: Option<&str>,
@@ -568,6 +613,17 @@ impl SqliteStore {
                 time_bounds_are_derived,
                 limit,
                 map_span,
+            )?,
+            span_events: self.select_related(
+                SPAN_EVENTS_COLUMNS,
+                "span_events",
+                "timestamp_unix_nanos",
+                true,
+                false,
+                &effective_query,
+                time_bounds_are_derived,
+                limit,
+                map_span_event,
             )?,
             logs: self.select_related(
                 LOGS_COLUMNS,
@@ -751,6 +807,14 @@ impl TelemetryStore for SqliteStore {
         span: &SpanRecord,
     ) -> std::result::Result<(), auditaur_core::storage::StorageError> {
         SqliteStore::insert_span(self, span)
+            .map_err(|error| auditaur_core::storage::StorageError::Backend(error.to_string()))
+    }
+
+    fn insert_span_event(
+        &self,
+        event: &SpanEventRecord,
+    ) -> std::result::Result<(), auditaur_core::storage::StorageError> {
+        SqliteStore::insert_span_event(self, event)
             .map_err(|error| auditaur_core::storage::StorageError::Backend(error.to_string()))
     }
 
@@ -990,6 +1054,17 @@ fn map_span(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpanRecord> {
     })
 }
 
+fn map_span_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpanEventRecord> {
+    Ok(SpanEventRecord {
+        session_id: row.get(0)?,
+        trace_id: row.get(1)?,
+        span_id: row.get(2)?,
+        name: row.get(3)?,
+        timestamp_unix_nanos: row.get(4)?,
+        attributes: parse_json(row.get(5)?)?,
+    })
+}
+
 fn map_frontend_error(row: &rusqlite::Row<'_>) -> rusqlite::Result<FrontendError> {
     Ok(FrontendError {
         session_id: row.get(0)?,
@@ -1161,6 +1236,25 @@ const SPANS_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, trace_id, 
     parent_span_id, name, kind, start_time_unix_nanos, end_time_unix_nanos, status_code,
     status_message, scope_name, scope_version, attributes_json, source FROM spans
     WHERE session_id = ?1 AND trace_id = ?2 ORDER BY start_time_unix_nanos DESC LIMIT ?3";
+
+const SPAN_EVENTS_COLUMNS: &str =
+    "session_id, trace_id, span_id, name, timestamp_unix_nanos, attributes_json";
+
+const SPAN_EVENTS_SELECT: &str = "SELECT session_id, trace_id, span_id, name,
+    timestamp_unix_nanos, attributes_json FROM span_events
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?1";
+
+const SPAN_EVENTS_SELECT_WITH_SESSION: &str = "SELECT session_id, trace_id, span_id, name,
+    timestamp_unix_nanos, attributes_json FROM span_events WHERE session_id = ?1
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?2";
+
+const SPAN_EVENTS_SELECT_WITH_TRACE: &str = "SELECT session_id, trace_id, span_id, name,
+    timestamp_unix_nanos, attributes_json FROM span_events WHERE trace_id = ?1
+    ORDER BY timestamp_unix_nanos DESC LIMIT ?2";
+
+const SPAN_EVENTS_SELECT_WITH_SESSION_AND_TRACE: &str = "SELECT session_id, trace_id, span_id,
+    name, timestamp_unix_nanos, attributes_json FROM span_events
+    WHERE session_id = ?1 AND trace_id = ?2 ORDER BY timestamp_unix_nanos DESC LIMIT ?3";
 
 const FRONTEND_ERRORS_COLUMNS: &str = "session_id, timestamp_unix_nanos, message, stack,
     filename, line_number, column_number, error_type, trace_id, span_id, window_label,

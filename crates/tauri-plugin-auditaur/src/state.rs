@@ -179,6 +179,14 @@ impl AuditaurState {
             store.insert_span(&span)?;
         }
 
+        for mut event in batch.span_events {
+            if event.session_id.is_empty() {
+                event.session_id = session_id.to_string();
+            }
+            event.attributes = self.redact_value(&event.attributes);
+            store.insert_span_event(&event)?;
+        }
+
         for mut log in batch.logs {
             if log.session_id.is_empty() {
                 log.session_id = session_id.to_string();
@@ -419,8 +427,8 @@ mod tests {
     use super::AuditaurState;
     use auditaur_collector::{exporter_sqlite::SqliteStore, receiver::OTelBatch};
     use auditaur_core::{
-        model::{LogRecord, TauriEventRecord, TauriIpcCall},
-        storage::FrontendErrorQuery,
+        model::{LogRecord, SpanEventRecord, SpanRecord, TauriEventRecord, TauriIpcCall},
+        storage::{FrontendErrorQuery, SpanEventQuery},
         AuditaurConfig,
     };
     use serde_json::json;
@@ -500,6 +508,30 @@ mod tests {
                     attributes: json!({ "api_key": "secret" }),
                     source: auditaur_core::model::TelemetrySource::Frontend,
                 }],
+                spans: vec![SpanRecord {
+                    session_id: String::new(),
+                    trace_id: "trace".to_string(),
+                    span_id: "span".to_string(),
+                    parent_span_id: None,
+                    name: "agentive.run".to_string(),
+                    kind: Some("internal".to_string()),
+                    start_time_unix_nanos: 1,
+                    end_time_unix_nanos: Some(4),
+                    status_code: Some("OK".to_string()),
+                    status_message: None,
+                    scope_name: Some("agentive".to_string()),
+                    scope_version: Some("0.2.1".to_string()),
+                    attributes: json!({ "agentive.run_id": "run", "token": "secret" }),
+                    source: auditaur_core::model::TelemetrySource::ThirdPartyOtel,
+                }],
+                span_events: vec![SpanEventRecord {
+                    session_id: String::new(),
+                    trace_id: "trace".to_string(),
+                    span_id: "span".to_string(),
+                    name: "agent-event".to_string(),
+                    timestamp_unix_nanos: 2,
+                    attributes: json!({ "token": "secret", "summary": "done" }),
+                }],
                 tauri_ipc_calls: vec![TauriIpcCall {
                     session_id: String::new(),
                     timestamp_unix_nanos: 2,
@@ -548,6 +580,10 @@ mod tests {
         assert_eq!(log.session_id, session_id);
         assert_eq!(log.attributes["api_key"], "[REDACTED]");
         assert_eq!(log.body_json.as_ref().unwrap()["token"], "[REDACTED]");
+
+        let span_events = store.list_span_events(&SpanEventQuery::default()).unwrap();
+        assert_eq!(span_events[0].session_id, session_id);
+        assert_eq!(span_events[0].attributes["token"], "[REDACTED]");
 
         let ipc = store
             .list_tauri_ipc_calls(&auditaur_core::storage::TauriIpcQuery::default())
