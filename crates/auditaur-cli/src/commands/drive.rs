@@ -1,12 +1,15 @@
 use std::{
+    fs,
     io::{ErrorKind, Read, Write},
     net::{TcpStream, ToSocketAddrs},
+    path::PathBuf,
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
 use auditaur_core::{model::TauriWindowState, storage::TauriWindowQuery};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tungstenite::{
@@ -74,11 +77,205 @@ pub fn wait(app: Option<String>, cdp_port: Option<u16>, options: WaitOptions) ->
     }
 }
 
+pub fn exists(
+    app: Option<String>,
+    cdp_port: Option<u16>,
+    options: SelectorActionOptions,
+) -> Result<()> {
+    let (attach, target, websocket_url) =
+        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), "exists")?;
+    let selector_json = serde_json::to_string(&options.selector)?;
+    let expression = format!("Boolean(document.querySelector({selector_json}))");
+    let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
+    let found = value.get("value").and_then(Value::as_bool).unwrap_or(false);
+    let result = action_result(
+        &attach,
+        &target,
+        "exists",
+        Some(options.selector.clone()),
+        false,
+        json!({ "exists": found }),
+        &options.test_id,
+        &options.step_id,
+    );
+    read::print_json_or_table(options.json, &result, || print_action_result(&result))?;
+    if found {
+        Ok(())
+    } else {
+        Err(anyhow!("Selector `{}` was not found.", options.selector))
+    }
+}
+
+pub fn text(
+    app: Option<String>,
+    cdp_port: Option<u16>,
+    options: SelectorActionOptions,
+) -> Result<()> {
+    let (attach, target, websocket_url) =
+        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), "text")?;
+    let selector_json = serde_json::to_string(&options.selector)?;
+    let expression = format!(
+        "(() => {{ const el = document.querySelector({selector_json}); return el ? {{ found: true, text: (el.innerText ?? el.textContent ?? '') }} : {{ found: false, text: null }}; }})()"
+    );
+    let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
+    let payload = value
+        .get("value")
+        .cloned()
+        .unwrap_or_else(|| json!({ "found": false, "text": null }));
+    let found = payload
+        .get("found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let result = action_result(
+        &attach,
+        &target,
+        "text",
+        Some(options.selector.clone()),
+        false,
+        payload,
+        &options.test_id,
+        &options.step_id,
+    );
+    read::print_json_or_table(options.json, &result, || print_action_result(&result))?;
+    if found {
+        Ok(())
+    } else {
+        Err(anyhow!("Selector `{}` was not found.", options.selector))
+    }
+}
+
+pub fn click(
+    app: Option<String>,
+    cdp_port: Option<u16>,
+    options: SelectorActionOptions,
+) -> Result<()> {
+    let selector_json = serde_json::to_string(&options.selector)?;
+    let expression = format!(
+        "(() => {{ const el = document.querySelector({selector_json}); if (!el) return {{ ok: false, error: 'selector not found' }}; el.scrollIntoView({{ block: 'center', inline: 'center' }}); el.click(); return {{ ok: true }}; }})()"
+    );
+    run_dom_action(app, cdp_port, &options, "click", expression)
+}
+
+pub fn fill(app: Option<String>, cdp_port: Option<u16>, options: FillOptions) -> Result<()> {
+    let selector_json = serde_json::to_string(&options.selector)?;
+    let value_json = serde_json::to_string(&options.value)?;
+    let expression = format!(
+        "(() => {{ const el = document.querySelector({selector_json}); if (!el) return {{ ok: false, error: 'selector not found' }}; el.focus(); el.value = {value_json}; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return {{ ok: true }}; }})()"
+    );
+    let selector_options = SelectorActionOptions {
+        selector: options.selector,
+        target_id: options.target_id,
+        test_id: options.test_id,
+        step_id: options.step_id,
+        json: options.json,
+    };
+    run_dom_action(app, cdp_port, &selector_options, "fill", expression)
+}
+
+pub fn press(app: Option<String>, cdp_port: Option<u16>, options: PressOptions) -> Result<()> {
+    let key_json = serde_json::to_string(&options.key)?;
+    let selector_json = match &options.selector {
+        Some(selector) => serde_json::to_string(selector)?,
+        None => "null".to_string(),
+    };
+    let expression = format!(
+        "(() => {{ const selector = {selector_json}; const target = selector ? document.querySelector(selector) : (document.activeElement || document.body); if (!target) return {{ ok: false, error: 'selector not found' }}; target.focus?.(); const key = {key_json}; for (const type of ['keydown', 'keyup']) target.dispatchEvent(new KeyboardEvent(type, {{ key, bubbles: true, cancelable: true }})); return {{ ok: true }}; }})()"
+    );
+    let selector_options = SelectorActionOptions {
+        selector: options
+            .selector
+            .unwrap_or_else(|| "<active-element>".to_string()),
+        target_id: options.target_id,
+        test_id: options.test_id,
+        step_id: options.step_id,
+        json: options.json,
+    };
+    run_dom_action(app, cdp_port, &selector_options, "press", expression)
+}
+
+pub fn screenshot(
+    app: Option<String>,
+    cdp_port: Option<u16>,
+    options: ScreenshotOptions,
+) -> Result<()> {
+    let (attach, target, websocket_url) =
+        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), "screenshot")?;
+    let mut socket = connect_cdp_websocket(&websocket_url, Duration::from_secs(10))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut next_id = 1_u64;
+    send_cdp_command(&mut socket, next_id, "Page.enable", json!({}))?;
+    let _ = read_cdp_response(&mut socket, next_id, deadline)?;
+    next_id += 1;
+    send_cdp_command(
+        &mut socket,
+        next_id,
+        "Page.captureScreenshot",
+        json!({ "format": "png", "fromSurface": true }),
+    )?;
+    let response = read_cdp_response(&mut socket, next_id, deadline)?
+        .ok_or_else(|| anyhow!("Timed out waiting for screenshot response."))?;
+    let data = response
+        .pointer("/result/data")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("CDP screenshot response did not include image data: {response}"))?;
+    let bytes = BASE64_STANDARD.decode(data)?;
+    fs::write(&options.output, bytes)?;
+    let result = action_result(
+        &attach,
+        &target,
+        "screenshot",
+        None,
+        false,
+        json!({ "output": options.output.to_string_lossy(), "format": "png" }),
+        &options.test_id,
+        &options.step_id,
+    );
+    read::print_json_or_table(options.json, &result, || print_action_result(&result))
+}
+
 #[derive(Debug)]
 pub struct WaitOptions {
     pub selector: String,
     pub target_id: Option<String>,
     pub timeout_ms: u64,
+    pub test_id: Option<String>,
+    pub step_id: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug)]
+pub struct SelectorActionOptions {
+    pub selector: String,
+    pub target_id: Option<String>,
+    pub test_id: Option<String>,
+    pub step_id: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug)]
+pub struct FillOptions {
+    pub selector: String,
+    pub value: String,
+    pub target_id: Option<String>,
+    pub test_id: Option<String>,
+    pub step_id: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug)]
+pub struct PressOptions {
+    pub key: String,
+    pub selector: Option<String>,
+    pub target_id: Option<String>,
+    pub test_id: Option<String>,
+    pub step_id: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug)]
+pub struct ScreenshotOptions {
+    pub output: PathBuf,
+    pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
     pub json: bool,
@@ -238,6 +435,26 @@ struct WaitResult {
     target_title: Option<String>,
     target_url: Option<String>,
     window_label: Option<String>,
+    test_id: Option<String>,
+    step_id: Option<String>,
+    telemetry_attributes: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionResult {
+    ok: bool,
+    action: String,
+    selector: Option<String>,
+    service_name: String,
+    pid: u32,
+    session_id: String,
+    target_id: String,
+    target_title: Option<String>,
+    target_url: Option<String>,
+    window_label: Option<String>,
+    mutates_app: bool,
+    payload: Value,
     test_id: Option<String>,
     step_id: Option<String>,
     telemetry_attributes: Value,
@@ -547,6 +764,99 @@ fn is_driveable_target(target: &CdpTarget) -> bool {
             .unwrap_or(true)
 }
 
+fn resolve_drive_target(
+    app: Option<String>,
+    cdp_port: Option<u16>,
+    target_id: Option<&str>,
+    action: &str,
+) -> Result<(DriveAttachInfo, CdpTarget, String)> {
+    if cdp_port.is_none() {
+        return Err(anyhow!(
+            "`auditaur drive {action}` requires --cdp-port <port>. Run `auditaur drive inspect` first, then pass the WebView remote-debugging port explicitly."
+        ));
+    }
+    let app = resolve_target(app.as_deref())?;
+    let attach = DriveAttachInfo::discover(app, cdp_port)?;
+    let cdp_target = select_cdp_target(&attach.cdp.targets, target_id)?.clone();
+    let websocket_url = cdp_target.web_socket_debugger_url.clone().ok_or_else(|| {
+        anyhow!(
+            "CDP target `{}` does not expose a WebSocket debugger URL.",
+            cdp_target.id
+        )
+    })?;
+    Ok((attach, cdp_target, websocket_url))
+}
+
+fn evaluate_expression(websocket_url: &str, expression: &str, timeout: Duration) -> Result<Value> {
+    let mut socket = connect_cdp_websocket(websocket_url, timeout)?;
+    let deadline = Instant::now() + timeout;
+    let mut next_id = 1_u64;
+    send_cdp_command(&mut socket, next_id, "Runtime.enable", json!({}))?;
+    let _ = read_cdp_response(&mut socket, next_id, deadline)?;
+    next_id += 1;
+    send_cdp_command(
+        &mut socket,
+        next_id,
+        "Runtime.evaluate",
+        json!({
+            "expression": expression,
+            "returnByValue": true,
+            "awaitPromise": false,
+        }),
+    )?;
+    let response = read_cdp_response(&mut socket, next_id, deadline)?
+        .ok_or_else(|| anyhow!("Timed out waiting for Runtime.evaluate response."))?;
+    if response
+        .get("result")
+        .and_then(|result| result.get("exceptionDetails"))
+        .is_some()
+    {
+        return Err(anyhow!("CDP Runtime.evaluate failed: {response}"));
+    }
+    response.pointer("/result/result").cloned().ok_or_else(|| {
+        anyhow!("CDP Runtime.evaluate response did not include a result: {response}")
+    })
+}
+
+fn run_dom_action(
+    app: Option<String>,
+    cdp_port: Option<u16>,
+    options: &SelectorActionOptions,
+    action: &str,
+    expression: String,
+) -> Result<()> {
+    let (attach, target, websocket_url) =
+        resolve_drive_target(app, cdp_port, options.target_id.as_deref(), action)?;
+    let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
+    let payload = value
+        .get("value")
+        .cloned()
+        .unwrap_or_else(|| json!({ "ok": false, "error": "missing action result" }));
+    let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let result = action_result(
+        &attach,
+        &target,
+        action,
+        Some(options.selector.clone()),
+        true,
+        payload.clone(),
+        &options.test_id,
+        &options.step_id,
+    );
+    read::print_json_or_table(options.json, &result, || print_action_result(&result))?;
+    if ok {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "drive {action} failed: {}",
+            payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        ))
+    }
+}
+
 fn wait_for_selector(
     attach: &DriveAttachInfo,
     target: &CdpTarget,
@@ -741,6 +1051,57 @@ fn wait_result(
     }
 }
 
+fn action_result(
+    attach: &DriveAttachInfo,
+    target: &CdpTarget,
+    action: &str,
+    selector: Option<String>,
+    mutates_app: bool,
+    payload: Value,
+    test_id: &Option<String>,
+    step_id: &Option<String>,
+) -> ActionResult {
+    ActionResult {
+        ok: payload
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| {
+                payload
+                    .get("exists")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_else(|| {
+                        payload
+                            .get("found")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true)
+                    })
+            }),
+        action: action.to_string(),
+        selector: selector.clone(),
+        service_name: attach.service_name.clone(),
+        pid: attach.pid,
+        session_id: attach.session_id.clone(),
+        target_id: target.id.clone(),
+        target_title: target.title.clone(),
+        target_url: target.url.clone(),
+        window_label: target.window_label.clone(),
+        mutates_app,
+        payload,
+        test_id: test_id.clone(),
+        step_id: step_id.clone(),
+        telemetry_attributes: json!({
+            "auditaur.test_id": test_id,
+            "auditaur.step_id": step_id,
+            "auditaur.driver.action": action,
+            "auditaur.driver.selector": selector,
+            "auditaur.driver.target_id": target.id,
+            "tauri.window.label": target.window_label,
+            "trace_id": null,
+            "span_id": null,
+        }),
+    }
+}
+
 fn json_string(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -763,10 +1124,28 @@ fn launch_hint(cdp_port: Option<u16>) -> String {
 fn future_actions() -> Vec<DriverActionSpec> {
     vec![
         DriverActionSpec {
+            name: "exists",
+            selector_required: true,
+            mutates_app: false,
+            description: "assert that a selector exists immediately",
+        },
+        DriverActionSpec {
+            name: "text",
+            selector_required: true,
+            mutates_app: false,
+            description: "read text from a selector",
+        },
+        DriverActionSpec {
             name: "wait",
             selector_required: true,
             mutates_app: false,
             description: "wait for a selector to appear through CDP Runtime.evaluate",
+        },
+        DriverActionSpec {
+            name: "screenshot",
+            selector_required: false,
+            mutates_app: false,
+            description: "capture a PNG screenshot through CDP Page.captureScreenshot",
         },
         DriverActionSpec {
             name: "click",
@@ -878,6 +1257,23 @@ fn print_wait_result(result: &WaitResult) -> Result<()> {
         table_cell(result.target_title.as_deref().unwrap_or("-"), 80)
     );
     println!("Session: {}", table_cell(&result.session_id, 120));
+    Ok(())
+}
+
+fn print_action_result(result: &ActionResult) -> Result<()> {
+    println!(
+        "{} {} on target {}",
+        result.action,
+        if result.ok { "ok" } else { "failed" },
+        table_cell(&result.target_id, 80)
+    );
+    if let Some(selector) = &result.selector {
+        println!("Selector: {}", table_cell(selector, 120));
+    }
+    if let Some(window_label) = &result.window_label {
+        println!("Window: {}", table_cell(window_label, 80));
+    }
+    println!("Payload: {}", table_cell(&result.payload.to_string(), 240));
     Ok(())
 }
 

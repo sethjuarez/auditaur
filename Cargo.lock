@@ -118,6 +118,7 @@ dependencies = [
  "anyhow",
  "auditaur-collector",
  "auditaur-core",
+ "base64 0.22.1",
  "clap",
  "serde",
  "serde_json",

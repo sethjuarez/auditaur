@@ -302,6 +302,70 @@ enum DriveCommand {
         #[arg(long)]
         step_id: Option<String>,
     },
+    Exists {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Text {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Screenshot {
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Click {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Fill {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        value: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Press {
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -334,6 +398,106 @@ fn main() -> Result<()> {
                     selector,
                     target_id: target,
                     timeout_ms,
+                    test_id,
+                    step_id,
+                    json: args.json,
+                },
+            ),
+            Some(DriveCommand::Exists {
+                selector,
+                target,
+                test_id,
+                step_id,
+            }) => commands::drive::exists(
+                args.app,
+                args.cdp_port,
+                commands::drive::SelectorActionOptions {
+                    selector,
+                    target_id: target,
+                    test_id,
+                    step_id,
+                    json: args.json,
+                },
+            ),
+            Some(DriveCommand::Text {
+                selector,
+                target,
+                test_id,
+                step_id,
+            }) => commands::drive::text(
+                args.app,
+                args.cdp_port,
+                commands::drive::SelectorActionOptions {
+                    selector,
+                    target_id: target,
+                    test_id,
+                    step_id,
+                    json: args.json,
+                },
+            ),
+            Some(DriveCommand::Screenshot {
+                output,
+                target,
+                test_id,
+                step_id,
+            }) => commands::drive::screenshot(
+                args.app,
+                args.cdp_port,
+                commands::drive::ScreenshotOptions {
+                    output,
+                    target_id: target,
+                    test_id,
+                    step_id,
+                    json: args.json,
+                },
+            ),
+            Some(DriveCommand::Click {
+                selector,
+                target,
+                test_id,
+                step_id,
+            }) => commands::drive::click(
+                args.app,
+                args.cdp_port,
+                commands::drive::SelectorActionOptions {
+                    selector,
+                    target_id: target,
+                    test_id,
+                    step_id,
+                    json: args.json,
+                },
+            ),
+            Some(DriveCommand::Fill {
+                selector,
+                value,
+                target,
+                test_id,
+                step_id,
+            }) => commands::drive::fill(
+                args.app,
+                args.cdp_port,
+                commands::drive::FillOptions {
+                    selector,
+                    value,
+                    target_id: target,
+                    test_id,
+                    step_id,
+                    json: args.json,
+                },
+            ),
+            Some(DriveCommand::Press {
+                key,
+                selector,
+                target,
+                test_id,
+                step_id,
+            }) => commands::drive::press(
+                args.app,
+                args.cdp_port,
+                commands::drive::PressOptions {
+                    key,
+                    selector,
+                    target_id: target,
                     test_id,
                     step_id,
                     json: args.json,

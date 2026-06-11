@@ -11,6 +11,7 @@ use std::{
     fs,
     io::{Read, Write},
     net::TcpListener,
+    path::PathBuf,
     process::Command,
     thread,
 };
@@ -720,6 +721,258 @@ fn drive_wait_timeout_prints_structured_json_and_exits_nonzero() {
 }
 
 #[test]
+fn drive_exists_and_text_report_dom_values() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-actions");
+
+    let (exists_port, exists_server) = start_fake_cdp_runtime_value_endpoint(json!(true));
+    let exists_port_arg = exists_port.to_string();
+    let exists = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &exists_port_arg,
+            "--json",
+            "exists",
+            "--selector",
+            "[data-testid=ready]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    exists_server.join().unwrap();
+
+    assert_eq!(exists["ok"], true);
+    assert_eq!(exists["payload"]["exists"], true);
+    assert_eq!(exists["selector"], "[data-testid=ready]");
+    assert_eq!(exists["action"], "exists");
+    assert_eq!(exists["mutatesApp"], false);
+
+    let (text_port, text_server) =
+        start_fake_cdp_runtime_value_endpoint(json!({ "found": true, "text": "Ready" }));
+    let text_port_arg = text_port.to_string();
+    let text = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &text_port_arg,
+            "--json",
+            "text",
+            "--selector",
+            "[data-testid=status]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    text_server.join().unwrap();
+
+    assert_eq!(text["ok"], true);
+    assert_eq!(text["payload"]["text"], "Ready");
+    assert_eq!(text["action"], "text");
+    assert_eq!(text["mutatesApp"], false);
+}
+
+#[test]
+fn drive_read_actions_report_not_found_as_json_failure() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-read-failures");
+
+    let (exists_port, exists_server) = start_fake_cdp_runtime_value_endpoint(json!(false));
+    let exists_port_arg = exists_port.to_string();
+    let exists = run_failure_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &exists_port_arg,
+            "--json",
+            "exists",
+            "--selector",
+            "[data-testid=missing]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    exists_server.join().unwrap();
+    assert!(exists.contains("\"ok\": false"));
+    assert!(exists.contains("\"exists\": false"));
+    assert!(exists.contains("Selector `[data-testid=missing]` was not found"));
+
+    let (text_port, text_server) =
+        start_fake_cdp_runtime_value_endpoint(json!({ "found": false, "text": null }));
+    let text_port_arg = text_port.to_string();
+    let text = run_failure_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &text_port_arg,
+            "--json",
+            "text",
+            "--selector",
+            "[data-testid=missing]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    text_server.join().unwrap();
+    assert!(text.contains("\"ok\": false"));
+    assert!(text.contains("\"found\": false"));
+    assert!(text.contains("Selector `[data-testid=missing]` was not found"));
+}
+
+#[test]
+fn drive_click_fill_and_press_report_action_telemetry() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-mutating-actions");
+
+    let (click_port, click_server) = start_fake_cdp_runtime_value_endpoint(json!({
+        "ok": true,
+        "matched": true
+    }));
+    let click_port_arg = click_port.to_string();
+    let click = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &click_port_arg,
+            "--json",
+            "click",
+            "--selector",
+            "button.save",
+            "--test-id",
+            "cutready-smoke",
+            "--step-id",
+            "save",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    click_server.join().unwrap();
+    assert_eq!(click["ok"], true);
+    assert_eq!(click["action"], "click");
+    assert_eq!(click["testId"], "cutready-smoke");
+    assert_eq!(click["stepId"], "save");
+    assert_eq!(click["selector"], "button.save");
+    assert_eq!(click["mutatesApp"], true);
+
+    let (fill_port, fill_server) = start_fake_cdp_runtime_value_endpoint(json!({
+        "ok": true,
+        "matched": true
+    }));
+    let fill_port_arg = fill_port.to_string();
+    let fill = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &fill_port_arg,
+            "--json",
+            "fill",
+            "--selector",
+            "input[name=q]",
+            "--value",
+            "auditaur",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    fill_server.join().unwrap();
+    assert_eq!(fill["ok"], true);
+    assert_eq!(fill["action"], "fill");
+    assert_eq!(fill["selector"], "input[name=q]");
+
+    let (press_port, press_server) = start_fake_cdp_runtime_value_endpoint(json!({
+        "ok": true,
+        "matched": true
+    }));
+    let press_port_arg = press_port.to_string();
+    let press = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &press_port_arg,
+            "--json",
+            "press",
+            "--key",
+            "Enter",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    press_server.join().unwrap();
+    assert_eq!(press["ok"], true);
+    assert_eq!(press["action"], "press");
+    assert_eq!(press["selector"], "<active-element>");
+}
+
+#[test]
+fn drive_mutating_action_reports_dom_error_as_json_failure() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-mutating-failure");
+
+    let (port, server) = start_fake_cdp_runtime_value_endpoint(json!({
+        "ok": false,
+        "error": "selector not found"
+    }));
+    let port_arg = port.to_string();
+    let failure = run_failure_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "click",
+            "--selector",
+            "button.missing",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    server.join().unwrap();
+
+    assert!(failure.contains("\"ok\": false"));
+    assert!(failure.contains("\"mutatesApp\": true"));
+    assert!(failure.contains("\"error\": \"selector not found\""));
+}
+
+#[test]
+fn drive_screenshot_writes_png_bytes_and_reports_target_context() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-screenshot");
+    let output = temp.path().join("shot.png");
+    let output_arg = output.to_string_lossy().to_string();
+    let (port, server) = start_fake_cdp_screenshot_endpoint("aGVsbG8=");
+    let port_arg = port.to_string();
+
+    let screenshot = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "screenshot",
+            "--output",
+            &output_arg,
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(screenshot["ok"], true);
+    assert_eq!(screenshot["action"], "screenshot");
+    assert_eq!(screenshot["payload"]["output"], output_arg);
+    assert_eq!(fs::read(output).unwrap(), b"hello");
+}
+
+#[test]
 fn health_ignores_stale_apps_but_fails_unhealthy_active_apps() {
     let stale_temp = TempDir::new().unwrap();
     write_discovery_file(
@@ -910,6 +1163,32 @@ fn write_discovery_file(root: &std::path::Path, discovery: DiscoveryFile) {
     .unwrap();
 }
 
+fn write_drive_fixture(root: &std::path::Path, instance_id: &str) -> PathBuf {
+    let db_path = root
+        .join("sessions")
+        .join("session-fixture")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&db_path));
+    write_discovery_file(
+        root,
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: instance_id.to_string(),
+            session_id: "session-fixture".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:00Z".to_string(),
+            database_path: db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+        },
+    );
+    db_path
+}
+
 fn expected_capabilities() -> Vec<String> {
     vec![
         "logs".to_string(),
@@ -975,6 +1254,99 @@ fn start_fake_cdp_wait_endpoint() -> (u16, thread::JoinHandle<()>) {
         }
     });
     (port, handle)
+}
+
+fn start_fake_cdp_runtime_value_endpoint(value: Value) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        let (stream, _) = listener.accept().unwrap();
+        let mut websocket = accept(stream).unwrap();
+        loop {
+            let message = websocket.read().unwrap();
+            if !message.is_text() {
+                continue;
+            }
+            let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+            let id = request["id"].as_u64().unwrap();
+            let method = request["method"].as_str().unwrap();
+            let response = match method {
+                "Runtime.enable" => json!({ "id": id, "result": {} }),
+                "Runtime.evaluate" => json!({
+                    "id": id,
+                    "result": {
+                        "result": {
+                            "type": cdp_runtime_type(&value),
+                            "value": value
+                        }
+                    }
+                }),
+                _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+            };
+            websocket
+                .send(Message::Text(response.to_string().into()))
+                .unwrap();
+            if method == "Runtime.evaluate" {
+                break;
+            }
+        }
+    });
+    (port, handle)
+}
+
+fn start_fake_cdp_screenshot_endpoint(data: &'static str) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        let (stream, _) = listener.accept().unwrap();
+        let mut websocket = accept(stream).unwrap();
+        loop {
+            let message = websocket.read().unwrap();
+            if !message.is_text() {
+                continue;
+            }
+            let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+            let id = request["id"].as_u64().unwrap();
+            let method = request["method"].as_str().unwrap();
+            let response = match method {
+                "Page.enable" => json!({ "id": id, "result": {} }),
+                "Page.captureScreenshot" => json!({
+                    "id": id,
+                    "result": {
+                        "data": data
+                    }
+                }),
+                _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+            };
+            websocket
+                .send(Message::Text(response.to_string().into()))
+                .unwrap();
+            if method == "Page.captureScreenshot" {
+                break;
+            }
+        }
+    });
+    (port, handle)
+}
+
+fn cdp_runtime_type(value: &Value) -> &'static str {
+    match value {
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Null => "undefined",
+        Value::Array(_) | Value::Object(_) => "object",
+    }
 }
 
 fn start_fake_cdp_multi_target_endpoint() -> (u16, thread::JoinHandle<()>) {
