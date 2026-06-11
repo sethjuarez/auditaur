@@ -361,6 +361,8 @@ enum DriveCommand {
         #[arg(long)]
         target: Option<String>,
         #[arg(long)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
         allow_probable_target: bool,
         #[arg(long)]
         test_id: Option<String>,
@@ -375,6 +377,8 @@ enum DriveCommand {
         #[arg(long)]
         target: Option<String>,
         #[arg(long)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
         allow_probable_target: bool,
         #[arg(long)]
         test_id: Option<String>,
@@ -389,6 +393,8 @@ enum DriveCommand {
         #[arg(long)]
         target: Option<String>,
         #[arg(long)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
         allow_probable_target: bool,
         #[arg(long)]
         test_id: Option<String>,
@@ -454,7 +460,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_probable_target: false,
+                        allow_unproven_target: false,
                         json: args.json,
                     },
                 )
@@ -474,7 +480,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_probable_target: false,
+                        allow_unproven_target: false,
                         json: args.json,
                     },
                 )
@@ -501,6 +507,7 @@ fn main() -> Result<()> {
             Some(DriveCommand::Click {
                 selector,
                 target,
+                allow_unproven_target,
                 allow_probable_target,
                 test_id,
                 step_id,
@@ -514,7 +521,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_probable_target,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         json: args.json,
                     },
                 )
@@ -523,6 +530,7 @@ fn main() -> Result<()> {
                 selector,
                 value,
                 target,
+                allow_unproven_target,
                 allow_probable_target,
                 test_id,
                 step_id,
@@ -537,7 +545,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_probable_target,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         json: args.json,
                     },
                 )
@@ -546,6 +554,7 @@ fn main() -> Result<()> {
                 key,
                 selector,
                 target,
+                allow_unproven_target,
                 allow_probable_target,
                 test_id,
                 step_id,
@@ -560,7 +569,7 @@ fn main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_probable_target,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         json: args.json,
                     },
                 )

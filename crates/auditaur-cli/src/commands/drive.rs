@@ -169,7 +169,7 @@ pub fn fill(selector: DriveAppSelector, cdp_port: Option<u16>, options: FillOpti
         target_id: options.target_id,
         test_id: options.test_id,
         step_id: options.step_id,
-        allow_probable_target: options.allow_probable_target,
+        allow_unproven_target: options.allow_unproven_target,
         json: options.json,
     };
     run_dom_action(selector, cdp_port, &selector_options, "fill", expression)
@@ -195,7 +195,7 @@ pub fn press(
         target_id: options.target_id,
         test_id: options.test_id,
         step_id: options.step_id,
-        allow_probable_target: options.allow_probable_target,
+        allow_unproven_target: options.allow_unproven_target,
         json: options.json,
     };
     run_dom_action(selector, cdp_port, &selector_options, "press", expression)
@@ -261,7 +261,7 @@ pub struct SelectorActionOptions {
     pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
-    pub allow_probable_target: bool,
+    pub allow_unproven_target: bool,
     pub json: bool,
 }
 
@@ -272,7 +272,7 @@ pub struct FillOptions {
     pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
-    pub allow_probable_target: bool,
+    pub allow_unproven_target: bool,
     pub json: bool,
 }
 
@@ -283,7 +283,7 @@ pub struct PressOptions {
     pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
-    pub allow_probable_target: bool,
+    pub allow_unproven_target: bool,
     pub json: bool,
 }
 
@@ -771,7 +771,7 @@ fn bind_target_to_windows(
         target.ownership_status = "probable_unproven".to_string();
         target.ownership_proof = Some("single_window_single_target".to_string());
         target.ownership_proven = false;
-        target.ownership_guidance = Some("Only one observed window and one driveable CDP target were present, so this is probable but unproven. Mutating actions require --allow-probable-target.".to_string());
+        target.ownership_guidance = Some("Only one observed window and one driveable CDP target were present, so this is probable but unproven. Mutating actions require --allow-unproven-target.".to_string());
         return;
     }
 
@@ -862,7 +862,7 @@ fn target_ownership_summary(targets: &[CdpTarget]) -> (String, String) {
     } else if probable > 0 {
         (
             "probable_unproven".to_string(),
-            "CDP target ownership is probable from single-window/single-target context, not proven. Mutating actions require --allow-probable-target.".to_string(),
+            "CDP target ownership is probable from single-window/single-target context, not proven. Mutating actions require --allow-unproven-target.".to_string(),
         )
     } else {
         (
@@ -1091,7 +1091,7 @@ fn run_dom_action(
 ) -> Result<()> {
     let (attach, target, websocket_url) =
         resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), action)?;
-    require_mutation_allowed(&target, action, options.allow_probable_target)?;
+    require_mutation_allowed(&target, action, options.allow_unproven_target)?;
     let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
     let payload = value
         .get("value")
@@ -1125,17 +1125,14 @@ fn run_dom_action(
 fn require_mutation_allowed(
     target: &CdpTarget,
     action: &str,
-    allow_probable_target: bool,
+    allow_unproven_target: bool,
 ) -> Result<()> {
-    if target.ownership_status != "matched_window_telemetry" && !allow_probable_target {
+    if !target.ownership_proven && !allow_unproven_target {
         return Err(anyhow!(
-            "`auditaur drive {action}` selected a {} CDP target (`{}`). Re-run `auditaur drive inspect` to review ownership guidance, pass --target <target-id> if needed, and add --allow-probable-target to acknowledge the target is not PID/session-proven.",
-            if target.ownership_status == "probable_unproven" {
-                "probable but unproven"
-            } else {
-                "target without matched ownership evidence"
-            },
+            "`auditaur drive {action}` selected a CDP target (`{}`) whose endpoint ownership is not PID/session-proven (ownershipStatus={}, bindingStatus={}). Re-run `auditaur drive inspect` to review ownership guidance, pass --target <target-id> if needed, and add --allow-unproven-target to acknowledge the target is not PID/session-proven.",
             target.id,
+            target.ownership_status,
+            target.binding_status,
         ));
     }
     Ok(())

@@ -537,7 +537,7 @@ fn drive_inspect_reports_probable_unproven_target_ownership_guidance() {
     assert!(attach["cdp"]["targetOwnershipNote"]
         .as_str()
         .unwrap()
-        .contains("--allow-probable-target"));
+        .contains("--allow-unproven-target"));
     assert_eq!(
         attach["cdp"]["targets"][0]["ownershipProof"],
         "single_window_single_target"
@@ -546,7 +546,7 @@ fn drive_inspect_reports_probable_unproven_target_ownership_guidance() {
     assert!(attach["cdp"]["targets"][0]["ownershipGuidance"]
         .as_str()
         .unwrap()
-        .contains("Mutating actions require --allow-probable-target"));
+        .contains("Mutating actions require --allow-unproven-target"));
 }
 
 #[test]
@@ -1093,6 +1093,7 @@ fn drive_click_fill_and_press_report_action_telemetry() {
             "click",
             "--selector",
             "button.save",
+            "--allow-unproven-target",
             "--test-id",
             "cutready-smoke",
             "--step-id",
@@ -1126,6 +1127,7 @@ fn drive_click_fill_and_press_report_action_telemetry() {
             "input[name=q]",
             "--value",
             "auditaur",
+            "--allow-unproven-target",
         ],
         temp.path().to_str().unwrap(),
     );
@@ -1150,6 +1152,7 @@ fn drive_click_fill_and_press_report_action_telemetry() {
             "press",
             "--key",
             "Enter",
+            "--allow-unproven-target",
         ],
         temp.path().to_str().unwrap(),
     );
@@ -1182,8 +1185,36 @@ fn drive_mutating_action_requires_opt_in_for_probable_target() {
     );
 
     server.join().unwrap();
-    assert!(failure.contains("probable but unproven CDP target"));
-    assert!(failure.contains("--allow-probable-target"));
+    assert!(failure.contains("ownership is not PID/session-proven"));
+    assert!(failure.contains("--allow-unproven-target"));
+}
+
+#[test]
+fn drive_mutating_action_requires_opt_in_for_matched_but_unproven_target() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-matched-mutation-blocked");
+    let (port, server) = start_fake_cdp_endpoint();
+    let port_arg = port.to_string();
+
+    let failure = run_failure_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "click",
+            "--selector",
+            "button.save",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert!(failure.contains("ownership is not PID/session-proven"));
+    assert!(failure.contains("ownershipStatus=matched_window_telemetry"));
+    assert!(failure.contains("--allow-unproven-target"));
 }
 
 #[test]
@@ -1209,14 +1240,50 @@ fn drive_mutating_action_requires_opt_in_for_unverified_target() {
     );
 
     server.join().unwrap();
-    assert!(failure.contains("target without matched ownership evidence"));
-    assert!(failure.contains("--allow-probable-target"));
+    assert!(failure.contains("ownership is not PID/session-proven"));
+    assert!(failure.contains("--allow-unproven-target"));
 }
 
 #[test]
 fn drive_mutating_action_can_opt_into_probable_target() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-probable-mutation-allowed");
+    let (port, server) = start_fake_cdp_probable_runtime_value_endpoint(json!({
+        "ok": true,
+        "matched": true
+    }));
+    let port_arg = port.to_string();
+
+    let click = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "click",
+            "--selector",
+            "button.save",
+            "--allow-unproven-target",
+            "--json",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(click["ok"], true);
+    assert_eq!(click["targetOwnershipStatus"], "probable_unproven");
+    assert_eq!(click["ownershipProven"], false);
+    assert_eq!(
+        click["telemetryAttributes"]["auditaur.driver.target_ownership_status"],
+        "probable_unproven"
+    );
+}
+
+#[test]
+fn drive_mutating_action_accepts_legacy_probable_opt_in_alias() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-probable-mutation-legacy-alias");
     let (port, server) = start_fake_cdp_probable_runtime_value_endpoint(json!({
         "ok": true,
         "matched": true
@@ -1243,10 +1310,6 @@ fn drive_mutating_action_can_opt_into_probable_target() {
     assert_eq!(click["ok"], true);
     assert_eq!(click["targetOwnershipStatus"], "probable_unproven");
     assert_eq!(click["ownershipProven"], false);
-    assert_eq!(
-        click["telemetryAttributes"]["auditaur.driver.target_ownership_status"],
-        "probable_unproven"
-    );
 }
 
 #[test]
@@ -1270,6 +1333,7 @@ fn drive_mutating_action_reports_dom_error_as_json_failure() {
             "click",
             "--selector",
             "button.missing",
+            "--allow-unproven-target",
         ],
         temp.path().to_str().unwrap(),
     );
