@@ -382,6 +382,7 @@ fn summarize_related(related: RelatedTelemetry) -> Value {
     json!({
         "summary": {
             "spans": related.spans.len(),
+            "spanEvents": related.span_events.len(),
             "logs": related.logs.len(),
             "frontendErrors": related.frontend_errors.len(),
             "tauriIpcCalls": related.tauri_ipc_calls.len(),

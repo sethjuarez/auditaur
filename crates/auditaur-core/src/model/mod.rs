@@ -55,6 +55,17 @@ pub struct SpanRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct SpanEventRecord {
+    pub session_id: String,
+    pub trace_id: String,
+    pub span_id: String,
+    pub name: String,
+    pub timestamp_unix_nanos: i64,
+    pub attributes: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendError {
     pub session_id: String,
     pub timestamp_unix_nanos: i64,

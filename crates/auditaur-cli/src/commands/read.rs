@@ -118,6 +118,7 @@ pub fn trace(
     let detail = TraceDetail {
         trace_id,
         spans: related.spans,
+        span_events: related.span_events,
         logs: related.logs,
         frontend_errors: related.frontend_errors,
         tauri_ipc_calls: related.tauri_ipc_calls,
@@ -392,6 +393,7 @@ fn print_trace(trace: &TraceDetail) -> Result<()> {
             table_cell(&span.name, 160)
         );
     }
+    println!("Span events: {}", trace.span_events.len());
     println!("Logs: {}", trace.logs.len());
     println!("Frontend errors: {}", trace.frontend_errors.len());
     println!("Tauri IPC calls: {}", trace.tauri_ipc_calls.len());
@@ -466,6 +468,7 @@ fn window_event(window: &TauriWindowState) -> &str {
 struct TraceDetail {
     trace_id: String,
     spans: Vec<SpanRecord>,
+    span_events: Vec<auditaur_core::model::SpanEventRecord>,
     logs: Vec<LogRecord>,
     frontend_errors: Vec<FrontendError>,
     tauri_ipc_calls: Vec<TauriIpcCall>,

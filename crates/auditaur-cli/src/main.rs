@@ -115,6 +115,31 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    AgentRuns {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    AgentRun {
+        run_id: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     Ipc {
         #[arg(long)]
         db: Option<PathBuf>,
@@ -176,6 +201,8 @@ enum Command {
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
+        #[arg(long)]
+        run_id: Option<String>,
         #[arg(long)]
         window: Option<String>,
         #[arg(long)]
@@ -310,6 +337,21 @@ fn main() -> Result<()> {
             session,
             json,
         } => commands::read::trace(&db, session, trace_id, json),
+        Command::AgentRuns {
+            db,
+            app,
+            session,
+            since,
+            json,
+            limit,
+        } => commands::agent::runs(&db, app, session, since, json, limit),
+        Command::AgentRun {
+            run_id,
+            db,
+            app,
+            session,
+            json,
+        } => commands::agent::run(&db, app, session, run_id, json),
         Command::Ipc {
             db,
             session,
@@ -345,11 +387,12 @@ fn main() -> Result<()> {
             db,
             session,
             trace,
+            run_id,
             window,
             since,
             json,
             limit,
-        } => commands::polish::related(&db, session, trace, window, since, json, limit),
+        } => commands::polish::related(&db, session, trace, run_id, window, since, json, limit),
         Command::Explain {
             db,
             session,
