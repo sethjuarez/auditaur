@@ -24,6 +24,7 @@ export type {
   FrontendErrorRecord,
   LogRecord,
   OTelBatch,
+  SpanEventRecord,
   SpanRecord,
   TauriEventRecord,
   TauriIpcCallRecord,

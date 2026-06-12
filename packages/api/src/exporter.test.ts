@@ -42,6 +42,7 @@ describe('AuditaurExporter', () => {
 
     expect(mocks.invoke).toHaveBeenLastCalledWith('plugin:auditaur|export_otel_batch', {
       batch: expect.objectContaining({
+        spanEvents: [],
         logs: [
           expect.objectContaining({
             timestampUnixNanos: 1,
