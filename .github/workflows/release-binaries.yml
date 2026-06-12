@@ -53,6 +53,8 @@ jobs:
         with:
           arch: ${{ matrix.msvc_arch }}
       - uses: Swatinem/rust-cache@v2
+      - name: Verify skill asset matches repo skill
+        run: python scripts/check-skill-drift.py
       - name: Build CLI
         run: cargo build -p auditaur-cli --release --target ${{ matrix.rust_target }}
       - name: Prepare asset

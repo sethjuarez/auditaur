@@ -24,6 +24,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify skill asset matches repo skill
+        run: python scripts/check-skill-drift.py
       - name: Verify Rust release graph
         run: |
           python - <<'PY'
@@ -78,6 +80,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify skill asset matches repo skill
+        run: python scripts/check-skill-drift.py
       - name: Verify Rust release graph
         run: |
           python - <<'PY'
