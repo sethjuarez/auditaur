@@ -1012,7 +1012,8 @@ fn select_cdp_target<'a>(
             [] => {}
             _ => {
                 return Err(anyhow!(
-                    "Multiple bound CDP targets found. Run `auditaur drive inspect` and pass --target <target-id>."
+                    "Multiple bound CDP targets found. Pass --target <target-id>. Candidates: {}",
+                    target_candidates(&bound)
                 ))
             }
         }
@@ -1026,15 +1027,41 @@ fn select_cdp_target<'a>(
             .as_slice()
         {
             [target] => Ok(target),
-            [] => Err(anyhow!("No driveable CDP page target found. Run `auditaur drive inspect`.")),
+            [] => Err(anyhow!(
+                "No driveable CDP page target found. Run `auditaur drive inspect`."
+            )),
             _ => Err(anyhow!(
-                "Multiple driveable CDP targets found. Run `auditaur drive inspect` and pass --target <target-id>."
+                "Multiple driveable CDP targets found. Pass --target <target-id>. Candidates: {}",
+                target_candidates(
+                    &targets
+                        .iter()
+                        .filter(|target| target.web_socket_debugger_url.is_some())
+                        .collect::<Vec<_>>()
+                )
             )),
         },
         _ => Err(anyhow!(
-            "Multiple driveable CDP targets found. Run `auditaur drive inspect` and pass --target <target-id>."
+            "Multiple driveable CDP targets found. Pass --target <target-id>. Candidates: {}",
+            target_candidates(&driveable)
         )),
     }
+}
+
+fn target_candidates(targets: &[&CdpTarget]) -> String {
+    targets
+        .iter()
+        .take(5)
+        .map(|target| {
+            format!(
+                "{} type={} binding={} ownership={}",
+                target.id,
+                target.target_type.as_deref().unwrap_or("<unknown>"),
+                target.binding_status,
+                target.ownership_status
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn is_bound_target(target: &CdpTarget) -> bool {

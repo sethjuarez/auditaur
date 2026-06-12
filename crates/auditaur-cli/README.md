@@ -24,6 +24,7 @@ auditaur related --run-id <run-id> --json
 auditaur windows --json
 auditaur timeline --json
 auditaur explain
+auditaur init skill
 auditaur mcp
 ```
 

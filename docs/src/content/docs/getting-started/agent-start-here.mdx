@@ -5,6 +5,22 @@ description: A concise workflow for coding agents debugging Auditaur-enabled Tau
 
 Use Auditaur data before asking a developer to paste logs, screenshots, browser console output, or terminal output.
 
+## Install the agent skill
+
+In a repo that uses Auditaur, scaffold the shared debugging skill so agents know the readiness, CDP, telemetry, and cleanup workflow:
+
+```powershell
+auditaur init skill
+```
+
+From the Auditaur repository, maintainers can validate the publishable skill without creating a release:
+
+```powershell
+gh skill publish --dry-run
+```
+
+`gh skill preview` reads from GitHub, so previewing `sethjuarez/auditaur` will only find `auditaur-debug` after the branch containing `.github/skills/auditaur-debug/SKILL.md` is pushed/merged.
+
 ## Integration docs
 
 - [Add Auditaur to a Tauri App](/getting-started/add-to-tauri-app/)

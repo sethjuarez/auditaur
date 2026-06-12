@@ -8,8 +8,7 @@ use serde::Serialize;
 
 use crate::commands::read;
 
-const AUDITAUR_DEBUG_SKILL: &str =
-    include_str!("../../../../.github/skills/auditaur-debug/SKILL.md");
+pub(crate) const AUDITAUR_DEBUG_SKILL: &str = include_str!("../../assets/auditaur-debug-skill.md");
 const SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-debug", "SKILL.md"];
 
 #[derive(Debug, Serialize)]

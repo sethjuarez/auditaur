@@ -731,9 +731,27 @@ fn stage(
 }
 
 fn print_status(status: &DebugStatus) -> Result<()> {
+    let ok = status
+        .stages
+        .iter()
+        .filter(|stage| stage.status == DebugStageStatus::Ok)
+        .count();
+    let waiting = status
+        .stages
+        .iter()
+        .filter(|stage| stage.status == DebugStageStatus::Waiting)
+        .count();
+    let errors = status
+        .stages
+        .iter()
+        .filter(|stage| stage.status == DebugStageStatus::Error)
+        .count();
     println!(
-        "Auditaur debug: {}",
-        if status.ready { "ready" } else { "waiting" }
+        "Auditaur debug: {} (ok={} waiting={} errors={})",
+        if status.ready { "ready" } else { "waiting" },
+        ok,
+        waiting,
+        errors
     );
     for stage in &status.stages {
         println!(

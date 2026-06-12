@@ -32,6 +32,12 @@ cargo run -p auditaur-cli -- events --json
 cargo run -p auditaur-cli -- traces --json
 ```
 
+For a repeatable local dogfood pass on Windows, run:
+
+```powershell
+.\scripts\dogfood-smoke.ps1
+```
+
 If more than one app session is active, copy `databasePath` from `apps --json` and pass it explicitly:
 
 ```powershell
@@ -66,5 +72,6 @@ Auditaur packages are published publicly:
 - Rust crates: `auditaur-core`, `auditaur-collector`, `auditaur-cli`, `tauri-plugin-auditaur`.
 - CLI binary: install with `cargo install auditaur-cli`.
 - Frontend package: install with `npm install @auditaur/api`.
+- Agent skill: scaffold into a consuming repo with `auditaur init skill`, or validate/publish this repo's skill with `gh skill publish --dry-run`.
 
 See the docs in `docs\src\content\docs` for installation, MCP, and Tauri integration details.

@@ -337,6 +337,14 @@ fn init_skill_installs_auditaur_debug_skill() {
 }
 
 #[test]
+fn packaged_init_skill_matches_repo_skill() {
+    let repo_skill =
+        include_str!("../../../.github/skills/auditaur-debug/SKILL.md").replace("\r\n", "\n");
+    let packaged_skill = include_str!("../assets/auditaur-debug-skill.md").replace("\r\n", "\n");
+    assert_eq!(packaged_skill, repo_skill);
+}
+
+#[test]
 fn agentive_runs_group_model_tool_events_and_related_by_run_id() {
     let db = fixture_database();
     let store = SqliteStore::open(db.path()).unwrap();
