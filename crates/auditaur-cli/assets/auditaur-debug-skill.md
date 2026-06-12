@@ -97,6 +97,14 @@ auditaur drive --app <app-name> --active --cdp-port 9222 --json screenshot --out
 
 Review snapshot artifacts before sharing them; they may contain DOM text, URLs, or other sensitive content.
 
+For text entry, use `fill` when a direct DOM value setter plus `input`/`change` events is enough. Use `type` when a framework-controlled input or textarea needs CDP text insertion after focus:
+
+```bash
+auditaur drive --app <app-name> --active --cdp-port 9222 --json type --selector 'textarea' --value 'hello' --visible-only --allow-unproven-target
+```
+
+Prefer `--visible-only` (or `--visible`) with selector actions (`wait`, `exists`, `text`, `click`, `fill`, and `type`) when validating modals, focus overlays, or fullscreen shells that leave duplicate hidden DOM behind.
+
 ## Inspecting telemetry
 
 After readiness, use structured read commands:
