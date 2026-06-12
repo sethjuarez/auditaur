@@ -1530,6 +1530,117 @@ fn doctor_tauri_reports_dogfood_setup() {
     assert_eq!(report["ok"], true);
 }
 
+#[test]
+fn dogfood_smoke_telemetry_is_visible_through_cli_workflows() {
+    let db = NamedTempFile::new().unwrap();
+    let store = create_dogfood_smoke_database_at(db.path());
+    drop(store);
+
+    let sessions = run_json(["sessions", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert_eq!(sessions[0]["serviceName"], "auditaur-dogfood-backend");
+    assert_eq!(sessions[0]["sessionName"], "dogfood-manual-smoke");
+
+    let logs = run_json(["logs", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(logs.as_array().unwrap().iter().any(|log| {
+        log["body"] == "Dogfood console log" && log["attributes"]["source"] == "frontend"
+    }));
+    assert!(logs.as_array().unwrap().iter().any(|log| {
+        log["body"] == "failing command rejected request"
+            && log["attributes"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Intentional dogfood backend failure")
+    }));
+
+    let errors = run_json(["errors", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(errors.as_array().unwrap().iter().any(|error| {
+        error["message"] == "Intentional dogfood frontend error" && error["windowLabel"] == "main"
+    }));
+
+    let ipc = run_json(["ipc", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(ipc
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|call| { call["command"] == "successful_command" && call["status"] == "OK" }));
+    let failed_call = ipc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|call| call["command"] == "failing_command")
+        .unwrap();
+    assert_eq!(failed_call["status"], "ERROR");
+    assert!(failed_call["errorMessage"]
+        .as_str()
+        .unwrap()
+        .contains("Intentional dogfood backend failure"));
+
+    let events = run_json(["events", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(events.as_array().unwrap().iter().any(|event| {
+        event["eventName"] == "dogfood:frontend-event" && event["direction"] == "emit"
+    }));
+    assert!(events.as_array().unwrap().iter().any(|event| {
+        event["eventName"] == "dogfood:backend-event" && event["direction"] == "listen"
+    }));
+
+    let windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(windows.as_array().unwrap().iter().any(|window| {
+        window["windowLabel"] == "main" && window["title"] == "Auditaur Dogfood"
+    }));
+
+    let traces = run_json(["traces", "--db", db.path().to_str().unwrap(), "--json"]);
+    let failed_trace = traces
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|trace| trace["traceId"] == "trace-dogfood-failing")
+        .unwrap();
+    assert_eq!(failed_trace["errorCount"], 2);
+    assert_eq!(failed_trace["spanCount"], 2);
+
+    let trace = run_json([
+        "trace",
+        "trace-dogfood-failing",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(trace["spans"].as_array().unwrap().iter().any(|span| {
+        span["name"] == "tauri.invoke failing_command" && span["statusCode"] == "ERROR"
+    }));
+    assert!(trace["spans"].as_array().unwrap().iter().any(|span| {
+        span["name"] == "failing_command" && span["parentSpanId"] == "frontend-failing-span"
+    }));
+
+    let explain = run_json([
+        "explain",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--trace",
+        "trace-dogfood-failing",
+        "--json",
+    ]);
+    assert_eq!(explain["failedIpcCount"], 1);
+    assert!(!explain["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding
+            .as_str()
+            .unwrap()
+            .contains("Missing backend trace continuation")));
+
+    let bundle = run_json([
+        "bundle",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--trace",
+        "trace-dogfood-failing",
+    ]);
+    assert_eq!(bundle["redacted"], true);
+    assert_eq!(bundle["tauriIpcCalls"][0]["argsJson"], "[redacted]");
+}
+
 fn run_json<const N: usize>(args: [&str; N]) -> Value {
     serde_json::from_str(&run_stdout(args)).unwrap()
 }
@@ -2256,6 +2367,252 @@ fn create_fixture_database_without_windows_at(path: &std::path::Path) -> SqliteS
             ended_at: None,
             schema_version: SQLITE_SCHEMA_VERSION,
             auditaur_version: Some("0.1.0".to_string()),
+        })
+        .unwrap();
+
+    store
+}
+
+fn create_dogfood_smoke_database_at(path: &std::path::Path) -> SqliteStore {
+    let store = SqliteStore::open(path).unwrap();
+    store.migrate().unwrap();
+
+    let session = Session {
+        id: "session-dogfood".to_string(),
+        session_name: Some("dogfood-manual-smoke".to_string()),
+        service_name: "auditaur-dogfood-backend".to_string(),
+        service_version: Some("0.2.1".to_string()),
+        app_identifier: Some("dev.auditaur.dogfood".to_string()),
+        pid: Some(4242),
+        started_at: "2026-06-12T16:00:00Z".to_string(),
+        ended_at: None,
+        schema_version: SQLITE_SCHEMA_VERSION,
+        auditaur_version: Some("0.2.1".to_string()),
+    };
+    store.create_session(&session).unwrap();
+
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-success".to_string(),
+            span_id: "frontend-success-span".to_string(),
+            parent_span_id: None,
+            name: "tauri.invoke successful_command".to_string(),
+            kind: Some("client".to_string()),
+            start_time_unix_nanos: 1_000,
+            end_time_unix_nanos: Some(2_000),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "tauri.command": "successful_command" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-success".to_string(),
+            span_id: "backend-success-span".to_string(),
+            parent_span_id: Some("frontend-success-span".to_string()),
+            name: "successful_command".to_string(),
+            kind: Some("internal".to_string()),
+            start_time_unix_nanos: 1_250,
+            end_time_unix_nanos: Some(1_750),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("dogfood-backend".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "auditaur.example.message": "hello from Auditaur" }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 1_100,
+            duration_ms: Some(1.0),
+            command: "successful_command".to_string(),
+            status: "OK".to_string(),
+            error_message: None,
+            trace_id: Some("trace-dogfood-success".to_string()),
+            span_id: Some("frontend-success-span".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: Some(json!({ "message": "hello from Auditaur" })),
+            args_redacted: true,
+            result_summary: Some("\"Backend received: hello from Auditaur\"".to_string()),
+        })
+        .unwrap();
+
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-failing".to_string(),
+            span_id: "frontend-failing-span".to_string(),
+            parent_span_id: None,
+            name: "tauri.invoke failing_command".to_string(),
+            kind: Some("client".to_string()),
+            start_time_unix_nanos: 3_000,
+            end_time_unix_nanos: Some(4_000),
+            status_code: Some("ERROR".to_string()),
+            status_message: Some(
+                "Intentional dogfood backend failure: the dogfood button requested a failure"
+                    .to_string(),
+            ),
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "tauri.command": "failing_command" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-failing".to_string(),
+            span_id: "backend-failing-span".to_string(),
+            parent_span_id: Some("frontend-failing-span".to_string()),
+            name: "failing_command".to_string(),
+            kind: Some("internal".to_string()),
+            start_time_unix_nanos: 3_250,
+            end_time_unix_nanos: Some(3_750),
+            status_code: Some("ERROR".to_string()),
+            status_message: Some(
+                "Intentional dogfood backend failure: the dogfood button requested a failure"
+                    .to_string(),
+            ),
+            scope_name: Some("dogfood-backend".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "error": "Intentional dogfood backend failure: the dogfood button requested a failure" }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 3_100,
+            duration_ms: Some(1.0),
+            command: "failing_command".to_string(),
+            status: "ERROR".to_string(),
+            error_message: Some(
+                "Intentional dogfood backend failure: the dogfood button requested a failure"
+                    .to_string(),
+            ),
+            trace_id: Some("trace-dogfood-failing".to_string()),
+            span_id: Some("frontend-failing-span".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: Some(json!({ "reason": "the dogfood button requested a failure" })),
+            args_redacted: true,
+            result_summary: None,
+        })
+        .unwrap();
+
+    store
+        .insert_log(&LogRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 500,
+            observed_timestamp_unix_nanos: Some(505),
+            severity_text: Some("INFO".to_string()),
+            severity_number: Some(9),
+            body: Some("Dogfood console log".to_string()),
+            body_json: Some(json!({
+                "source": "frontend",
+                "secret": "[redacted]",
+            })),
+            trace_id: None,
+            span_id: None,
+            scope_name: Some("console".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "source": "frontend" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_log(&LogRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 3_300,
+            observed_timestamp_unix_nanos: Some(3_305),
+            severity_text: Some("ERROR".to_string()),
+            severity_number: Some(17),
+            body: Some("failing command rejected request".to_string()),
+            body_json: None,
+            trace_id: Some("trace-dogfood-failing".to_string()),
+            span_id: Some("backend-failing-span".to_string()),
+            scope_name: Some("dogfood-backend".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "error": "Intentional dogfood backend failure: the dogfood button requested a failure" }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    store
+        .insert_frontend_error(&FrontendError {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 600,
+            message: "Intentional dogfood frontend error".to_string(),
+            stack: Some("Error: Intentional dogfood frontend error".to_string()),
+            filename: Some("src/main.ts".to_string()),
+            line_number: Some(58),
+            column_number: Some(13),
+            error_type: Some("Error".to_string()),
+            trace_id: None,
+            span_id: None,
+            window_label: Some("main".to_string()),
+            attributes: json!({ "auditaur.source": "window.onerror" }),
+        })
+        .unwrap();
+    store
+        .insert_tauri_event(&TauriEventRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 700,
+            event_name: "dogfood:frontend-event".to_string(),
+            direction: "emit".to_string(),
+            target: Some("main".to_string()),
+            trace_id: None,
+            span_id: None,
+            window_label: Some("main".to_string()),
+            payload_summary: Some(
+                "{\"source\":\"frontend\",\"message\":\"hello from the webview\"}".to_string(),
+            ),
+            payload_json: Some(json!({
+                "source": "frontend",
+                "message": "hello from the webview",
+            })),
+            payload_redacted: false,
+        })
+        .unwrap();
+    store
+        .insert_tauri_event(&TauriEventRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 800,
+            event_name: "dogfood:backend-event".to_string(),
+            direction: "listen".to_string(),
+            target: Some("main".to_string()),
+            trace_id: None,
+            span_id: None,
+            window_label: Some("main".to_string()),
+            payload_summary: Some(
+                "{\"source\":\"backend\",\"message\":\"hello from Rust\"}".to_string(),
+            ),
+            payload_json: Some(json!({
+                "source": "backend",
+                "message": "hello from Rust",
+            })),
+            payload_redacted: false,
+        })
+        .unwrap();
+    store
+        .insert_tauri_window_state(&TauriWindowState {
+            session_id: session.id,
+            timestamp_unix_nanos: 400,
+            window_label: "main".to_string(),
+            webview_label: None,
+            url: Some("tauri://localhost".to_string()),
+            title: Some("Auditaur Dogfood".to_string()),
+            focused: Some(true),
+            visible: Some(true),
+            width: Some(1024.0),
+            height: Some(768.0),
+            scale_factor: Some(1.0),
+            attributes: json!({ "auditaur.capture_phase": "startup" }),
         })
         .unwrap();
 
