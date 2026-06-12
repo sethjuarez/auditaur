@@ -53,6 +53,39 @@ fn reads_fixture_database_as_json() {
 
     let windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
     assert_eq!(windows[0]["windowLabel"], "main");
+    let store = SqliteStore::open(db.path()).unwrap();
+    store
+        .insert_tauri_window_state(&TauriWindowState {
+            session_id: "session-fixture".to_string(),
+            timestamp_unix_nanos: 183,
+            window_label: "main".to_string(),
+            webview_label: None,
+            url: None,
+            title: Some("Fixture".to_string()),
+            focused: Some(false),
+            visible: Some(true),
+            width: Some(800.0),
+            height: Some(600.0),
+            scale_factor: Some(1.0),
+            attributes: json!({
+                "auditaur.capture": "window_event",
+                "tauri.window.event": "blurred",
+                "tauri.window.event.focused": false,
+            }),
+        })
+        .unwrap();
+    drop(store);
+    let lifecycle_windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
+    let blurred_window = lifecycle_windows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|window| window["attributes"]["tauri.window.event"] == "blurred")
+        .unwrap();
+    assert_eq!(
+        blurred_window["attributes"]["tauri.window.event.focused"],
+        false
+    );
 
     let failed_ipc = run_json([
         "ipc",
@@ -66,6 +99,11 @@ fn reads_fixture_database_as_json() {
     let timeline = run_json(["timeline", "--db", db.path().to_str().unwrap(), "--json"]);
     assert!(timeline.as_array().unwrap().len() >= 6);
     assert_eq!(timeline[0]["kind"], "span");
+    assert!(timeline
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| { item["kind"] == "window" && item["status"] == "blurred" }));
 
     let related = run_json([
         "related",
