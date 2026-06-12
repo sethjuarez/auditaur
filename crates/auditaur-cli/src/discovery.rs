@@ -7,6 +7,7 @@ use serde::Serialize;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const STALE_AFTER: Duration = Duration::from_secs(30);
+const CHURN_BURST_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +30,8 @@ pub struct DiscoveredApp {
     pub stale_reason: Option<String>,
     pub superseded_by_session_id: Option<String>,
     pub seconds_until_next_start: Option<i64>,
+    pub churn_session_count: Option<usize>,
+    pub churn_window_seconds: Option<i64>,
     pub churn_hint: Option<String>,
 }
 
@@ -136,6 +139,8 @@ fn app_from_discovery(discovery: DiscoveryFile, discovery_path: PathBuf) -> Disc
         stale_reason,
         superseded_by_session_id: None,
         seconds_until_next_start: None,
+        churn_session_count: None,
+        churn_window_seconds: None,
         churn_hint: None,
     }
 }
@@ -155,7 +160,7 @@ fn annotate_session_churn(apps: &mut [DiscoveredApp]) {
         let Some(started_at) = parse_timestamp(&app.started_at) else {
             continue;
         };
-        let Some((newer, newer_started_at)) = snapshot
+        let mut newer_sessions: Vec<_> = snapshot
             .iter()
             .filter(|candidate| candidate.instance_id != app.instance_id)
             .filter(|candidate| same_app_identity(app, candidate))
@@ -163,15 +168,33 @@ fn annotate_session_churn(apps: &mut [DiscoveredApp]) {
                 let candidate_started_at = parse_timestamp(&candidate.started_at)?;
                 (candidate_started_at > started_at).then_some((candidate, candidate_started_at))
             })
-            .min_by_key(|(_, candidate_started_at)| *candidate_started_at)
-        else {
+            .collect();
+        newer_sessions.sort_by_key(|(_, candidate_started_at)| *candidate_started_at);
+        let Some((newer, newer_started_at)) = newer_sessions.first().copied() else {
             continue;
         };
 
         let seconds_until_next_start = (newer_started_at - started_at).whole_seconds().max(0);
+        let burst_cutoff = started_at + CHURN_BURST_WINDOW;
+        let burst_sessions: Vec<_> = newer_sessions
+            .iter()
+            .copied()
+            .filter(|(_, candidate_started_at)| *candidate_started_at <= burst_cutoff)
+            .collect();
+        let churn_session_count = (1 + burst_sessions.len()).max(2);
+        let churn_window_seconds = burst_sessions
+            .last()
+            .map(|(_, latest_started_at)| (*latest_started_at - started_at).whole_seconds().max(0))
+            .unwrap_or(seconds_until_next_start);
         app.superseded_by_session_id = Some(newer.session_id.clone());
         app.seconds_until_next_start = Some(seconds_until_next_start);
-        app.churn_hint = Some(if newer.status == DiscoveryStatus::Active {
+        app.churn_session_count = Some(churn_session_count);
+        app.churn_window_seconds = Some(churn_window_seconds);
+        app.churn_hint = Some(if churn_session_count >= 3 {
+            format!(
+                "stale session appears part of a restart burst: {churn_session_count} sessions for this app identity started within {churn_window_seconds}s; likely repeated app restarts or Tauri dev watcher rebuild churn if this followed source edits"
+            )
+        } else if newer.status == DiscoveryStatus::Active {
             format!(
                 "stale session appears superseded by active session {} started {}s later; likely app restart or Tauri dev watcher rebuild if this followed source edits",
                 newer.session_id, seconds_until_next_start

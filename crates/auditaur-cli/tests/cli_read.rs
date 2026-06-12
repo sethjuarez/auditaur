@@ -1481,6 +1481,13 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         .join("telemetry.sqlite");
     fs::create_dir_all(stale_db_path.parent().unwrap()).unwrap();
     drop(create_fixture_database_at(&stale_db_path));
+    let middle_db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-middle")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(middle_db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&middle_db_path));
     let active_db_path = temp
         .path()
         .join("sessions")
@@ -1509,6 +1516,22 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         temp.path(),
         DiscoveryFile {
             schema_version: 1,
+            instance_id: "instance-middle".to_string(),
+            session_id: "session-middle".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:05Z".to_string(),
+            database_path: middle_db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2000-01-01T00:00:05Z".to_string(),
+        },
+    );
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
             instance_id: "instance-active".to_string(),
             session_id: "session-active".to_string(),
             service_name: "auditaur-fixture".to_string(),
@@ -1529,12 +1552,14 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         .iter()
         .find(|app| app["sessionId"] == "session-stale")
         .unwrap();
-    assert_eq!(stale["supersededBySessionId"], "session-active");
-    assert_eq!(stale["secondsUntilNextStart"], 12);
+    assert_eq!(stale["supersededBySessionId"], "session-middle");
+    assert_eq!(stale["secondsUntilNextStart"], 5);
+    assert_eq!(stale["churnSessionCount"], 3);
+    assert_eq!(stale["churnWindowSeconds"], 12);
     assert!(stale["churnHint"]
         .as_str()
         .unwrap()
-        .contains("Tauri dev watcher rebuild"));
+        .contains("restart burst"));
 
     let health = run_json_with_env(["health", "--json"], temp.path().to_str().unwrap());
     let stale_health = health["apps"]
@@ -1543,11 +1568,16 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         .iter()
         .find(|app| app["sessionId"] == "session-stale")
         .unwrap();
-    assert!(stale_health["checks"]
+    let churn_check = stale_health["checks"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|check| check["name"] == "session-churn"));
+        .find(|check| check["name"] == "session-churn")
+        .unwrap();
+    assert!(churn_check["message"]
+        .as_str()
+        .unwrap()
+        .contains("3 sessions"));
 }
 
 #[test]
