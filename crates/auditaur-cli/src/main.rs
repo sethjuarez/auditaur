@@ -349,6 +349,10 @@ enum DriveCommand {
         #[arg(long)]
         output: PathBuf,
         #[arg(long)]
+        snapshot_output: Option<PathBuf>,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
         target: Option<String>,
         #[arg(long)]
         test_id: Option<String>,
@@ -487,6 +491,8 @@ fn main() -> Result<()> {
             }
             Some(DriveCommand::Screenshot {
                 output,
+                snapshot_output,
+                selector,
                 target,
                 test_id,
                 step_id,
@@ -497,6 +503,8 @@ fn main() -> Result<()> {
                     args.cdp_port,
                     commands::drive::ScreenshotOptions {
                         output,
+                        snapshot_output,
+                        selector,
                         target_id: target,
                         test_id,
                         step_id,

@@ -28,6 +28,7 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CDP_AUTO_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const CDP_EXPLICIT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CDP_READ_TIMEOUT: Duration = Duration::from_millis(500);
+const FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS: usize = 64 * 1024;
 
 pub fn run(selector: DriveAppSelector, cdp_port: Option<u16>, json: bool) -> Result<()> {
     let target = resolve_target(&selector)?;
@@ -212,33 +213,53 @@ pub fn screenshot(
         options.target_id.as_deref(),
         "screenshot",
     )?;
-    let mut socket = connect_cdp_websocket(&websocket_url, Duration::from_secs(10))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut next_id = 1_u64;
-    send_cdp_command(&mut socket, next_id, "Page.enable", json!({}))?;
-    let _ = read_cdp_response(&mut socket, next_id, deadline)?;
-    next_id += 1;
-    send_cdp_command(
-        &mut socket,
-        next_id,
-        "Page.captureScreenshot",
-        json!({ "format": "png", "fromSurface": true }),
-    )?;
-    let response = read_cdp_response(&mut socket, next_id, deadline)?
-        .ok_or_else(|| anyhow!("Timed out waiting for screenshot response."))?;
-    let data = response
-        .pointer("/result/data")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("CDP screenshot response did not include image data: {response}"))?;
-    let bytes = BASE64_STANDARD.decode(data)?;
+    let bytes = capture_screenshot_bytes(&websocket_url)?;
     fs::write(&options.output, bytes)?;
+    let mut payload = json!({ "output": options.output.to_string_lossy(), "format": "png" });
+    if let Some(snapshot_output) = &options.snapshot_output {
+        let (snapshot, snapshot_error) =
+            match capture_page_snapshot(&websocket_url, options.selector.as_deref()) {
+                Ok(snapshot) => (Some(snapshot), None),
+                Err(error) => (None, Some(error.to_string())),
+            };
+        let manifest = json!({
+            "schemaVersion": 1,
+            "action": "screenshot",
+            "serviceName": attach.service_name.clone(),
+            "sessionId": attach.session_id.clone(),
+            "pid": attach.pid,
+            "targetId": target.id.clone(),
+            "targetTitle": target.title.clone(),
+            "targetUrl": target.url.clone(),
+            "windowLabel": target.window_label.clone(),
+            "targetBindingStatus": target.binding_status.clone(),
+            "targetOwnershipStatus": target.ownership_status.clone(),
+            "ownershipProven": target.ownership_proven,
+            "selector": options.selector.clone(),
+            "testId": options.test_id.clone(),
+            "stepId": options.step_id.clone(),
+            "artifacts": {
+                "screenshot": options.output.to_string_lossy(),
+                "snapshot": snapshot_output.to_string_lossy(),
+            },
+            "snapshotTextLimitCharacters": FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS,
+            "snapshot": snapshot,
+            "snapshotError": snapshot_error,
+        });
+        fs::write(snapshot_output, serde_json::to_vec_pretty(&manifest)?)?;
+        payload["snapshot"] = json!(snapshot_output.to_string_lossy());
+        payload["snapshotTextLimitCharacters"] = json!(FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS);
+        if let Some(snapshot_error) = snapshot_error {
+            payload["snapshotError"] = json!(snapshot_error);
+        }
+    }
     let result = action_result(
         &attach,
         &target,
         "screenshot",
-        None,
+        options.selector.clone(),
         false,
-        json!({ "output": options.output.to_string_lossy(), "format": "png" }),
+        payload,
         &options.test_id,
         &options.step_id,
     );
@@ -290,6 +311,8 @@ pub struct PressOptions {
 #[derive(Debug)]
 pub struct ScreenshotOptions {
     pub output: PathBuf,
+    pub snapshot_output: Option<PathBuf>,
+    pub selector: Option<String>,
     pub target_id: Option<String>,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
@@ -1080,6 +1103,39 @@ fn evaluate_expression(websocket_url: &str, expression: &str, timeout: Duration)
     response.pointer("/result/result").cloned().ok_or_else(|| {
         anyhow!("CDP Runtime.evaluate response did not include a result: {response}")
     })
+}
+
+fn capture_screenshot_bytes(websocket_url: &str) -> Result<Vec<u8>> {
+    let mut socket = connect_cdp_websocket(websocket_url, Duration::from_secs(10))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut next_id = 1_u64;
+    send_cdp_command(&mut socket, next_id, "Page.enable", json!({}))?;
+    let _ = read_cdp_response(&mut socket, next_id, deadline)?;
+    next_id += 1;
+    send_cdp_command(
+        &mut socket,
+        next_id,
+        "Page.captureScreenshot",
+        json!({ "format": "png", "fromSurface": true }),
+    )?;
+    let response = read_cdp_response(&mut socket, next_id, deadline)?
+        .ok_or_else(|| anyhow!("Timed out waiting for screenshot response."))?;
+    let data = response
+        .pointer("/result/data")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("CDP screenshot response did not include image data: {response}"))?;
+    BASE64_STANDARD.decode(data).map_err(Into::into)
+}
+
+fn capture_page_snapshot(websocket_url: &str, selector: Option<&str>) -> Result<Value> {
+    let selector_json = serde_json::to_string(&selector)?;
+    let expression = format!(
+        "(() => {{ const limit = {FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS}; const selector = {selector_json}; const selected = selector ? document.querySelector(selector) : null; const clip = (value) => {{ const text = String(value ?? ''); return {{ value: text.slice(0, limit), truncated: text.length > limit, length: text.length }}; }}; return {{ title: document.title, url: location.href, bodyText: clip(document.body?.innerText ?? ''), html: clip(document.documentElement?.outerHTML ?? ''), selected: selected ? {{ selector, text: clip(selected.innerText ?? selected.textContent ?? ''), html: clip(selected.outerHTML ?? '') }} : (selector ? {{ selector, found: false }} : null) }}; }})()"
+    );
+    evaluate_expression(websocket_url, &expression, Duration::from_secs(5))?
+        .get("value")
+        .cloned()
+        .ok_or_else(|| anyhow!("CDP page snapshot response did not include a value."))
 }
 
 fn run_dom_action(

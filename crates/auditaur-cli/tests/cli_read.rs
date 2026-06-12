@@ -1414,6 +1414,112 @@ fn drive_screenshot_writes_png_bytes_and_reports_target_context() {
 }
 
 #[test]
+fn drive_failure_artifacts_write_screenshot_and_bounded_snapshot() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-failure-artifacts");
+    let output_dir = temp.path().join("artifacts");
+    fs::create_dir_all(&output_dir).unwrap();
+    let screenshot = output_dir.join("failure.png");
+    let snapshot = output_dir.join("failure.json");
+    let screenshot_arg = screenshot.to_string_lossy().to_string();
+    let snapshot_arg = snapshot.to_string_lossy().to_string();
+    let (port, server) = start_fake_cdp_failure_artifacts_endpoint("aGVsbG8=");
+    let port_arg = port.to_string();
+
+    let artifacts = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "screenshot",
+            "--output",
+            &screenshot_arg,
+            "--snapshot-output",
+            &snapshot_arg,
+            "--selector",
+            "#failure",
+            "--test-id",
+            "smoke",
+            "--step-id",
+            "failed-click",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(artifacts["ok"], true);
+    assert_eq!(artifacts["action"], "screenshot");
+    assert_eq!(artifacts["mutatesApp"], false);
+    assert_eq!(artifacts["selector"], "#failure");
+    assert_eq!(artifacts["payload"]["output"], screenshot_arg);
+    assert_eq!(artifacts["payload"]["snapshot"], snapshot_arg);
+    assert_eq!(artifacts["payload"]["snapshotTextLimitCharacters"], 65536);
+    assert!(artifacts["payload"].get("snapshotError").is_none());
+    assert_eq!(fs::read(screenshot).unwrap(), b"hello");
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(snapshot).unwrap()).unwrap();
+    assert_eq!(manifest["action"], "screenshot");
+    assert_eq!(manifest["selector"], "#failure");
+    assert_eq!(manifest["testId"], "smoke");
+    assert_eq!(manifest["stepId"], "failed-click");
+    assert_eq!(manifest["snapshotTextLimitCharacters"], 65536);
+    assert!(manifest["snapshotError"].is_null());
+    assert_eq!(manifest["snapshot"]["title"], "Failure Page");
+    assert_eq!(manifest["snapshot"]["selected"]["selector"], "#failure");
+    assert_eq!(
+        manifest["snapshot"]["selected"]["text"]["value"],
+        "Save failed"
+    );
+}
+
+#[test]
+fn drive_screenshot_keeps_png_when_snapshot_capture_fails() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-snapshot-failure");
+    let output_dir = temp.path().join("artifacts");
+    fs::create_dir_all(&output_dir).unwrap();
+    let screenshot = output_dir.join("failure.png");
+    let snapshot = output_dir.join("failure.json");
+    let screenshot_arg = screenshot.to_string_lossy().to_string();
+    let snapshot_arg = snapshot.to_string_lossy().to_string();
+    let (port, server) = start_fake_cdp_snapshot_error_endpoint("aGVsbG8=");
+    let port_arg = port.to_string();
+
+    let artifacts = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "screenshot",
+            "--output",
+            &screenshot_arg,
+            "--snapshot-output",
+            &snapshot_arg,
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(artifacts["ok"], true);
+    assert_eq!(fs::read(screenshot).unwrap(), b"hello");
+    assert!(artifacts["payload"]["snapshotError"]
+        .as_str()
+        .unwrap()
+        .contains("CDP Runtime.evaluate failed"));
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(snapshot).unwrap()).unwrap();
+    assert!(manifest["snapshot"].is_null());
+    assert!(manifest["snapshotError"]
+        .as_str()
+        .unwrap()
+        .contains("CDP Runtime.evaluate failed"));
+}
+
+#[test]
 fn health_ignores_stale_apps_but_fails_unhealthy_active_apps() {
     let stale_temp = TempDir::new().unwrap();
     write_discovery_file(
@@ -2012,6 +2118,127 @@ fn start_fake_cdp_screenshot_endpoint(data: &'static str) -> (u16, thread::JoinH
         }
     });
     (port, handle)
+}
+
+fn start_fake_cdp_failure_artifacts_endpoint(data: &'static str) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        respond_websocket_screenshot(&listener, data);
+        respond_websocket_runtime_value(
+            &listener,
+            json!({
+                "title": "Failure Page",
+                "url": "tauri://localhost/failure",
+                "bodyText": {
+                    "value": "Save failed",
+                    "truncated": false,
+                    "length": 11
+                },
+                "html": {
+                    "value": "<html><body><button id=\"failure\">Save failed</button></body></html>",
+                    "truncated": false,
+                    "length": 65
+                },
+                "selected": {
+                    "selector": "#failure",
+                    "text": {
+                        "value": "Save failed",
+                        "truncated": false,
+                        "length": 11
+                    },
+                    "html": {
+                        "value": "<button id=\"failure\">Save failed</button>",
+                        "truncated": false,
+                        "length": 41
+                    }
+                }
+            }),
+        );
+    });
+    (port, handle)
+}
+
+fn start_fake_cdp_snapshot_error_endpoint(data: &'static str) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        respond_websocket_screenshot(&listener, data);
+        respond_websocket_runtime_error(&listener, "snapshot failed");
+    });
+    (port, handle)
+}
+
+fn respond_websocket_screenshot(listener: &TcpListener, data: &'static str) {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap();
+        let response = match method {
+            "Page.enable" => json!({ "id": id, "result": {} }),
+            "Page.captureScreenshot" => json!({
+                "id": id,
+                "result": {
+                    "data": data
+                }
+            }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Page.captureScreenshot" {
+            break;
+        }
+    }
+}
+
+fn respond_websocket_runtime_error(listener: &TcpListener, error_message: &'static str) {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap();
+        let response = match method {
+            "Runtime.enable" => json!({ "id": id, "result": {} }),
+            "Runtime.evaluate" => json!({
+                "id": id,
+                "result": {
+                    "exceptionDetails": {
+                        "text": error_message
+                    }
+                }
+            }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Runtime.evaluate" {
+            break;
+        }
+    }
 }
 
 fn respond_websocket_runtime_value(listener: &TcpListener, value: Value) {
