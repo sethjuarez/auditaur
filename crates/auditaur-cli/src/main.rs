@@ -11,7 +11,8 @@ use std::path::PathBuf;
 #[command(
     name = "auditaur",
     version,
-    about = "Runtime observability for Tauri apps and AI agents."
+    about = "Runtime observability for Tauri apps and AI agents.",
+    after_help = "Bootstrap commands:\n  init skill [--path <repo-root>] [--force] [--json]  Install the Auditaur debug agent skill"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -475,6 +476,11 @@ enum DriveCommand {
 }
 
 fn main() -> Result<()> {
+    let raw_args: Vec<String> = std::env::args().collect();
+    if raw_args.get(1).is_some_and(|arg| arg == "init") {
+        return commands::init::run(&raw_args[2..]);
+    }
+
     let cli = Cli::parse();
 
     match cli.command {

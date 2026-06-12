@@ -290,6 +290,53 @@ fn debug_status_reports_waiting_when_required_readiness_is_missing() {
 }
 
 #[test]
+fn init_skill_installs_auditaur_debug_skill() {
+    let repo = TempDir::new().unwrap();
+    let skill_path = repo
+        .path()
+        .join(".github")
+        .join("skills")
+        .join("auditaur-debug")
+        .join("SKILL.md");
+
+    let installed = run_json([
+        "init",
+        "skill",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(installed["ok"], true);
+    assert_eq!(installed["overwritten"], false);
+    let skill = fs::read_to_string(&skill_path).unwrap();
+    assert!(skill.contains("name: auditaur-debug"));
+    assert!(skill.contains("auditaur debug --app <app-name>"));
+
+    let failure = run_failure([
+        "init",
+        "skill",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(failure.contains("already exists"));
+
+    fs::write(&skill_path, "stale").unwrap();
+    let overwritten = run_json([
+        "init",
+        "skill",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--force",
+        "--json",
+    ]);
+    assert_eq!(overwritten["overwritten"], true);
+    assert!(fs::read_to_string(skill_path)
+        .unwrap()
+        .contains("name: auditaur-debug"));
+}
+
+#[test]
 fn agentive_runs_group_model_tool_events_and_related_by_run_id() {
     let db = fixture_database();
     let store = SqliteStore::open(db.path()).unwrap();
