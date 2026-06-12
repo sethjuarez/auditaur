@@ -53,6 +53,39 @@ fn reads_fixture_database_as_json() {
 
     let windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
     assert_eq!(windows[0]["windowLabel"], "main");
+    let store = SqliteStore::open(db.path()).unwrap();
+    store
+        .insert_tauri_window_state(&TauriWindowState {
+            session_id: "session-fixture".to_string(),
+            timestamp_unix_nanos: 183,
+            window_label: "main".to_string(),
+            webview_label: None,
+            url: None,
+            title: Some("Fixture".to_string()),
+            focused: Some(false),
+            visible: Some(true),
+            width: Some(800.0),
+            height: Some(600.0),
+            scale_factor: Some(1.0),
+            attributes: json!({
+                "auditaur.capture": "window_event",
+                "tauri.window.event": "blurred",
+                "tauri.window.event.focused": false,
+            }),
+        })
+        .unwrap();
+    drop(store);
+    let lifecycle_windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
+    let blurred_window = lifecycle_windows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|window| window["attributes"]["tauri.window.event"] == "blurred")
+        .unwrap();
+    assert_eq!(
+        blurred_window["attributes"]["tauri.window.event.focused"],
+        false
+    );
 
     let failed_ipc = run_json([
         "ipc",
@@ -66,6 +99,11 @@ fn reads_fixture_database_as_json() {
     let timeline = run_json(["timeline", "--db", db.path().to_str().unwrap(), "--json"]);
     assert!(timeline.as_array().unwrap().len() >= 6);
     assert_eq!(timeline[0]["kind"], "span");
+    assert!(timeline
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| { item["kind"] == "window" && item["status"] == "blurred" }));
 
     let related = run_json([
         "related",
@@ -172,6 +210,138 @@ fn reads_fixture_database_as_json() {
         "--json",
     ]);
     assert!(tail.contains("\"kind\":\"ipc\""));
+}
+
+#[test]
+fn debug_status_reports_readiness_for_database_and_discovered_app() {
+    let db = fixture_database();
+    let status = run_json([
+        "debug",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--json",
+        "status",
+    ]);
+    assert_eq!(status["ready"], true);
+    assert_eq!(status["telemetry"]["sessions"], 1);
+    assert_eq!(status["telemetry"]["windows"], 1);
+    assert_eq!(status["telemetry"]["frontendRecords"], 4);
+    assert_eq!(
+        status["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|stage| stage["name"] == "app_discovery")
+            .unwrap()["status"],
+        "skipped"
+    );
+
+    let data_dir = TempDir::new().unwrap();
+    write_drive_fixture(data_dir.path(), "debug-instance");
+    let discovered = run_json_with_env(
+        ["debug", "--app", "fixture", "--json", "status"],
+        data_dir.path().to_str().unwrap(),
+    );
+
+    assert_eq!(discovered["ready"], true);
+    assert_eq!(discovered["app"]["serviceName"], "auditaur-fixture");
+    assert_eq!(discovered["cdp"], serde_json::Value::Null);
+    assert!(discovered["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "frontend_telemetry" && stage["status"] == "ok"));
+}
+
+#[test]
+fn debug_status_reports_waiting_when_required_readiness_is_missing() {
+    let data_dir = TempDir::new().unwrap();
+    write_drive_fixture_without_windows(data_dir.path(), "debug-no-window");
+    let missing_window = run_json_with_env(
+        ["debug", "--app", "fixture", "--json", "status"],
+        data_dir.path().to_str().unwrap(),
+    );
+    assert_eq!(missing_window["ready"], false);
+    assert!(missing_window["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "window" && stage["status"] == "waiting"));
+
+    let data_dir = TempDir::new().unwrap();
+    write_drive_fixture_without_windows(data_dir.path(), "debug-no-frontend");
+    let frontend_required = run_json_with_env(
+        [
+            "debug",
+            "--app",
+            "fixture",
+            "--require-frontend",
+            "--json",
+            "status",
+        ],
+        data_dir.path().to_str().unwrap(),
+    );
+    assert_eq!(frontend_required["ready"], false);
+    assert!(frontend_required["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "frontend_telemetry" && stage["status"] == "waiting"));
+}
+
+#[test]
+fn init_skill_installs_auditaur_debug_skill() {
+    let repo = TempDir::new().unwrap();
+    let skill_path = repo
+        .path()
+        .join(".github")
+        .join("skills")
+        .join("auditaur-debug")
+        .join("SKILL.md");
+
+    let installed = run_json([
+        "init",
+        "skill",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(installed["ok"], true);
+    assert_eq!(installed["overwritten"], false);
+    let skill = fs::read_to_string(&skill_path).unwrap();
+    assert!(skill.contains("name: auditaur-debug"));
+    assert!(skill.contains("auditaur debug --app <app-name>"));
+
+    let failure = run_failure([
+        "init",
+        "skill",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(failure.contains("already exists"));
+
+    fs::write(&skill_path, "stale").unwrap();
+    let overwritten = run_json([
+        "init",
+        "skill",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--force",
+        "--json",
+    ]);
+    assert_eq!(overwritten["overwritten"], true);
+    assert!(fs::read_to_string(skill_path)
+        .unwrap()
+        .contains("name: auditaur-debug"));
+}
+
+#[test]
+fn packaged_init_skill_matches_repo_skill() {
+    let repo_skill =
+        include_str!("../../../.github/skills/auditaur-debug/SKILL.md").replace("\r\n", "\n");
+    let packaged_skill = include_str!("../assets/auditaur-debug-skill.md").replace("\r\n", "\n");
+    assert_eq!(packaged_skill, repo_skill);
 }
 
 #[test]
@@ -1376,6 +1546,112 @@ fn drive_screenshot_writes_png_bytes_and_reports_target_context() {
 }
 
 #[test]
+fn drive_failure_artifacts_write_screenshot_and_bounded_snapshot() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-failure-artifacts");
+    let output_dir = temp.path().join("artifacts");
+    fs::create_dir_all(&output_dir).unwrap();
+    let screenshot = output_dir.join("failure.png");
+    let snapshot = output_dir.join("failure.json");
+    let screenshot_arg = screenshot.to_string_lossy().to_string();
+    let snapshot_arg = snapshot.to_string_lossy().to_string();
+    let (port, server) = start_fake_cdp_failure_artifacts_endpoint("aGVsbG8=");
+    let port_arg = port.to_string();
+
+    let artifacts = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "screenshot",
+            "--output",
+            &screenshot_arg,
+            "--snapshot-output",
+            &snapshot_arg,
+            "--selector",
+            "#failure",
+            "--test-id",
+            "smoke",
+            "--step-id",
+            "failed-click",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(artifacts["ok"], true);
+    assert_eq!(artifacts["action"], "screenshot");
+    assert_eq!(artifacts["mutatesApp"], false);
+    assert_eq!(artifacts["selector"], "#failure");
+    assert_eq!(artifacts["payload"]["output"], screenshot_arg);
+    assert_eq!(artifacts["payload"]["snapshot"], snapshot_arg);
+    assert_eq!(artifacts["payload"]["snapshotTextLimitCharacters"], 65536);
+    assert!(artifacts["payload"].get("snapshotError").is_none());
+    assert_eq!(fs::read(screenshot).unwrap(), b"hello");
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(snapshot).unwrap()).unwrap();
+    assert_eq!(manifest["action"], "screenshot");
+    assert_eq!(manifest["selector"], "#failure");
+    assert_eq!(manifest["testId"], "smoke");
+    assert_eq!(manifest["stepId"], "failed-click");
+    assert_eq!(manifest["snapshotTextLimitCharacters"], 65536);
+    assert!(manifest["snapshotError"].is_null());
+    assert_eq!(manifest["snapshot"]["title"], "Failure Page");
+    assert_eq!(manifest["snapshot"]["selected"]["selector"], "#failure");
+    assert_eq!(
+        manifest["snapshot"]["selected"]["text"]["value"],
+        "Save failed"
+    );
+}
+
+#[test]
+fn drive_screenshot_keeps_png_when_snapshot_capture_fails() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-snapshot-failure");
+    let output_dir = temp.path().join("artifacts");
+    fs::create_dir_all(&output_dir).unwrap();
+    let screenshot = output_dir.join("failure.png");
+    let snapshot = output_dir.join("failure.json");
+    let screenshot_arg = screenshot.to_string_lossy().to_string();
+    let snapshot_arg = snapshot.to_string_lossy().to_string();
+    let (port, server) = start_fake_cdp_snapshot_error_endpoint("aGVsbG8=");
+    let port_arg = port.to_string();
+
+    let artifacts = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "screenshot",
+            "--output",
+            &screenshot_arg,
+            "--snapshot-output",
+            &snapshot_arg,
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    server.join().unwrap();
+    assert_eq!(artifacts["ok"], true);
+    assert_eq!(fs::read(screenshot).unwrap(), b"hello");
+    assert!(artifacts["payload"]["snapshotError"]
+        .as_str()
+        .unwrap()
+        .contains("CDP Runtime.evaluate failed"));
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(snapshot).unwrap()).unwrap();
+    assert!(manifest["snapshot"].is_null());
+    assert!(manifest["snapshotError"]
+        .as_str()
+        .unwrap()
+        .contains("CDP Runtime.evaluate failed"));
+}
+
+#[test]
 fn health_ignores_stale_apps_but_fails_unhealthy_active_apps() {
     let stale_temp = TempDir::new().unwrap();
     write_discovery_file(
@@ -1443,6 +1719,13 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         .join("telemetry.sqlite");
     fs::create_dir_all(stale_db_path.parent().unwrap()).unwrap();
     drop(create_fixture_database_at(&stale_db_path));
+    let middle_db_path = temp
+        .path()
+        .join("sessions")
+        .join("session-middle")
+        .join("telemetry.sqlite");
+    fs::create_dir_all(middle_db_path.parent().unwrap()).unwrap();
+    drop(create_fixture_database_at(&middle_db_path));
     let active_db_path = temp
         .path()
         .join("sessions")
@@ -1471,6 +1754,22 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         temp.path(),
         DiscoveryFile {
             schema_version: 1,
+            instance_id: "instance-middle".to_string(),
+            session_id: "session-middle".to_string(),
+            service_name: "auditaur-fixture".to_string(),
+            service_version: Some("0.1.0".to_string()),
+            app_identifier: Some("dev.auditaur.fixture".to_string()),
+            pid: 42,
+            started_at: "2026-05-18T18:00:05Z".to_string(),
+            database_path: middle_db_path.to_string_lossy().to_string(),
+            capabilities: expected_capabilities(),
+            last_heartbeat_at: "2000-01-01T00:00:05Z".to_string(),
+        },
+    );
+    write_discovery_file(
+        temp.path(),
+        DiscoveryFile {
+            schema_version: 1,
             instance_id: "instance-active".to_string(),
             session_id: "session-active".to_string(),
             service_name: "auditaur-fixture".to_string(),
@@ -1491,12 +1790,14 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         .iter()
         .find(|app| app["sessionId"] == "session-stale")
         .unwrap();
-    assert_eq!(stale["supersededBySessionId"], "session-active");
-    assert_eq!(stale["secondsUntilNextStart"], 12);
+    assert_eq!(stale["supersededBySessionId"], "session-middle");
+    assert_eq!(stale["secondsUntilNextStart"], 5);
+    assert_eq!(stale["churnSessionCount"], 3);
+    assert_eq!(stale["churnWindowSeconds"], 12);
     assert!(stale["churnHint"]
         .as_str()
         .unwrap()
-        .contains("Tauri dev watcher rebuild"));
+        .contains("restart burst"));
 
     let health = run_json_with_env(["health", "--json"], temp.path().to_str().unwrap());
     let stale_health = health["apps"]
@@ -1505,11 +1806,16 @@ fn apps_explain_stale_sessions_superseded_by_newer_active_sessions() {
         .iter()
         .find(|app| app["sessionId"] == "session-stale")
         .unwrap();
-    assert!(stale_health["checks"]
+    let churn_check = stale_health["checks"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|check| check["name"] == "session-churn"));
+        .find(|check| check["name"] == "session-churn")
+        .unwrap();
+    assert!(churn_check["message"]
+        .as_str()
+        .unwrap()
+        .contains("3 sessions"));
 }
 
 #[test]
@@ -1528,6 +1834,117 @@ fn doctor_tauri_reports_dogfood_setup() {
     ]);
 
     assert_eq!(report["ok"], true);
+}
+
+#[test]
+fn dogfood_smoke_telemetry_is_visible_through_cli_workflows() {
+    let db = NamedTempFile::new().unwrap();
+    let store = create_dogfood_smoke_database_at(db.path());
+    drop(store);
+
+    let sessions = run_json(["sessions", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert_eq!(sessions[0]["serviceName"], "auditaur-dogfood-backend");
+    assert_eq!(sessions[0]["sessionName"], "dogfood-manual-smoke");
+
+    let logs = run_json(["logs", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(logs.as_array().unwrap().iter().any(|log| {
+        log["body"] == "Dogfood console log" && log["attributes"]["source"] == "frontend"
+    }));
+    assert!(logs.as_array().unwrap().iter().any(|log| {
+        log["body"] == "failing command rejected request"
+            && log["attributes"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Intentional dogfood backend failure")
+    }));
+
+    let errors = run_json(["errors", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(errors.as_array().unwrap().iter().any(|error| {
+        error["message"] == "Intentional dogfood frontend error" && error["windowLabel"] == "main"
+    }));
+
+    let ipc = run_json(["ipc", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(ipc
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|call| { call["command"] == "successful_command" && call["status"] == "OK" }));
+    let failed_call = ipc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|call| call["command"] == "failing_command")
+        .unwrap();
+    assert_eq!(failed_call["status"], "ERROR");
+    assert!(failed_call["errorMessage"]
+        .as_str()
+        .unwrap()
+        .contains("Intentional dogfood backend failure"));
+
+    let events = run_json(["events", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(events.as_array().unwrap().iter().any(|event| {
+        event["eventName"] == "dogfood:frontend-event" && event["direction"] == "emit"
+    }));
+    assert!(events.as_array().unwrap().iter().any(|event| {
+        event["eventName"] == "dogfood:backend-event" && event["direction"] == "listen"
+    }));
+
+    let windows = run_json(["windows", "--db", db.path().to_str().unwrap(), "--json"]);
+    assert!(windows.as_array().unwrap().iter().any(|window| {
+        window["windowLabel"] == "main" && window["title"] == "Auditaur Dogfood"
+    }));
+
+    let traces = run_json(["traces", "--db", db.path().to_str().unwrap(), "--json"]);
+    let failed_trace = traces
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|trace| trace["traceId"] == "trace-dogfood-failing")
+        .unwrap();
+    assert_eq!(failed_trace["errorCount"], 2);
+    assert_eq!(failed_trace["spanCount"], 2);
+
+    let trace = run_json([
+        "trace",
+        "trace-dogfood-failing",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(trace["spans"].as_array().unwrap().iter().any(|span| {
+        span["name"] == "tauri.invoke failing_command" && span["statusCode"] == "ERROR"
+    }));
+    assert!(trace["spans"].as_array().unwrap().iter().any(|span| {
+        span["name"] == "failing_command" && span["parentSpanId"] == "frontend-failing-span"
+    }));
+
+    let explain = run_json([
+        "explain",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--trace",
+        "trace-dogfood-failing",
+        "--json",
+    ]);
+    assert_eq!(explain["failedIpcCount"], 1);
+    assert!(!explain["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding
+            .as_str()
+            .unwrap()
+            .contains("Missing backend trace continuation")));
+
+    let bundle = run_json([
+        "bundle",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--trace",
+        "trace-dogfood-failing",
+    ]);
+    assert_eq!(bundle["redacted"], true);
+    assert_eq!(bundle["tauriIpcCalls"][0]["argsJson"], "[redacted]");
 }
 
 fn run_json<const N: usize>(args: [&str; N]) -> Value {
@@ -1833,6 +2250,127 @@ fn start_fake_cdp_screenshot_endpoint(data: &'static str) -> (u16, thread::JoinH
         }
     });
     (port, handle)
+}
+
+fn start_fake_cdp_failure_artifacts_endpoint(data: &'static str) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        respond_websocket_screenshot(&listener, data);
+        respond_websocket_runtime_value(
+            &listener,
+            json!({
+                "title": "Failure Page",
+                "url": "tauri://localhost/failure",
+                "bodyText": {
+                    "value": "Save failed",
+                    "truncated": false,
+                    "length": 11
+                },
+                "html": {
+                    "value": "<html><body><button id=\"failure\">Save failed</button></body></html>",
+                    "truncated": false,
+                    "length": 65
+                },
+                "selected": {
+                    "selector": "#failure",
+                    "text": {
+                        "value": "Save failed",
+                        "truncated": false,
+                        "length": 11
+                    },
+                    "html": {
+                        "value": "<button id=\"failure\">Save failed</button>",
+                        "truncated": false,
+                        "length": 41
+                    }
+                }
+            }),
+        );
+    });
+    (port, handle)
+}
+
+fn start_fake_cdp_snapshot_error_endpoint(data: &'static str) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        respond_websocket_screenshot(&listener, data);
+        respond_websocket_runtime_error(&listener, "snapshot failed");
+    });
+    (port, handle)
+}
+
+fn respond_websocket_screenshot(listener: &TcpListener, data: &'static str) {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap();
+        let response = match method {
+            "Page.enable" => json!({ "id": id, "result": {} }),
+            "Page.captureScreenshot" => json!({
+                "id": id,
+                "result": {
+                    "data": data
+                }
+            }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Page.captureScreenshot" {
+            break;
+        }
+    }
+}
+
+fn respond_websocket_runtime_error(listener: &TcpListener, error_message: &'static str) {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap();
+        let response = match method {
+            "Runtime.enable" => json!({ "id": id, "result": {} }),
+            "Runtime.evaluate" => json!({
+                "id": id,
+                "result": {
+                    "exceptionDetails": {
+                        "text": error_message
+                    }
+                }
+            }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Runtime.evaluate" {
+            break;
+        }
+    }
 }
 
 fn respond_websocket_runtime_value(listener: &TcpListener, value: Value) {
@@ -2256,6 +2794,252 @@ fn create_fixture_database_without_windows_at(path: &std::path::Path) -> SqliteS
             ended_at: None,
             schema_version: SQLITE_SCHEMA_VERSION,
             auditaur_version: Some("0.1.0".to_string()),
+        })
+        .unwrap();
+
+    store
+}
+
+fn create_dogfood_smoke_database_at(path: &std::path::Path) -> SqliteStore {
+    let store = SqliteStore::open(path).unwrap();
+    store.migrate().unwrap();
+
+    let session = Session {
+        id: "session-dogfood".to_string(),
+        session_name: Some("dogfood-manual-smoke".to_string()),
+        service_name: "auditaur-dogfood-backend".to_string(),
+        service_version: Some("0.2.1".to_string()),
+        app_identifier: Some("dev.auditaur.dogfood".to_string()),
+        pid: Some(4242),
+        started_at: "2026-06-12T16:00:00Z".to_string(),
+        ended_at: None,
+        schema_version: SQLITE_SCHEMA_VERSION,
+        auditaur_version: Some("0.2.1".to_string()),
+    };
+    store.create_session(&session).unwrap();
+
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-success".to_string(),
+            span_id: "frontend-success-span".to_string(),
+            parent_span_id: None,
+            name: "tauri.invoke successful_command".to_string(),
+            kind: Some("client".to_string()),
+            start_time_unix_nanos: 1_000,
+            end_time_unix_nanos: Some(2_000),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "tauri.command": "successful_command" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-success".to_string(),
+            span_id: "backend-success-span".to_string(),
+            parent_span_id: Some("frontend-success-span".to_string()),
+            name: "successful_command".to_string(),
+            kind: Some("internal".to_string()),
+            start_time_unix_nanos: 1_250,
+            end_time_unix_nanos: Some(1_750),
+            status_code: Some("OK".to_string()),
+            status_message: None,
+            scope_name: Some("dogfood-backend".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "auditaur.example.message": "hello from Auditaur" }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 1_100,
+            duration_ms: Some(1.0),
+            command: "successful_command".to_string(),
+            status: "OK".to_string(),
+            error_message: None,
+            trace_id: Some("trace-dogfood-success".to_string()),
+            span_id: Some("frontend-success-span".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: Some(json!({ "message": "hello from Auditaur" })),
+            args_redacted: true,
+            result_summary: Some("\"Backend received: hello from Auditaur\"".to_string()),
+        })
+        .unwrap();
+
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-failing".to_string(),
+            span_id: "frontend-failing-span".to_string(),
+            parent_span_id: None,
+            name: "tauri.invoke failing_command".to_string(),
+            kind: Some("client".to_string()),
+            start_time_unix_nanos: 3_000,
+            end_time_unix_nanos: Some(4_000),
+            status_code: Some("ERROR".to_string()),
+            status_message: Some(
+                "Intentional dogfood backend failure: the dogfood button requested a failure"
+                    .to_string(),
+            ),
+            scope_name: Some("@auditaur/api".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "tauri.command": "failing_command" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_span(&SpanRecord {
+            session_id: session.id.clone(),
+            trace_id: "trace-dogfood-failing".to_string(),
+            span_id: "backend-failing-span".to_string(),
+            parent_span_id: Some("frontend-failing-span".to_string()),
+            name: "failing_command".to_string(),
+            kind: Some("internal".to_string()),
+            start_time_unix_nanos: 3_250,
+            end_time_unix_nanos: Some(3_750),
+            status_code: Some("ERROR".to_string()),
+            status_message: Some(
+                "Intentional dogfood backend failure: the dogfood button requested a failure"
+                    .to_string(),
+            ),
+            scope_name: Some("dogfood-backend".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "error": "Intentional dogfood backend failure: the dogfood button requested a failure" }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    store
+        .insert_tauri_ipc_call(&TauriIpcCall {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 3_100,
+            duration_ms: Some(1.0),
+            command: "failing_command".to_string(),
+            status: "ERROR".to_string(),
+            error_message: Some(
+                "Intentional dogfood backend failure: the dogfood button requested a failure"
+                    .to_string(),
+            ),
+            trace_id: Some("trace-dogfood-failing".to_string()),
+            span_id: Some("frontend-failing-span".to_string()),
+            window_label: Some("main".to_string()),
+            args_json: Some(json!({ "reason": "the dogfood button requested a failure" })),
+            args_redacted: true,
+            result_summary: None,
+        })
+        .unwrap();
+
+    store
+        .insert_log(&LogRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 500,
+            observed_timestamp_unix_nanos: Some(505),
+            severity_text: Some("INFO".to_string()),
+            severity_number: Some(9),
+            body: Some("Dogfood console log".to_string()),
+            body_json: Some(json!({
+                "source": "frontend",
+                "secret": "[redacted]",
+            })),
+            trace_id: None,
+            span_id: None,
+            scope_name: Some("console".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "source": "frontend" }),
+            source: TelemetrySource::Frontend,
+        })
+        .unwrap();
+    store
+        .insert_log(&LogRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 3_300,
+            observed_timestamp_unix_nanos: Some(3_305),
+            severity_text: Some("ERROR".to_string()),
+            severity_number: Some(17),
+            body: Some("failing command rejected request".to_string()),
+            body_json: None,
+            trace_id: Some("trace-dogfood-failing".to_string()),
+            span_id: Some("backend-failing-span".to_string()),
+            scope_name: Some("dogfood-backend".to_string()),
+            scope_version: Some("0.2.1".to_string()),
+            attributes: json!({ "error": "Intentional dogfood backend failure: the dogfood button requested a failure" }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    store
+        .insert_frontend_error(&FrontendError {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 600,
+            message: "Intentional dogfood frontend error".to_string(),
+            stack: Some("Error: Intentional dogfood frontend error".to_string()),
+            filename: Some("src/main.ts".to_string()),
+            line_number: Some(58),
+            column_number: Some(13),
+            error_type: Some("Error".to_string()),
+            trace_id: None,
+            span_id: None,
+            window_label: Some("main".to_string()),
+            attributes: json!({ "auditaur.source": "window.onerror" }),
+        })
+        .unwrap();
+    store
+        .insert_tauri_event(&TauriEventRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 700,
+            event_name: "dogfood:frontend-event".to_string(),
+            direction: "emit".to_string(),
+            target: Some("main".to_string()),
+            trace_id: None,
+            span_id: None,
+            window_label: Some("main".to_string()),
+            payload_summary: Some(
+                "{\"source\":\"frontend\",\"message\":\"hello from the webview\"}".to_string(),
+            ),
+            payload_json: Some(json!({
+                "source": "frontend",
+                "message": "hello from the webview",
+            })),
+            payload_redacted: false,
+        })
+        .unwrap();
+    store
+        .insert_tauri_event(&TauriEventRecord {
+            session_id: session.id.clone(),
+            timestamp_unix_nanos: 800,
+            event_name: "dogfood:backend-event".to_string(),
+            direction: "listen".to_string(),
+            target: Some("main".to_string()),
+            trace_id: None,
+            span_id: None,
+            window_label: Some("main".to_string()),
+            payload_summary: Some(
+                "{\"source\":\"backend\",\"message\":\"hello from Rust\"}".to_string(),
+            ),
+            payload_json: Some(json!({
+                "source": "backend",
+                "message": "hello from Rust",
+            })),
+            payload_redacted: false,
+        })
+        .unwrap();
+    store
+        .insert_tauri_window_state(&TauriWindowState {
+            session_id: session.id,
+            timestamp_unix_nanos: 400,
+            window_label: "main".to_string(),
+            webview_label: None,
+            url: Some("tauri://localhost".to_string()),
+            title: Some("Auditaur Dogfood".to_string()),
+            focused: Some(true),
+            visible: Some(true),
+            width: Some(1024.0),
+            height: Some(768.0),
+            scale_factor: Some(1.0),
+            attributes: json!({ "auditaur.capture_phase": "startup" }),
         })
         .unwrap();
 

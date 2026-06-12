@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AuditaurExportFailure, FrontendErrorRecord, LogRecord, OTelBatch, SpanRecord, TauriEventRecord, TauriIpcCallRecord } from './types';
+import type { AuditaurExportFailure, FrontendErrorRecord, LogRecord, OTelBatch, SpanEventRecord, SpanRecord, TauriEventRecord, TauriIpcCallRecord } from './types';
 
 const EXPORT_COMMAND = 'plugin:auditaur|export_otel_batch';
 
@@ -27,6 +27,11 @@ export class AuditaurExporter {
 
   addSpan(record: SpanRecord): void {
     this.batch.spans.push(record);
+    void this.flushIfFull();
+  }
+
+  addSpanEvent(record: SpanEventRecord): void {
+    this.batch.spanEvents.push(record);
     void this.flushIfFull();
   }
 
@@ -100,6 +105,7 @@ export class AuditaurExporter {
 
 function batchSize(batch: OTelBatch): number {
   return batch.spans.length
+    + batch.spanEvents.length
     + batch.logs.length
     + batch.frontendErrors.length
     + batch.tauriIpcCalls.length
@@ -108,13 +114,14 @@ function batchSize(batch: OTelBatch): number {
 
 function mergeBatches(first: OTelBatch, second: OTelBatch, maxRecords: number): OTelBatch {
   const spans = [...first.spans, ...second.spans].slice(-maxRecords);
+  const spanEvents = [...first.spanEvents, ...second.spanEvents].slice(-maxRecords);
   const logs = [...first.logs, ...second.logs].slice(-maxRecords);
   const frontendErrors = [...first.frontendErrors, ...second.frontendErrors].slice(-maxRecords);
   const tauriIpcCalls = [...first.tauriIpcCalls, ...second.tauriIpcCalls].slice(-maxRecords);
   const tauriEvents = [...first.tauriEvents, ...second.tauriEvents].slice(-maxRecords);
-  return { spans, logs, frontendErrors, tauriIpcCalls, tauriEvents };
+  return { spans, spanEvents, logs, frontendErrors, tauriIpcCalls, tauriEvents };
 }
 
 function emptyBatch(): OTelBatch {
-  return { spans: [], logs: [], frontendErrors: [], tauriIpcCalls: [], tauriEvents: [] };
+  return { spans: [], spanEvents: [], logs: [], frontendErrors: [], tauriIpcCalls: [], tauriEvents: [] };
 }

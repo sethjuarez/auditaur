@@ -11,7 +11,8 @@ use std::path::PathBuf;
 #[command(
     name = "auditaur",
     version,
-    about = "Runtime observability for Tauri apps and AI agents."
+    about = "Runtime observability for Tauri apps and AI agents.",
+    after_help = "Bootstrap commands:\n  init skill [--path <repo-root>] [--force] [--json]  Install the Auditaur debug agent skill"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -35,6 +36,12 @@ enum Command {
     Health {
         #[arg(long)]
         json: bool,
+    },
+    Debug {
+        #[command(flatten)]
+        args: DebugArgs,
+        #[command(subcommand)]
+        command: Option<DebugCommand>,
     },
     Drive {
         #[command(flatten)]
@@ -278,6 +285,67 @@ enum DoctorCommand {
 }
 
 #[derive(Debug, Args)]
+struct DebugArgs {
+    #[arg(long, global = true)]
+    db: Option<PathBuf>,
+    #[arg(long, global = true)]
+    app: Option<String>,
+    #[arg(long, global = true)]
+    session_id: Option<String>,
+    #[arg(long, global = true)]
+    instance_id: Option<String>,
+    #[arg(long, global = true)]
+    pid: Option<u32>,
+    #[arg(long, global = true)]
+    latest: bool,
+    #[arg(long, global = true)]
+    active: bool,
+    #[arg(long, global = true)]
+    cdp_port: Option<u16>,
+    #[arg(long, global = true)]
+    require_frontend: bool,
+    #[arg(long, global = true)]
+    json: bool,
+}
+
+impl DebugArgs {
+    fn selector(&self) -> commands::debug::DebugSelector {
+        commands::debug::DebugSelector {
+            db: self.db.clone(),
+            app: self.app.clone(),
+            session_id: self.session_id.clone(),
+            instance_id: self.instance_id.clone(),
+            pid: self.pid,
+            latest: self.latest,
+            active: self.active,
+            cdp_port: self.cdp_port,
+            require_frontend: self.require_frontend,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum DebugCommand {
+    Status,
+    Watch {
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long)]
+        until_ready: bool,
+    },
+    Run {
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+}
+
+#[derive(Debug, Args)]
 struct DriveArgs {
     #[arg(long, global = true)]
     app: Option<String>,
@@ -349,6 +417,10 @@ enum DriveCommand {
         #[arg(long)]
         output: PathBuf,
         #[arg(long)]
+        snapshot_output: Option<PathBuf>,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
         target: Option<String>,
         #[arg(long)]
         test_id: Option<String>,
@@ -404,6 +476,11 @@ enum DriveCommand {
 }
 
 fn main() -> Result<()> {
+    let raw_args: Vec<String> = std::env::args().collect();
+    if raw_args.get(1).is_some_and(|arg| arg == "init") {
+        return commands::init::run(&raw_args[2..]);
+    }
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -415,6 +492,31 @@ fn main() -> Result<()> {
         },
         Command::Apps { json } => commands::read::apps(json),
         Command::Health { json } => commands::health::run(json),
+        Command::Debug { args, command } => match command.unwrap_or(DebugCommand::Status) {
+            DebugCommand::Status => commands::debug::status(args.selector(), args.json),
+            DebugCommand::Watch {
+                interval_ms,
+                timeout_seconds,
+                until_ready,
+            } => commands::debug::watch(
+                args.selector(),
+                interval_ms,
+                timeout_seconds,
+                until_ready,
+                args.json,
+            ),
+            DebugCommand::Run {
+                interval_ms,
+                timeout_seconds,
+                command,
+            } => commands::debug::run(
+                args.selector(),
+                interval_ms,
+                timeout_seconds,
+                args.json,
+                command,
+            ),
+        },
         Command::Drive { args, command } => match command {
             None => {
                 let selector = args.selector();
@@ -487,6 +589,8 @@ fn main() -> Result<()> {
             }
             Some(DriveCommand::Screenshot {
                 output,
+                snapshot_output,
+                selector,
                 target,
                 test_id,
                 step_id,
@@ -497,6 +601,8 @@ fn main() -> Result<()> {
                     args.cdp_port,
                     commands::drive::ScreenshotOptions {
                         output,
+                        snapshot_output,
+                        selector,
                         target_id: target,
                         test_id,
                         step_id,

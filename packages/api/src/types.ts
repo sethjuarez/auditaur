@@ -49,6 +49,7 @@ export interface AuditaurExportFailure {
 
 export interface OTelBatch {
   spans: SpanRecord[];
+  spanEvents: SpanEventRecord[];
   logs: LogRecord[];
   frontendErrors: FrontendErrorRecord[];
   tauriIpcCalls: TauriIpcCallRecord[];
@@ -86,6 +87,15 @@ export interface SpanRecord {
   scopeVersion?: string;
   attributes: Record<string, unknown>;
   source: 'frontend' | 'backend' | 'plugin' | 'third_party_otel';
+}
+
+export interface SpanEventRecord {
+  sessionId: string;
+  traceId: string;
+  spanId: string;
+  name: string;
+  timestampUnixNanos: number;
+  attributes: Record<string, unknown>;
 }
 
 export interface FrontendErrorRecord {

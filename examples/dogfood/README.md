@@ -13,6 +13,16 @@ npm run tauri dev
 
 Click the buttons to emit a console log, throw a frontend error, call successful and failing commands, and emit/listen to events. The app flushes after each button click and on page hide so records are written before you inspect the database.
 
+## Smoke test it
+
+From the repository root on Windows, run the repeatable smoke pass:
+
+```powershell
+.\scripts\dogfood-smoke.ps1
+```
+
+The script builds the CLI and dogfood web bundle, launches the dogfood Tauri app with an isolated `AUDITAUR_DATA_DIR` and WebView2 CDP port, waits for `auditaur debug` readiness, drives each dogfood button, verifies frontend-required readiness, then reads `timeline` and `explain`.
+
 ## Find the session database
 
 Auditaur writes a discovery file while the app is running. The CLI and MCP server use this automatically when exactly one active readable session is present. You can also open the latest JSON file and copy `databasePath`.
