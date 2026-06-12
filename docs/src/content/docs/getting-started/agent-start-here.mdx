@@ -28,7 +28,7 @@ gh skill install sethjuarez/auditaur auditaur-debug
 From the Auditaur repository, maintainers can validate the publishable skill without creating a release:
 
 ```powershell
-gh skill publish --dry-run
+gh skill publish .github --dry-run
 ```
 
 `gh skill preview` reads from GitHub, so previewing `sethjuarez/auditaur` will only find `auditaur-debug` after the branch containing `.github/skills/auditaur-debug/SKILL.md` is pushed/merged.

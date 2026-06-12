@@ -1,0 +1,44 @@
+name: Dogfood Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      cdp_port:
+        description: WebView2 remote debugging port
+        required: false
+        default: "9666"
+      timeout_seconds:
+        description: Readiness timeout in seconds
+        required: false
+        default: "240"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dogfood-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Windows dogfood smoke
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            packages/api/package-lock.json
+            examples/dogfood/package-lock.json
+      - run: npm install
+        working-directory: packages/api
+      - run: npm install
+        working-directory: examples/dogfood
+      - name: Run dogfood smoke
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\dogfood-smoke.ps1 -CdpPort ${{ inputs.cdp_port }} -TimeoutSeconds ${{ inputs.timeout_seconds }}
