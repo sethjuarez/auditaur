@@ -39,7 +39,18 @@ auditaur debug --app <app-name> --active --cdp-port 9222 --require-frontend --js
 
 ## Starting the app
 
-Auditaur should usually attach to the app's normal development workflow. If the agent should start the app, wrap the existing command:
+Prefer attach mode by default: let the developer, IDE, Tauri dev server, or existing terminal own app startup, then use `auditaur debug watch` to observe readiness. This preserves the user's normal environment, debugger, hot reload, and terminal output.
+
+Use wrapper mode only when the agent or a smoke script needs to own a repeatable run. Wrapper mode should still start the app through its normal command; Auditaur observes that process instead of replacing the app startup system.
+
+| Scenario | Preferred mode |
+| --- | --- |
+| Human local debugging | Attach to the already-running app |
+| IDE/debugger/Tauri dev workflow is already running | Attach |
+| Agent needs an end-to-end validation run | Wrapper |
+| Dogfood or CI-like local smoke pass | Wrapper |
+
+If the agent should start the app, wrap the existing command:
 
 ```bash
 auditaur debug --app <app-name> --active --cdp-port 9222 --json run --timeout-seconds 180 -- npm run tauri dev

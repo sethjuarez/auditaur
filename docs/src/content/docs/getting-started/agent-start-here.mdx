@@ -7,10 +7,22 @@ Use Auditaur data before asking a developer to paste logs, screenshots, browser 
 
 ## Install the agent skill
 
-In a repo that uses Auditaur, scaffold the shared debugging skill so agents know the readiness, CDP, telemetry, and cleanup workflow:
+In a repo that uses Auditaur, scaffold the shared debugging skill so agents know the readiness, CDP, telemetry, screenshot/snapshot, and cleanup workflow:
 
 ```powershell
 auditaur init skill
+```
+
+To scaffold into another repository path:
+
+```powershell
+auditaur init skill --path D:\projects\my-tauri-app
+```
+
+After the skill is present on the Auditaur repository's default branch or published by maintainers, agents/users with GitHub CLI skill support can install it directly:
+
+```powershell
+gh skill install sethjuarez/auditaur auditaur-debug
 ```
 
 From the Auditaur repository, maintainers can validate the publishable skill without creating a release:
@@ -20,6 +32,24 @@ gh skill publish --dry-run
 ```
 
 `gh skill preview` reads from GitHub, so previewing `sethjuarez/auditaur` will only find `auditaur-debug` after the branch containing `.github/skills/auditaur-debug/SKILL.md` is pushed/merged.
+
+## Startup mode choice
+
+Use attach mode as the default: start the app through the developer's normal workflow, then have Auditaur observe it.
+
+```powershell
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9222'
+npm run tauri dev
+auditaur debug --app my-app --active --cdp-port 9222 --json watch --until-ready
+```
+
+Use wrapper mode when an agent or smoke script should own a repeatable validation run:
+
+```powershell
+auditaur debug --app my-app --active --cdp-port 9222 --json run --timeout-seconds 180 -- npm run tauri dev
+```
+
+Wrapper mode starts the same app command you would have run manually; Auditaur does not replace Tauri startup. It watches readiness and leaves the app running after readiness so the agent can drive, inspect, or clean it up.
 
 ## Integration docs
 
