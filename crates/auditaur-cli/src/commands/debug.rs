@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use anyhow::{anyhow, Context, Result};
 use auditaur_core::{
     model::TelemetrySource,
@@ -164,6 +167,8 @@ pub fn run(
     child_command.args(&command[1..]);
     if json {
         child_command.stdout(Stdio::null()).stderr(Stdio::null());
+        #[cfg(windows)]
+        child_command.creation_flags(0x0800_0000);
     } else {
         child_command
             .stdin(Stdio::inherit())
