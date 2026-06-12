@@ -213,6 +213,83 @@ fn reads_fixture_database_as_json() {
 }
 
 #[test]
+fn debug_status_reports_readiness_for_database_and_discovered_app() {
+    let db = fixture_database();
+    let status = run_json([
+        "debug",
+        "--db",
+        db.path().to_str().unwrap(),
+        "--json",
+        "status",
+    ]);
+    assert_eq!(status["ready"], true);
+    assert_eq!(status["telemetry"]["sessions"], 1);
+    assert_eq!(status["telemetry"]["windows"], 1);
+    assert_eq!(status["telemetry"]["frontendRecords"], 4);
+    assert_eq!(
+        status["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|stage| stage["name"] == "app_discovery")
+            .unwrap()["status"],
+        "skipped"
+    );
+
+    let data_dir = TempDir::new().unwrap();
+    write_drive_fixture(data_dir.path(), "debug-instance");
+    let discovered = run_json_with_env(
+        ["debug", "--app", "fixture", "--json", "status"],
+        data_dir.path().to_str().unwrap(),
+    );
+
+    assert_eq!(discovered["ready"], true);
+    assert_eq!(discovered["app"]["serviceName"], "auditaur-fixture");
+    assert_eq!(discovered["cdp"], serde_json::Value::Null);
+    assert!(discovered["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "frontend_telemetry" && stage["status"] == "ok"));
+}
+
+#[test]
+fn debug_status_reports_waiting_when_required_readiness_is_missing() {
+    let data_dir = TempDir::new().unwrap();
+    write_drive_fixture_without_windows(data_dir.path(), "debug-no-window");
+    let missing_window = run_json_with_env(
+        ["debug", "--app", "fixture", "--json", "status"],
+        data_dir.path().to_str().unwrap(),
+    );
+    assert_eq!(missing_window["ready"], false);
+    assert!(missing_window["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "window" && stage["status"] == "waiting"));
+
+    let data_dir = TempDir::new().unwrap();
+    write_drive_fixture_without_windows(data_dir.path(), "debug-no-frontend");
+    let frontend_required = run_json_with_env(
+        [
+            "debug",
+            "--app",
+            "fixture",
+            "--require-frontend",
+            "--json",
+            "status",
+        ],
+        data_dir.path().to_str().unwrap(),
+    );
+    assert_eq!(frontend_required["ready"], false);
+    assert!(frontend_required["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "frontend_telemetry" && stage["status"] == "waiting"));
+}
+
+#[test]
 fn agentive_runs_group_model_tool_events_and_related_by_run_id() {
     let db = fixture_database();
     let store = SqliteStore::open(db.path()).unwrap();

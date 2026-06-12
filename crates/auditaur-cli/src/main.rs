@@ -36,6 +36,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Debug {
+        #[command(flatten)]
+        args: DebugArgs,
+        #[command(subcommand)]
+        command: Option<DebugCommand>,
+    },
     Drive {
         #[command(flatten)]
         args: DriveArgs,
@@ -278,6 +284,67 @@ enum DoctorCommand {
 }
 
 #[derive(Debug, Args)]
+struct DebugArgs {
+    #[arg(long, global = true)]
+    db: Option<PathBuf>,
+    #[arg(long, global = true)]
+    app: Option<String>,
+    #[arg(long, global = true)]
+    session_id: Option<String>,
+    #[arg(long, global = true)]
+    instance_id: Option<String>,
+    #[arg(long, global = true)]
+    pid: Option<u32>,
+    #[arg(long, global = true)]
+    latest: bool,
+    #[arg(long, global = true)]
+    active: bool,
+    #[arg(long, global = true)]
+    cdp_port: Option<u16>,
+    #[arg(long, global = true)]
+    require_frontend: bool,
+    #[arg(long, global = true)]
+    json: bool,
+}
+
+impl DebugArgs {
+    fn selector(&self) -> commands::debug::DebugSelector {
+        commands::debug::DebugSelector {
+            db: self.db.clone(),
+            app: self.app.clone(),
+            session_id: self.session_id.clone(),
+            instance_id: self.instance_id.clone(),
+            pid: self.pid,
+            latest: self.latest,
+            active: self.active,
+            cdp_port: self.cdp_port,
+            require_frontend: self.require_frontend,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum DebugCommand {
+    Status,
+    Watch {
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long)]
+        until_ready: bool,
+    },
+    Run {
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+}
+
+#[derive(Debug, Args)]
 struct DriveArgs {
     #[arg(long, global = true)]
     app: Option<String>,
@@ -419,6 +486,31 @@ fn main() -> Result<()> {
         },
         Command::Apps { json } => commands::read::apps(json),
         Command::Health { json } => commands::health::run(json),
+        Command::Debug { args, command } => match command.unwrap_or(DebugCommand::Status) {
+            DebugCommand::Status => commands::debug::status(args.selector(), args.json),
+            DebugCommand::Watch {
+                interval_ms,
+                timeout_seconds,
+                until_ready,
+            } => commands::debug::watch(
+                args.selector(),
+                interval_ms,
+                timeout_seconds,
+                until_ready,
+                args.json,
+            ),
+            DebugCommand::Run {
+                interval_ms,
+                timeout_seconds,
+                command,
+            } => commands::debug::run(
+                args.selector(),
+                interval_ms,
+                timeout_seconds,
+                args.json,
+                command,
+            ),
+        },
         Command::Drive { args, command } => match command {
             None => {
                 let selector = args.selector();
