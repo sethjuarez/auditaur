@@ -480,14 +480,19 @@ fn main() -> Result<()> {
     if raw_args.get(1).is_some_and(|arg| arg == "init") {
         return commands::init::run(&raw_args[2..]);
     }
+    if try_run_drive_type(&raw_args)? {
+        return Ok(());
+    }
+    let (parse_args, drive_visible_only) = strip_drive_visible_args(raw_args);
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(parse_args);
 
     match cli.command {
         Command::Doctor { command, db, json } => match command {
             Some(DoctorCommand::Tauri { path, json }) => {
                 commands::doctor::tauri(path.as_deref(), json)
             }
+
             None => commands::doctor::run(db.as_deref(), json),
         },
         Command::Apps { json } => commands::read::apps(json),
@@ -543,6 +548,7 @@ fn main() -> Result<()> {
                         timeout_ms,
                         test_id,
                         step_id,
+                        visible_only: drive_visible_only,
                         json: args.json,
                     },
                 )
@@ -563,6 +569,7 @@ fn main() -> Result<()> {
                         test_id,
                         step_id,
                         allow_unproven_target: false,
+                        visible_only: drive_visible_only,
                         json: args.json,
                     },
                 )
@@ -583,6 +590,7 @@ fn main() -> Result<()> {
                         test_id,
                         step_id,
                         allow_unproven_target: false,
+                        visible_only: drive_visible_only,
                         json: args.json,
                     },
                 )
@@ -628,6 +636,7 @@ fn main() -> Result<()> {
                         test_id,
                         step_id,
                         allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        visible_only: drive_visible_only,
                         json: args.json,
                     },
                 )
@@ -652,6 +661,7 @@ fn main() -> Result<()> {
                         test_id,
                         step_id,
                         allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        visible_only: drive_visible_only,
                         json: args.json,
                     },
                 )
@@ -827,4 +837,138 @@ fn main() -> Result<()> {
         ),
         Command::Mcp => mcp::run(),
     }
+}
+
+fn try_run_drive_type(raw_args: &[String]) -> Result<bool> {
+    let Some(drive_index) = raw_args.iter().position(|arg| arg == "drive") else {
+        return Ok(false);
+    };
+    let Some((type_index, "type")) = find_drive_subcommand(raw_args, drive_index)? else {
+        return Ok(false);
+    };
+
+    let mut app_selector = commands::drive::DriveAppSelector {
+        app: None,
+        session_id: None,
+        instance_id: None,
+        pid: None,
+        latest: false,
+        active: false,
+    };
+    let mut cdp_port = None;
+    let mut options = commands::drive::TypeOptions {
+        selector: String::new(),
+        value: String::new(),
+        target_id: None,
+        test_id: None,
+        step_id: None,
+        allow_unproven_target: false,
+        visible_only: false,
+        json: false,
+    };
+
+    let mut index = drive_index + 1;
+    while index < raw_args.len() {
+        if index == type_index {
+            index += 1;
+            continue;
+        }
+        match raw_args[index].as_str() {
+            "--app" => app_selector.app = Some(next_arg(raw_args, &mut index, "--app")?),
+            "--session-id" => {
+                app_selector.session_id = Some(next_arg(raw_args, &mut index, "--session-id")?)
+            }
+            "--instance-id" => {
+                app_selector.instance_id = Some(next_arg(raw_args, &mut index, "--instance-id")?)
+            }
+            "--pid" => {
+                app_selector.pid = Some(
+                    next_arg(raw_args, &mut index, "--pid")?
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("Invalid --pid value."))?,
+                )
+            }
+            "--latest" => app_selector.latest = true,
+            "--active" => app_selector.active = true,
+            "--cdp-port" => {
+                cdp_port = Some(
+                    next_arg(raw_args, &mut index, "--cdp-port")?
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("Invalid --cdp-port value."))?,
+                )
+            }
+            "--json" => options.json = true,
+            "--selector" => options.selector = next_arg(raw_args, &mut index, "--selector")?,
+            "--value" => options.value = next_arg(raw_args, &mut index, "--value")?,
+            "--target" => options.target_id = Some(next_arg(raw_args, &mut index, "--target")?),
+            "--test-id" => options.test_id = Some(next_arg(raw_args, &mut index, "--test-id")?),
+            "--step-id" => options.step_id = Some(next_arg(raw_args, &mut index, "--step-id")?),
+            "--allow-unproven-target" | "--allow-probable-target" => {
+                options.allow_unproven_target = true
+            }
+            "--visible" | "--visible-only" => options.visible_only = true,
+            unknown => {
+                return Err(anyhow::anyhow!(
+                    "Unknown `auditaur drive type` argument `{unknown}`."
+                ))
+            }
+        }
+        index += 1;
+    }
+
+    if options.selector.is_empty() {
+        return Err(anyhow::anyhow!(
+            "`auditaur drive type` requires --selector <css>."
+        ));
+    }
+    commands::drive::type_text(app_selector, cdp_port, options)?;
+    Ok(true)
+}
+
+fn find_drive_subcommand<'a>(
+    raw_args: &'a [String],
+    drive_index: usize,
+) -> Result<Option<(usize, &'a str)>> {
+    let mut index = drive_index + 1;
+    while index < raw_args.len() {
+        match raw_args[index].as_str() {
+            "--app" | "--session-id" | "--instance-id" | "--pid" | "--cdp-port" => {
+                let flag = raw_args[index].clone();
+                let _ = next_arg(raw_args, &mut index, &flag)?;
+            }
+            "--latest" | "--active" | "--json" => {}
+            flag if flag.starts_with("--") => return Ok(None),
+            command => return Ok(Some((index, command))),
+        }
+        index += 1;
+    }
+    Ok(None)
+}
+
+fn strip_drive_visible_args(raw_args: Vec<String>) -> (Vec<String>, bool) {
+    if !raw_args.iter().any(|arg| arg == "drive") {
+        return (raw_args, false);
+    }
+    let mut visible_only = false;
+    let args = raw_args
+        .into_iter()
+        .filter(|arg| {
+            if arg == "--visible" || arg == "--visible-only" {
+                visible_only = true;
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    (args, visible_only)
+}
+
+fn next_arg(raw_args: &[String], index: &mut usize, flag: &str) -> Result<String> {
+    *index += 1;
+    raw_args
+        .get(*index)
+        .filter(|value| !value.starts_with("--"))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("`{flag}` requires a value."))
 }

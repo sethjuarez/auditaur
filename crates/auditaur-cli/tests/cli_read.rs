@@ -983,6 +983,46 @@ fn drive_wait_uses_cdp_runtime_evaluate_without_mutating_observability_store() {
 }
 
 #[test]
+fn drive_wait_visible_only_uses_visible_selector_expression() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-visible-wait");
+    let (port, server) = start_fake_cdp_recording_runtime_value_endpoint(json!(true));
+    let port_arg = port.to_string();
+
+    let wait = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "wait",
+            "--selector",
+            "textarea",
+            "--visible-only",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    let requests = server.join().unwrap();
+    let expression = requests
+        .iter()
+        .find(|request| request["method"] == "Runtime.evaluate")
+        .unwrap()["params"]["expression"]
+        .as_str()
+        .unwrap();
+    assert_eq!(wait["visibleOnly"], true);
+    assert_eq!(
+        wait["telemetryAttributes"]["auditaur.driver.visible_only"],
+        true
+    );
+    assert!(expression.contains("visibleOnly = true"));
+    assert!(expression.contains("getClientRects"));
+    assert!(expression.contains("closest('[hidden],[inert],[aria-hidden=\"true\"]')"));
+}
+
+#[test]
 fn drive_wait_auto_selects_single_target_bound_to_observed_window() {
     let temp = TempDir::new().unwrap();
     let db_path = temp
@@ -1330,6 +1370,65 @@ fn drive_click_fill_and_press_report_action_telemetry() {
     assert_eq!(press["ok"], true);
     assert_eq!(press["action"], "press");
     assert_eq!(press["selector"], "<active-element>");
+}
+
+#[test]
+fn drive_type_focuses_editable_selector_and_inserts_text_with_cdp_input() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-type");
+    let (port, server) = start_fake_cdp_type_endpoint();
+    let port_arg = port.to_string();
+
+    let typed = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &port_arg,
+            "--json",
+            "type",
+            "--selector",
+            "textarea",
+            "--value",
+            "hello",
+            "--visible-only",
+            "--allow-unproven-target",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    let requests = server.join().unwrap();
+    let methods: Vec<_> = requests
+        .iter()
+        .map(|request| request["method"].as_str().unwrap())
+        .collect();
+    let expression = requests
+        .iter()
+        .find(|request| request["method"] == "Runtime.evaluate")
+        .unwrap()["params"]["expression"]
+        .as_str()
+        .unwrap();
+    let insert = requests
+        .iter()
+        .find(|request| request["method"] == "Input.insertText")
+        .unwrap();
+
+    assert_eq!(typed["ok"], true);
+    assert_eq!(typed["action"], "type");
+    assert_eq!(typed["visibleOnly"], true);
+    assert_eq!(typed["payload"]["insertedCharacters"], 5);
+    assert_eq!(
+        typed["telemetryAttributes"]["auditaur.driver.visible_only"],
+        true
+    );
+    assert_eq!(
+        methods,
+        vec!["Runtime.enable", "Runtime.evaluate", "Input.insertText"]
+    );
+    assert!(expression.contains("visibleOnly = true"));
+    assert!(expression.contains("HTMLTextAreaElement"));
+    assert_eq!(insert["params"]["text"], "hello");
 }
 
 #[test]
@@ -2198,6 +2297,41 @@ fn start_fake_cdp_runtime_value_endpoint(value: Value) -> (u16, thread::JoinHand
     (port, handle)
 }
 
+fn start_fake_cdp_recording_runtime_value_endpoint(
+    value: Value,
+) -> (u16, thread::JoinHandle<Vec<Value>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        respond_websocket_recording_runtime_value(&listener, value)
+    });
+    (port, handle)
+}
+
+fn start_fake_cdp_type_endpoint() -> (u16, thread::JoinHandle<Vec<Value>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        respond_http_json(
+            &listener,
+            r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
+        );
+        respond_http_json(&listener, &target_list_json(port));
+        let mut requests = respond_websocket_recording_runtime_value(
+            &listener,
+            json!({ "ok": true, "visibleOnly": true }),
+        );
+        requests.extend(respond_websocket_recording_insert_text(&listener));
+        requests
+    });
+    (port, handle)
+}
+
 fn start_fake_cdp_probable_runtime_value_endpoint(value: Value) -> (u16, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -2381,6 +2515,7 @@ fn respond_websocket_runtime_value(listener: &TcpListener, value: Value) {
         if !message.is_text() {
             continue;
         }
+
         let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
         let id = request["id"].as_u64().unwrap();
         let method = request["method"].as_str().unwrap();
@@ -2404,6 +2539,69 @@ fn respond_websocket_runtime_value(listener: &TcpListener, value: Value) {
             break;
         }
     }
+}
+
+fn respond_websocket_recording_runtime_value(listener: &TcpListener, value: Value) -> Vec<Value> {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    let mut requests = Vec::new();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap().to_string();
+        requests.push(request);
+        let response = match method.as_str() {
+            "Runtime.enable" => json!({ "id": id, "result": {} }),
+            "Runtime.evaluate" => json!({
+                "id": id,
+                "result": {
+                    "result": {
+                        "type": cdp_runtime_type(&value),
+                        "value": value
+                    }
+                }
+            }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Runtime.evaluate" {
+            break;
+        }
+    }
+    requests
+}
+
+fn respond_websocket_recording_insert_text(listener: &TcpListener) -> Vec<Value> {
+    let (stream, _) = listener.accept().unwrap();
+    let mut websocket = accept(stream).unwrap();
+    let mut requests = Vec::new();
+    loop {
+        let message = websocket.read().unwrap();
+        if !message.is_text() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&message.into_text().unwrap()).unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let method = request["method"].as_str().unwrap().to_string();
+        requests.push(request);
+        let response = match method.as_str() {
+            "Input.insertText" => json!({ "id": id, "result": {} }),
+            _ => json!({ "id": id, "error": { "message": "unexpected method" } }),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .unwrap();
+        if method == "Input.insertText" {
+            break;
+        }
+    }
+    requests
 }
 
 fn cdp_runtime_type(value: &Value) -> &'static str {

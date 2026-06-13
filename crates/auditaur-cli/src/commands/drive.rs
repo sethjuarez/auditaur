@@ -87,8 +87,8 @@ pub fn exists(
 ) -> Result<()> {
     let (attach, target, websocket_url) =
         resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "exists")?;
-    let selector_json = serde_json::to_string(&options.selector)?;
-    let expression = format!("Boolean(document.querySelector({selector_json}))");
+    let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
+    let expression = format!("(() => {{ {resolver} return Boolean(el); }})()");
     let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
     let found = value.get("value").and_then(Value::as_bool).unwrap_or(false);
     let result = action_result(
@@ -96,6 +96,7 @@ pub fn exists(
         &target,
         "exists",
         Some(options.selector.clone()),
+        options.visible_only,
         false,
         json!({ "exists": found }),
         &options.test_id,
@@ -116,9 +117,9 @@ pub fn text(
 ) -> Result<()> {
     let (attach, target, websocket_url) =
         resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "text")?;
-    let selector_json = serde_json::to_string(&options.selector)?;
+    let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
     let expression = format!(
-        "(() => {{ const el = document.querySelector({selector_json}); return el ? {{ found: true, text: (el.innerText ?? el.textContent ?? '') }} : {{ found: false, text: null }}; }})()"
+        "(() => {{ {resolver} return el ? {{ found: true, visibleOnly, text: (el.innerText ?? el.textContent ?? '') }} : {{ found: false, visibleOnly, text: null }}; }})()"
     );
     let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
     let payload = value
@@ -134,6 +135,7 @@ pub fn text(
         &target,
         "text",
         Some(options.selector.clone()),
+        options.visible_only,
         false,
         payload,
         &options.test_id,
@@ -152,18 +154,18 @@ pub fn click(
     cdp_port: Option<u16>,
     options: SelectorActionOptions,
 ) -> Result<()> {
-    let selector_json = serde_json::to_string(&options.selector)?;
+    let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
     let expression = format!(
-        "(() => {{ const el = document.querySelector({selector_json}); if (!el) return {{ ok: false, error: 'selector not found' }}; el.scrollIntoView({{ block: 'center', inline: 'center' }}); el.click(); return {{ ok: true }}; }})()"
+        "(() => {{ {resolver} if (!el) return {{ ok: false, visibleOnly, error: 'selector not found' }}; el.scrollIntoView({{ block: 'center', inline: 'center' }}); el.click(); return {{ ok: true, visibleOnly }}; }})()"
     );
     run_dom_action(selector, cdp_port, &options, "click", expression)
 }
 
 pub fn fill(selector: DriveAppSelector, cdp_port: Option<u16>, options: FillOptions) -> Result<()> {
-    let selector_json = serde_json::to_string(&options.selector)?;
+    let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
     let value_json = serde_json::to_string(&options.value)?;
     let expression = format!(
-        "(() => {{ const el = document.querySelector({selector_json}); if (!el) return {{ ok: false, error: 'selector not found' }}; el.focus(); el.value = {value_json}; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return {{ ok: true }}; }})()"
+        "(() => {{ {resolver} if (!el) return {{ ok: false, visibleOnly, error: 'selector not found' }}; const value = {value_json}; el.focus(); const valueDescriptor = el instanceof HTMLTextAreaElement ? Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value') : el instanceof HTMLInputElement ? Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') : null; if (valueDescriptor?.set) {{ valueDescriptor.set.call(el, value); }} else if ('value' in el) {{ el.value = value; }} else if (el.isContentEditable) {{ el.textContent = value; }} else {{ return {{ ok: false, visibleOnly, error: 'selector is not editable' }}; }} const input = typeof InputEvent === 'function' ? new InputEvent('input', {{ bubbles: true, cancelable: true, inputType: 'insertText', data: value }}) : new Event('input', {{ bubbles: true, cancelable: true }}); el.dispatchEvent(input); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return {{ ok: true, visibleOnly }}; }})()"
     );
     let selector_options = SelectorActionOptions {
         selector: options.selector,
@@ -171,9 +173,62 @@ pub fn fill(selector: DriveAppSelector, cdp_port: Option<u16>, options: FillOpti
         test_id: options.test_id,
         step_id: options.step_id,
         allow_unproven_target: options.allow_unproven_target,
+        visible_only: options.visible_only,
         json: options.json,
     };
     run_dom_action(selector, cdp_port, &selector_options, "fill", expression)
+}
+
+pub fn type_text(
+    selector: DriveAppSelector,
+    cdp_port: Option<u16>,
+    options: TypeOptions,
+) -> Result<()> {
+    let (attach, target, websocket_url) =
+        resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "type")?;
+    require_mutation_allowed(&target, "type", options.allow_unproven_target)?;
+    let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
+    let expression = format!(
+        "(() => {{ {resolver} if (!el) return {{ ok: false, visibleOnly, error: 'selector not found' }}; const editable = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable; if (!editable) return {{ ok: false, visibleOnly, error: 'selector is not editable' }}; el.focus(); return {{ ok: true, visibleOnly }}; }})()"
+    );
+    let value = evaluate_expression(&websocket_url, &expression, Duration::from_secs(5))?;
+    let mut payload = value
+        .get("value")
+        .cloned()
+        .unwrap_or_else(|| json!({ "ok": false, "error": "missing action result" }));
+    let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    if ok {
+        insert_text(&websocket_url, &options.value)?;
+        if let Some(payload) = payload.as_object_mut() {
+            payload.insert(
+                "insertedCharacters".to_string(),
+                json!(options.value.chars().count()),
+            );
+        }
+    }
+    let result = action_result(
+        &attach,
+        &target,
+        "type",
+        Some(options.selector.clone()),
+        options.visible_only,
+        true,
+        payload.clone(),
+        &options.test_id,
+        &options.step_id,
+    );
+    read::print_json_or_table(options.json, &result, || print_action_result(&result))?;
+    if ok {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "drive type failed: {}",
+            payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        ))
+    }
 }
 
 pub fn press(
@@ -197,6 +252,7 @@ pub fn press(
         test_id: options.test_id,
         step_id: options.step_id,
         allow_unproven_target: options.allow_unproven_target,
+        visible_only: false,
         json: options.json,
     };
     run_dom_action(selector, cdp_port, &selector_options, "press", expression)
@@ -259,6 +315,7 @@ pub fn screenshot(
         "screenshot",
         options.selector.clone(),
         false,
+        false,
         payload,
         &options.test_id,
         &options.step_id,
@@ -273,6 +330,7 @@ pub struct WaitOptions {
     pub timeout_ms: u64,
     pub test_id: Option<String>,
     pub step_id: Option<String>,
+    pub visible_only: bool,
     pub json: bool,
 }
 
@@ -283,6 +341,7 @@ pub struct SelectorActionOptions {
     pub test_id: Option<String>,
     pub step_id: Option<String>,
     pub allow_unproven_target: bool,
+    pub visible_only: bool,
     pub json: bool,
 }
 
@@ -294,6 +353,19 @@ pub struct FillOptions {
     pub test_id: Option<String>,
     pub step_id: Option<String>,
     pub allow_unproven_target: bool,
+    pub visible_only: bool,
+    pub json: bool,
+}
+
+#[derive(Debug)]
+pub struct TypeOptions {
+    pub selector: String,
+    pub value: String,
+    pub target_id: Option<String>,
+    pub test_id: Option<String>,
+    pub step_id: Option<String>,
+    pub allow_unproven_target: bool,
+    pub visible_only: bool,
     pub json: bool,
 }
 
@@ -536,6 +608,7 @@ struct WaitResult {
     ok: bool,
     action: &'static str,
     selector: String,
+    visible_only: bool,
     matched: bool,
     elapsed_ms: u128,
     timeout_ms: u64,
@@ -560,6 +633,7 @@ struct ActionResult {
     ok: bool,
     action: String,
     selector: Option<String>,
+    visible_only: bool,
     service_name: String,
     pid: u32,
     session_id: String,
@@ -1132,6 +1206,18 @@ fn evaluate_expression(websocket_url: &str, expression: &str, timeout: Duration)
     })
 }
 
+fn insert_text(websocket_url: &str, text: &str) -> Result<()> {
+    let mut socket = connect_cdp_websocket(websocket_url, Duration::from_secs(5))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    send_cdp_command(&mut socket, 1, "Input.insertText", json!({ "text": text }))?;
+    let response = read_cdp_response(&mut socket, 1, deadline)?
+        .ok_or_else(|| anyhow!("Timed out waiting for Input.insertText response."))?;
+    if let Some(error) = response.get("error") {
+        return Err(anyhow!("CDP Input.insertText failed: {error}"));
+    }
+    Ok(())
+}
+
 fn capture_screenshot_bytes(websocket_url: &str) -> Result<Vec<u8>> {
     let mut socket = connect_cdp_websocket(websocket_url, Duration::from_secs(10))?;
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -1186,6 +1272,7 @@ fn run_dom_action(
         &target,
         action,
         Some(options.selector.clone()),
+        options.visible_only,
         true,
         payload.clone(),
         &options.test_id,
@@ -1246,7 +1333,7 @@ fn wait_for_selector(
     }
     next_id += 1;
 
-    let expression = selector_expression(&options.selector)?;
+    let expression = selector_expression(&options.selector, options.visible_only)?;
     while Instant::now() <= deadline {
         let command_id = next_id;
         next_id += 1;
@@ -1374,9 +1461,17 @@ fn read_cdp_response(
     }
 }
 
-fn selector_expression(selector: &str) -> Result<String> {
+fn selector_expression(selector: &str, visible_only: bool) -> Result<String> {
+    let resolver = selector_resolver_js(selector, visible_only)?;
+    Ok(format!("(() => {{ {resolver} return Boolean(el); }})()"))
+}
+
+fn selector_resolver_js(selector: &str, visible_only: bool) -> Result<String> {
     let selector_json = serde_json::to_string(selector)?;
-    Ok(format!("Boolean(document.querySelector({selector_json}))"))
+    let visible_only_json = serde_json::to_string(&visible_only)?;
+    Ok(format!(
+        "const selector = {selector_json}; const visibleOnly = {visible_only_json}; const isVisible = (node) => {{ if (!(node instanceof Element)) return false; if (node.closest('[hidden],[inert],[aria-hidden=\"true\"]')) return false; const rects = node.getClientRects(); if (!rects.length) return false; for (let current = node; current; current = current.parentElement) {{ const style = getComputedStyle(current); if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false; }} return true; }}; const matches = Array.from(document.querySelectorAll(selector)); const el = visibleOnly ? matches.find(isVisible) : matches[0];"
+    ))
 }
 
 fn wait_result(
@@ -1390,6 +1485,7 @@ fn wait_result(
         ok: matched,
         action: "wait",
         selector: options.selector.clone(),
+        visible_only: options.visible_only,
         matched,
         elapsed_ms,
         timeout_ms: options.timeout_ms,
@@ -1410,6 +1506,7 @@ fn wait_result(
             "auditaur.step_id": options.step_id,
             "auditaur.driver.action": "wait",
             "auditaur.driver.selector": options.selector,
+            "auditaur.driver.visible_only": options.visible_only,
             "auditaur.driver.target_id": target.id,
             "auditaur.driver.target_binding_status": target.binding_status,
             "auditaur.driver.target_ownership_status": target.ownership_status,
@@ -1426,6 +1523,7 @@ fn action_result(
     target: &CdpTarget,
     action: &str,
     selector: Option<String>,
+    visible_only: bool,
     mutates_app: bool,
     payload: Value,
     test_id: &Option<String>,
@@ -1448,6 +1546,7 @@ fn action_result(
             }),
         action: action.to_string(),
         selector: selector.clone(),
+        visible_only,
         service_name: attach.service_name.clone(),
         pid: attach.pid,
         session_id: attach.session_id.clone(),
@@ -1467,6 +1566,7 @@ fn action_result(
             "auditaur.step_id": step_id,
             "auditaur.driver.action": action,
             "auditaur.driver.selector": selector,
+            "auditaur.driver.visible_only": visible_only,
             "auditaur.driver.target_id": target.id,
             "auditaur.driver.target_binding_status": target.binding_status,
             "auditaur.driver.target_ownership_status": target.ownership_status,
@@ -1534,6 +1634,12 @@ fn future_actions() -> Vec<DriverActionSpec> {
             selector_required: true,
             mutates_app: true,
             description: "set text in an editable element by selector",
+        },
+        DriverActionSpec {
+            name: "type",
+            selector_required: true,
+            mutates_app: true,
+            description: "insert text through CDP input events after focusing an editable element",
         },
         DriverActionSpec {
             name: "press",
@@ -1668,10 +1774,10 @@ mod tests {
 
     #[test]
     fn selector_expression_escapes_css_selector_as_javascript_string() {
-        assert_eq!(
-            selector_expression(r#"[data-testid="save"]"#).unwrap(),
-            r#"Boolean(document.querySelector("[data-testid=\"save\"]"))"#
-        );
+        let expression = selector_expression(r#"[data-testid="save"]"#, false).unwrap();
+        assert!(expression.contains(r#"const selector = "[data-testid=\"save\"]""#));
+        assert!(expression.contains("const visibleOnly = false"));
+        assert!(expression.contains("document.querySelectorAll(selector)"));
     }
 
     #[test]
