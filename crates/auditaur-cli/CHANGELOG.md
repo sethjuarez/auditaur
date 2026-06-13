@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.2.2...auditaur-cli-v0.2.3) - 2026-06-13
+
+### Other
+
+- Polish Auditaur drive input helpers
+
 ## [0.2.2](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.2.1...auditaur-cli-v0.2.2) - 2026-06-12
 
 ### Other
