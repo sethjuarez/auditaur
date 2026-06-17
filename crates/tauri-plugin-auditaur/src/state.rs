@@ -1068,7 +1068,9 @@ mod tests {
             .join(DRIVE_BRIDGE_REQUESTS_DIR)
             .join("request-1.json.123.tmp");
         std::fs::write(&stale_temp, b"partial").unwrap();
-        std::fs::File::open(&stale_temp)
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&stale_temp)
             .unwrap()
             .set_modified(
                 SystemTime::now()
