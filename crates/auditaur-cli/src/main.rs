@@ -488,6 +488,21 @@ enum DriveCommand {
 }
 
 fn main() -> Result<()> {
+    #[cfg(windows)]
+    {
+        return std::thread::Builder::new()
+            .name("auditaur-main".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(inner_main)?
+            .join()
+            .unwrap();
+    }
+
+    #[cfg(not(windows))]
+    inner_main()
+}
+
+fn inner_main() -> Result<()> {
     let raw_args: Vec<String> = std::env::args().collect();
     if raw_args.get(1).is_some_and(|arg| arg == "init") {
         return commands::init::run(&raw_args[2..]);
