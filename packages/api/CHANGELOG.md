@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/sethjuarez/auditaur/compare/api-v0.3.0...api-v0.4.0) (2026-06-17)
+
+
+### Features
+
+* add in-app drive bridge ([31e6e23](https://github.com/sethjuarez/auditaur/commit/31e6e2380f1bfe65b981133c4bf13e8ff609f5d1)), closes [#29](https://github.com/sethjuarez/auditaur/issues/29)
+
 ## [0.3.0](https://github.com/sethjuarez/auditaur/compare/api-v0.2.1...api-v0.3.0) (2026-06-09)
 
 
