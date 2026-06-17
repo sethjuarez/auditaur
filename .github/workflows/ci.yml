@@ -19,7 +19,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: python scripts/check-skill-drift.py
-      - run: cargo test --workspace
+      - run: cargo test --workspace -- --test-threads=1
 
   api:
     name: Frontend API
