@@ -670,6 +670,23 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
         "matched_window_telemetry"
     );
     assert_eq!(attach["cdp"]["targets"][0]["ownershipProven"], false);
+    if cfg!(target_os = "macos") {
+        assert_eq!(attach["platformBackend"]["platform"], "macos");
+        assert_eq!(attach["platformBackend"]["webviewEngine"], "WKWebView");
+        assert_eq!(
+            attach["platformBackend"]["status"],
+            "unsupported_without_bridge"
+        );
+        assert_eq!(attach["platformBackend"]["selectorActionsSupported"], false);
+        assert!(attach["platformBackend"]["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("in-app drive bridge"));
+        assert!(attach["cdp"]["launchHint"]
+            .as_str()
+            .unwrap()
+            .contains("WKWebView"));
+    }
     assert!(attach["futureActions"]
         .as_array()
         .unwrap()

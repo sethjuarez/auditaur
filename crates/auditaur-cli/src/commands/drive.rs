@@ -30,6 +30,15 @@ const CDP_EXPLICIT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CDP_READ_TIMEOUT: Duration = Duration::from_millis(500);
 const FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS: usize = 64 * 1024;
 
+#[cfg(target_os = "macos")]
+const CURRENT_PLATFORM: &str = "macos";
+#[cfg(target_os = "windows")]
+const CURRENT_PLATFORM: &str = "windows";
+#[cfg(all(unix, not(target_os = "macos")))]
+const CURRENT_PLATFORM: &str = "unix";
+#[cfg(not(any(unix, target_os = "windows")))]
+const CURRENT_PLATFORM: &str = "unknown";
+
 pub fn run(selector: DriveAppSelector, cdp_port: Option<u16>, json: bool) -> Result<()> {
     let target = resolve_target(&selector)?;
     let attach = DriveAttachInfo::discover(target, cdp_port)?;
@@ -406,6 +415,7 @@ struct DriveAttachInfo {
     db_path: String,
     discovery_path: String,
     cdp: CdpAttachInfo,
+    platform_backend: PlatformDriveBackend,
     future_actions: Vec<DriverActionSpec>,
     required_action_telemetry: Vec<&'static str>,
     note: String,
@@ -430,10 +440,57 @@ impl DriveAttachInfo {
             db_path: app.database_path,
             discovery_path: app.discovery_path,
             cdp,
+            platform_backend: PlatformDriveBackend::current(cdp_port),
             future_actions: future_actions(),
             required_action_telemetry: required_action_telemetry(),
             note: "Drive is an optional app-driver layer; it observes Auditaur discovery metadata and talks to a separate CDP endpoint instead of mutating Auditaur's telemetry store.".to_string(),
         })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformDriveBackend {
+    platform: &'static str,
+    webview_engine: &'static str,
+    selector_backend: &'static str,
+    status: &'static str,
+    selector_actions_supported: bool,
+    guidance: String,
+    fallback: &'static str,
+}
+
+impl PlatformDriveBackend {
+    fn current(cdp_port: Option<u16>) -> Self {
+        match CURRENT_PLATFORM {
+            "macos" => Self {
+                platform: "macos",
+                webview_engine: "WKWebView",
+                selector_backend: "cdp",
+                status: "unsupported_without_bridge",
+                selector_actions_supported: false,
+                guidance: "macOS Tauri apps use WKWebView, which does not expose Chrome DevTools Protocol targets. Auditaur telemetry can still observe the app, but selector actions require a future Auditaur in-app drive bridge or WebKit Remote Inspector backend; use macOS Accessibility automation only as a coarse fallback.".to_string(),
+                fallback: "macos_accessibility",
+            },
+            "windows" => Self {
+                platform: "windows",
+                webview_engine: "WebView2",
+                selector_backend: "cdp",
+                status: "supported_with_remote_debugging",
+                selector_actions_supported: cdp_port.is_some(),
+                guidance: launch_hint(cdp_port),
+                fallback: "none",
+            },
+            _ => Self {
+                platform: CURRENT_PLATFORM,
+                webview_engine: "unknown",
+                selector_backend: "cdp",
+                status: "requires_cdp_endpoint",
+                selector_actions_supported: cdp_port.is_some(),
+                guidance: launch_hint(cdp_port),
+                fallback: "none",
+            },
+        }
     }
 }
 
@@ -1587,13 +1644,21 @@ fn json_string(value: &Value, key: &str) -> Option<String> {
 
 fn launch_hint(cdp_port: Option<u16>) -> String {
     let port = cdp_port.unwrap_or(9222);
+    if CURRENT_PLATFORM == "macos" {
+        return "macOS Tauri apps use WKWebView, which does not expose CDP/WebView2 remote-debugging targets. `auditaur drive` can still report Auditaur telemetry readiness, but selector actions need an Auditaur in-app drive bridge or WebKit Remote Inspector backend; use macOS Accessibility automation as a coarse fallback.".to_string();
+    }
+    let rerun_suffix = if cdp_port.is_some() {
+        format!(" --cdp-port {port}")
+    } else {
+        String::new()
+    };
+    if CURRENT_PLATFORM == "windows" {
+        return format!(
+            "Launch the Tauri/WebView2 app with remote debugging enabled, for example set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=\"--remote-debugging-port={port}\" before starting the app, then rerun `auditaur drive --app <name>{rerun_suffix}`."
+        );
+    }
     format!(
-        "Launch the Tauri/WebView app with remote debugging enabled, for example set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=\"--remote-debugging-port={port}\" before starting the app, then rerun `auditaur drive --app <name>{}`.",
-        if cdp_port.is_some() {
-            format!(" --cdp-port {port}")
-        } else {
-            String::new()
-        }
+        "Launch the Tauri/WebView app with a Chrome DevTools Protocol endpoint on port {port}, then rerun `auditaur drive --app <name>{rerun_suffix}`."
     )
 }
 
@@ -1687,6 +1752,12 @@ fn print_attach_info(info: &DriveAttachInfo, show_targets: bool) -> Result<()> {
             println!("{}", info.cdp.launch_hint);
         }
     }
+    println!(
+        "Platform drive backend: {} / {} - {}",
+        info.platform_backend.platform,
+        info.platform_backend.webview_engine,
+        table_cell(&info.platform_backend.guidance, 180)
+    );
     if let Some(error) = &info.cdp.target_discovery_error {
         println!("Target discovery: {}", table_cell(error, 180));
     }
@@ -1770,7 +1841,10 @@ fn print_action_result(result: &ActionResult) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{auto_probe_reason, parse_ws_endpoint, selector_expression};
+    use super::{
+        auto_probe_reason, launch_hint, parse_ws_endpoint, selector_expression,
+        PlatformDriveBackend,
+    };
 
     #[test]
     fn selector_expression_escapes_css_selector_as_javascript_string() {
@@ -1800,5 +1874,23 @@ mod tests {
         assert!(reason.contains("port 9223 timed out"));
         assert!(reason.contains("port 9224 invalid JSON"));
         assert!(reason.contains("plus 1 more"));
+    }
+
+    #[test]
+    fn platform_backend_reports_macos_wkwebview_limitations() {
+        let backend = PlatformDriveBackend::current(None);
+        if cfg!(target_os = "macos") {
+            assert_eq!(backend.platform, "macos");
+            assert_eq!(backend.webview_engine, "WKWebView");
+            assert_eq!(backend.status, "unsupported_without_bridge");
+            assert_eq!(backend.selector_actions_supported, false);
+            assert!(backend
+                .guidance
+                .contains("does not expose Chrome DevTools Protocol"));
+            assert!(backend.guidance.contains("in-app drive bridge"));
+            assert_eq!(backend.fallback, "macos_accessibility");
+        } else {
+            assert_eq!(backend.guidance, launch_hint(None));
+        }
     }
 }
