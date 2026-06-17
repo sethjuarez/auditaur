@@ -1,5 +1,6 @@
 pub mod config;
 pub mod discovery;
+pub mod drive_bridge;
 pub mod model;
 pub mod otel;
 pub mod protocol;

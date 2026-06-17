@@ -6,16 +6,20 @@ pub mod state;
 pub mod test_helpers;
 pub mod tracing;
 
-use auditaur_core::model::TauriWindowState;
 pub use auditaur_core::AuditaurConfig;
+use auditaur_core::{
+    drive_bridge::{DRIVE_BRIDGE_REQUESTS_DIR, DRIVE_BRIDGE_REQUEST_EVENT},
+    model::TauriWindowState,
+};
 pub use ipc::{
     ipc_traceparent, ipc_traceparent_from_request, ipc_traceparent_from_request_or_context,
     IpcTraceContext, IPC_CONTEXT_ARG, IPC_TRACEPARENT_HEADER,
 };
 use serde_json::{json, Map, Value};
+use std::{fs, path::Path, thread, time::Duration};
 use tauri::{
     plugin::{Builder as TauriPluginBuilder, TauriPlugin},
-    Manager, Runtime, WebviewWindow, Window, WindowEvent,
+    Emitter, Manager, Runtime, WebviewWindow, Window, WindowEvent,
 };
 pub use tauri_plugin_auditaur_macros::{auditaur_command, instrument_ipc};
 pub use tracing::tracing_layer;
@@ -69,7 +73,12 @@ impl Builder {
     pub fn build<R: Runtime>(self) -> TauriPlugin<R> {
         let config = self.config;
         TauriPluginBuilder::new("auditaur")
-            .invoke_handler(tauri::generate_handler![commands::export_otel_batch])
+            .invoke_handler(tauri::generate_handler![
+                commands::export_otel_batch,
+                commands::register_drive_bridge,
+                commands::poll_drive_bridge_request,
+                commands::complete_drive_bridge_request,
+            ])
             .on_window_ready(|window| {
                 record_window_ready(&window);
                 register_window_lifecycle(window);
@@ -87,6 +96,40 @@ impl Builder {
             })
             .build()
     }
+}
+
+pub(crate) fn start_drive_bridge_request_notifier<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    bridge_dir: std::path::PathBuf,
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let app = app.clone();
+    thread::spawn(move || {
+        let requests_dir = bridge_dir.join(DRIVE_BRIDGE_REQUESTS_DIR);
+        while alive.load(std::sync::atomic::Ordering::SeqCst) {
+            if has_pending_drive_bridge_request(&requests_dir) {
+                if let Err(error) = app.emit(
+                    DRIVE_BRIDGE_REQUEST_EVENT,
+                    json!({ "reason": "request_file_available" }),
+                ) {
+                    ::tracing::debug!(error = %error, "Auditaur drive bridge request wake emit failed");
+                }
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+    });
+}
+
+fn has_pending_drive_bridge_request(requests_dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(requests_dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "json")
+    })
 }
 
 fn capture_initial_windows<R: Runtime>(app: &tauri::AppHandle<R>, state: &state::AuditaurState) {

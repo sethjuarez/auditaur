@@ -13,6 +13,7 @@ export interface AuditaurFrontendConfig {
   batchIntervalMs?: number;
   maxBatchSize?: number;
   onExportError?: (failure: AuditaurExportFailure) => void;
+  driveBridge?: boolean | AuditaurDriveBridgeConfig;
 }
 
 export interface AuditaurClient {
@@ -23,6 +24,11 @@ export interface AuditaurClient {
   createOpenTelemetrySpanExporter(): OpenTelemetrySpanExporter;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
+}
+
+export interface AuditaurDriveBridgeConfig {
+  pollIntervalMs?: number;
+  windowLabel?: string;
 }
 
 export interface AuditaurEvent<T> {
@@ -45,6 +51,33 @@ export interface AuditaurExportFailure {
   queuedRecords: number;
   retainedRecords: number;
   droppedRecords: number;
+}
+
+export interface DriveBridgeRequest {
+  schemaVersion: number;
+  protocolVersion: number;
+  requestId: string;
+  action: 'exists' | 'text' | 'click' | 'fill' | 'type' | 'press' | 'snapshot' | 'screenshot' | string;
+  selector?: string;
+  value?: string;
+  visibleOnly: boolean;
+  windowLabel?: string;
+  testId?: string;
+  stepId?: string;
+  createdAtUnixNanos: number;
+}
+
+export interface DriveBridgeResponse {
+  schemaVersion: number;
+  protocolVersion: number;
+  requestId: string;
+  action: string;
+  selector?: string;
+  visibleOnly: boolean;
+  ok: boolean;
+  payload: Record<string, unknown>;
+  error?: string;
+  completedAtUnixNanos: number;
 }
 
 export interface OTelBatch {

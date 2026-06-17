@@ -1,6 +1,8 @@
 use std::{
-    fs, panic,
-    path::PathBuf,
+    fs,
+    io::ErrorKind,
+    panic,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -16,6 +18,12 @@ use auditaur_collector::{
 };
 use auditaur_core::{
     discovery::DiscoveryFile,
+    drive_bridge::{
+        DriveBridgeRequest, DriveBridgeResponse, DriveBridgeStatus, DRIVE_BRIDGE_CAPABILITY,
+        DRIVE_BRIDGE_DIR, DRIVE_BRIDGE_IN_FLIGHT_DIR, DRIVE_BRIDGE_PROTOCOL_VERSION,
+        DRIVE_BRIDGE_REQUESTS_DIR, DRIVE_BRIDGE_RESPONSES_DIR, DRIVE_BRIDGE_STALE_FILE_NANOS,
+        DRIVE_BRIDGE_STATUS_FILE,
+    },
     model::{FrontendError, LogRecord, Session, TelemetrySource},
     AuditaurConfig,
 };
@@ -39,7 +47,10 @@ pub struct AuditaurState {
     enabled: bool,
     store: Option<Arc<Mutex<SqliteStore>>>,
     discovery_path: Option<PathBuf>,
+    bridge_dir: Option<PathBuf>,
     heartbeat_alive: Option<Arc<AtomicBool>>,
+    bridge_notifier_started: Arc<AtomicBool>,
+    bridge_notifier_alive: Arc<AtomicBool>,
     redact_defaults: bool,
     extra_redaction_keys: Vec<String>,
     retention_limits: RetentionLimits,
@@ -58,7 +69,10 @@ impl AuditaurState {
                 enabled: false,
                 store: None,
                 discovery_path: None,
+                bridge_dir: None,
                 heartbeat_alive: None,
+                bridge_notifier_started: Arc::new(AtomicBool::new(false)),
+                bridge_notifier_alive: Arc::new(AtomicBool::new(false)),
                 redact_defaults: config.redact_defaults,
                 extra_redaction_keys: config.extra_redaction_keys,
                 retention_limits: RetentionLimits::default(),
@@ -76,8 +90,12 @@ impl AuditaurState {
         let session_id = Uuid::new_v4().to_string();
         let instance_id = Uuid::new_v4().to_string();
         let session_dir = data_dir.join("sessions").join(&session_id);
+        let bridge_dir = session_dir.join(DRIVE_BRIDGE_DIR);
         let apps_dir = data_dir.join("apps");
         fs::create_dir_all(&session_dir)?;
+        fs::create_dir_all(bridge_dir.join(DRIVE_BRIDGE_REQUESTS_DIR))?;
+        fs::create_dir_all(bridge_dir.join(DRIVE_BRIDGE_IN_FLIGHT_DIR))?;
+        fs::create_dir_all(bridge_dir.join(DRIVE_BRIDGE_RESPONSES_DIR))?;
         fs::create_dir_all(&apps_dir)?;
 
         let database_path = session_dir.join(TELEMETRY_DATABASE_FILE);
@@ -122,12 +140,15 @@ impl AuditaurState {
                 "ipc".to_string(),
                 "events".to_string(),
                 "windows".to_string(),
+                DRIVE_BRIDGE_CAPABILITY.to_string(),
             ],
             last_heartbeat_at: now_rfc3339()?,
         };
         write_discovery(&discovery_path, &discovery)?;
 
         let heartbeat_alive = Arc::new(AtomicBool::new(true));
+        let bridge_notifier_started = Arc::new(AtomicBool::new(false));
+        let bridge_notifier_alive = Arc::new(AtomicBool::new(true));
         start_heartbeat(
             discovery_path.clone(),
             discovery,
@@ -143,7 +164,10 @@ impl AuditaurState {
             enabled: true,
             store: Some(store),
             discovery_path: Some(discovery_path),
+            bridge_dir: Some(bridge_dir),
             heartbeat_alive: Some(heartbeat_alive),
+            bridge_notifier_started,
+            bridge_notifier_alive,
             redact_defaults: config.redact_defaults,
             extra_redaction_keys: config.extra_redaction_keys,
             retention_limits: RetentionLimits {
@@ -258,6 +282,119 @@ impl AuditaurState {
         self.store.clone()
     }
 
+    pub(crate) fn bridge_dir_path(&self) -> Option<PathBuf> {
+        self.bridge_dir.clone()
+    }
+
+    pub(crate) fn start_bridge_notifier_if_needed(&self) -> Option<(PathBuf, Arc<AtomicBool>)> {
+        let bridge_dir = self.bridge_dir_path()?;
+        if self.bridge_notifier_started.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        Some((bridge_dir, self.bridge_notifier_alive.clone()))
+    }
+
+    pub fn register_drive_bridge(
+        &self,
+        window_label: Option<String>,
+    ) -> Result<DriveBridgeStatus, AuditaurError> {
+        let bridge_dir = self.bridge_dir()?;
+        ensure_bridge_dirs(&bridge_dir)?;
+        sweep_stale_bridge_files(&bridge_dir)?;
+        let now = now_unix_nanos();
+        let registered_at_unix_nanos = read_drive_bridge_status(&bridge_dir)
+            .ok()
+            .flatten()
+            .map(|status| status.registered_at_unix_nanos)
+            .unwrap_or(now);
+        let status = DriveBridgeStatus {
+            schema_version: 1,
+            protocol_version: DRIVE_BRIDGE_PROTOCOL_VERSION,
+            active: true,
+            window_label: window_label.clone(),
+            registered_at_unix_nanos,
+            last_heartbeat_unix_nanos: now,
+            targets: vec![auditaur_core::drive_bridge::DriveBridgeTarget {
+                target_id: "auditaur-bridge".to_string(),
+                title: "Auditaur in-app drive bridge".to_string(),
+                window_label,
+                active: true,
+                last_heartbeat_unix_nanos: now,
+            }],
+        };
+        write_drive_bridge_status(&bridge_dir, &status)?;
+        Ok(status)
+    }
+
+    pub fn poll_drive_bridge_request(
+        &self,
+        window_label: Option<String>,
+    ) -> Result<Option<DriveBridgeRequest>, AuditaurError> {
+        let bridge_dir = self.bridge_dir()?;
+        ensure_bridge_dirs(&bridge_dir)?;
+        sweep_stale_bridge_files(&bridge_dir)?;
+        let requests_dir = bridge_dir.join(DRIVE_BRIDGE_REQUESTS_DIR);
+        let in_flight_dir = bridge_dir.join(DRIVE_BRIDGE_IN_FLIGHT_DIR);
+        tracing::debug!(
+            window_label = window_label.as_deref(),
+            requests_dir = %requests_dir.display(),
+            "Auditaur drive bridge poll started"
+        );
+        let Some(request_path) =
+            first_matching_request_file(&requests_dir, window_label.as_deref())?
+        else {
+            return Ok(None);
+        };
+        tracing::debug!(
+            window_label = window_label.as_deref(),
+            request_path = %request_path.display(),
+            "Auditaur drive bridge poll matched request"
+        );
+        let file_name = request_path
+            .file_name()
+            .ok_or_else(|| AuditaurError::new("drive bridge request path had no file name"))?;
+        let in_flight_path = in_flight_dir.join(file_name);
+        match fs::rename(&request_path, &in_flight_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                tracing::debug!(
+                    request_path = %request_path.display(),
+                    "Auditaur drive bridge request was already claimed"
+                );
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let request = fs::read(&in_flight_path)?;
+        let request: DriveBridgeRequest = serde_json::from_slice(&request)?;
+        tracing::debug!(
+            action = request.action.as_str(),
+            request_id = request.request_id.as_str(),
+            selector = request.selector.as_deref(),
+            "Auditaur drive bridge poll returning request"
+        );
+        Ok(Some(request))
+    }
+
+    pub fn complete_drive_bridge_request(
+        &self,
+        response: DriveBridgeResponse,
+    ) -> Result<(), AuditaurError> {
+        let bridge_dir = self.bridge_dir()?;
+        ensure_bridge_dirs(&bridge_dir)?;
+        let response_path = bridge_dir
+            .join(DRIVE_BRIDGE_RESPONSES_DIR)
+            .join(format!("{}.json", safe_bridge_id(&response.request_id)?));
+        atomic_write_json(&response_path, &response)?;
+        let in_flight_path = bridge_dir
+            .join(DRIVE_BRIDGE_IN_FLIGHT_DIR)
+            .join(format!("{}.json", safe_bridge_id(&response.request_id)?));
+        if in_flight_path.exists() {
+            fs::remove_file(in_flight_path)?;
+        }
+        Ok(())
+    }
+
     fn redact_value(&self, value: &serde_json::Value) -> serde_json::Value {
         auditaur_core::redaction::redact_json_with_options(
             value,
@@ -266,6 +403,15 @@ impl AuditaurState {
         )
         .value
     }
+
+    fn bridge_dir(&self) -> Result<PathBuf, AuditaurError> {
+        if !self.enabled {
+            return Err(AuditaurError::new("Auditaur drive bridge is disabled."));
+        }
+        self.bridge_dir
+            .clone()
+            .ok_or_else(|| AuditaurError::new("Auditaur drive bridge has no session directory."))
+    }
 }
 
 impl Drop for AuditaurState {
@@ -273,6 +419,7 @@ impl Drop for AuditaurState {
         if let Some(alive) = &self.heartbeat_alive {
             alive.store(false, Ordering::SeqCst);
         }
+        self.bridge_notifier_alive.store(false, Ordering::SeqCst);
         if let Some(session_id) = &self.session_id {
             crate::tracing::clear_sink(session_id);
             clear_panic_sink(session_id);
@@ -294,7 +441,136 @@ fn now_rfc3339() -> Result<String, AuditaurError> {
 }
 
 fn write_discovery(path: &PathBuf, discovery: &DiscoveryFile) -> Result<(), AuditaurError> {
-    fs::write(path, serde_json::to_vec_pretty(discovery)?)?;
+    atomic_write_json(path, discovery)?;
+    Ok(())
+}
+
+fn ensure_bridge_dirs(bridge_dir: &Path) -> Result<(), AuditaurError> {
+    fs::create_dir_all(bridge_dir.join(DRIVE_BRIDGE_REQUESTS_DIR))?;
+    fs::create_dir_all(bridge_dir.join(DRIVE_BRIDGE_IN_FLIGHT_DIR))?;
+    fs::create_dir_all(bridge_dir.join(DRIVE_BRIDGE_RESPONSES_DIR))?;
+    Ok(())
+}
+
+fn first_matching_request_file(
+    dir: &Path,
+    window_label: Option<&str>,
+) -> Result<Option<PathBuf>, AuditaurError> {
+    let mut paths = fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let Ok(request) = serde_json::from_slice::<DriveBridgeRequest>(&bytes) else {
+            continue;
+        };
+        if request
+            .window_label
+            .as_deref()
+            .is_none_or(|requested| Some(requested) == window_label)
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+fn sweep_stale_bridge_files(bridge_dir: &Path) -> Result<(), AuditaurError> {
+    let now = now_unix_nanos();
+    for dirname in [
+        DRIVE_BRIDGE_REQUESTS_DIR,
+        DRIVE_BRIDGE_IN_FLIGHT_DIR,
+        DRIVE_BRIDGE_RESPONSES_DIR,
+    ] {
+        let dir = bridge_dir.join(dirname);
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(dir)?.filter_map(Result::ok) {
+            let path = entry.path();
+            if !is_bridge_json_or_temp_file(&path) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|duration| i64::try_from(duration.as_nanos()).ok())
+                .unwrap_or(now);
+            if now.saturating_sub(modified) > DRIVE_BRIDGE_STALE_FILE_NANOS {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_bridge_json_or_temp_file(path: &Path) -> bool {
+    if path.extension().and_then(|value| value.to_str()) == Some("json") {
+        return true;
+    }
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name.contains(".json.") && name.ends_with(".tmp"))
+}
+
+fn safe_bridge_id(id: &str) -> Result<&str, AuditaurError> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(AuditaurError::new(
+            "drive bridge request id contains invalid characters.",
+        ));
+    }
+    Ok(id)
+}
+
+fn read_drive_bridge_status(bridge_dir: &Path) -> Result<Option<DriveBridgeStatus>, AuditaurError> {
+    let status_path = bridge_dir.join(DRIVE_BRIDGE_STATUS_FILE);
+    if !status_path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(status_path)?;
+    serde_json::from_slice(&bytes).map(Some).map_err(Into::into)
+}
+
+fn write_drive_bridge_status(
+    bridge_dir: &Path,
+    status: &DriveBridgeStatus,
+) -> Result<(), AuditaurError> {
+    atomic_write_json(&bridge_dir.join(DRIVE_BRIDGE_STATUS_FILE), status)?;
+    Ok(())
+}
+
+fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), AuditaurError> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    atomic_write(path, &bytes)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AuditaurError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AuditaurError::new("atomic write target has no parent directory"))?;
+    fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| AuditaurError::new("atomic write target has no UTF-8 file name"))?;
+    let temp_path = parent.join(format!(
+        ".{file_name}.{}.tmp",
+        now_unix_nanos().saturating_abs()
+    ));
+    fs::write(&temp_path, bytes)?;
+    fs::rename(temp_path, path)?;
     Ok(())
 }
 
@@ -427,11 +703,18 @@ mod tests {
     use super::AuditaurState;
     use auditaur_collector::{exporter_sqlite::SqliteStore, receiver::OTelBatch};
     use auditaur_core::{
+        drive_bridge::{
+            DriveBridgeRequest, DriveBridgeResponse, DRIVE_BRIDGE_IN_FLIGHT_DIR,
+            DRIVE_BRIDGE_PROTOCOL_VERSION, DRIVE_BRIDGE_REQUESTS_DIR, DRIVE_BRIDGE_RESPONSES_DIR,
+            DRIVE_BRIDGE_STALE_FILE_NANOS,
+        },
         model::{LogRecord, SpanEventRecord, SpanRecord, TauriEventRecord, TauriIpcCall},
         storage::{FrontendErrorQuery, SpanEventQuery},
         AuditaurConfig,
     };
     use serde_json::json;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, SystemTime};
     use tempfile::TempDir;
 
     #[test]
@@ -597,6 +880,210 @@ mod tests {
         assert_eq!(
             events[0].payload_json.as_ref().unwrap()["token"],
             "[REDACTED]"
+        );
+    }
+
+    #[test]
+    fn drive_bridge_register_poll_and_complete_round_trip() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = AuditaurState::initialize(
+            AuditaurConfig {
+                enabled: Some(true),
+                service_name: Some("bridge-test".to_string()),
+                data_dir: Some(temp.path().to_path_buf()),
+                ..AuditaurConfig::default()
+            },
+            123,
+            None,
+        )
+        .unwrap();
+        let session_id = state.session_id.clone().unwrap();
+        crate::tracing::clear_sink(&session_id);
+
+        let status = state
+            .register_drive_bridge(Some("main".to_string()))
+            .unwrap();
+        assert!(status.active);
+        assert_eq!(status.window_label.as_deref(), Some("main"));
+
+        let bridge_dir = state.bridge_dir().unwrap();
+        let request = DriveBridgeRequest {
+            schema_version: 1,
+            protocol_version: DRIVE_BRIDGE_PROTOCOL_VERSION,
+            request_id: "request-1".to_string(),
+            action: "exists".to_string(),
+            selector: Some("#ready".to_string()),
+            value: None,
+            visible_only: true,
+            window_label: Some("main".to_string()),
+            test_id: Some("test".to_string()),
+            step_id: Some("step".to_string()),
+            created_at_unix_nanos: 1,
+        };
+        std::fs::write(
+            bridge_dir
+                .join(DRIVE_BRIDGE_REQUESTS_DIR)
+                .join("request-1.json"),
+            serde_json::to_vec_pretty(&request).unwrap(),
+        )
+        .unwrap();
+
+        let polled = state
+            .poll_drive_bridge_request(Some("main".to_string()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(polled.request_id, "request-1");
+        assert!(!bridge_dir
+            .join(DRIVE_BRIDGE_REQUESTS_DIR)
+            .join("request-1.json")
+            .exists());
+        assert!(bridge_dir
+            .join(DRIVE_BRIDGE_IN_FLIGHT_DIR)
+            .join("request-1.json")
+            .exists());
+
+        state
+            .complete_drive_bridge_request(DriveBridgeResponse {
+                schema_version: 1,
+                protocol_version: DRIVE_BRIDGE_PROTOCOL_VERSION,
+                request_id: "request-1".to_string(),
+                action: "exists".to_string(),
+                selector: Some("#ready".to_string()),
+                visible_only: true,
+                ok: true,
+                payload: json!({ "exists": true }),
+                error: None,
+                completed_at_unix_nanos: 2,
+            })
+            .unwrap();
+
+        assert!(!bridge_dir
+            .join(DRIVE_BRIDGE_IN_FLIGHT_DIR)
+            .join("request-1.json")
+            .exists());
+        let response: DriveBridgeResponse = serde_json::from_slice(
+            &std::fs::read(
+                bridge_dir
+                    .join(DRIVE_BRIDGE_RESPONSES_DIR)
+                    .join("request-1.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response.payload["exists"], true);
+    }
+
+    #[test]
+    fn drive_bridge_rejects_unsafe_response_request_id() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = AuditaurState::initialize(
+            AuditaurConfig {
+                enabled: Some(true),
+                service_name: Some("bridge-test".to_string()),
+                data_dir: Some(temp.path().to_path_buf()),
+                ..AuditaurConfig::default()
+            },
+            123,
+            None,
+        )
+        .unwrap();
+        let session_id = state.session_id.clone().unwrap();
+        crate::tracing::clear_sink(&session_id);
+
+        let error = state
+            .complete_drive_bridge_request(DriveBridgeResponse {
+                schema_version: 1,
+                protocol_version: DRIVE_BRIDGE_PROTOCOL_VERSION,
+                request_id: "../escape".to_string(),
+                action: "exists".to_string(),
+                selector: None,
+                visible_only: false,
+                ok: false,
+                payload: json!({ "ok": false }),
+                error: Some("bad".to_string()),
+                completed_at_unix_nanos: 2,
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid characters"));
+    }
+
+    #[test]
+    fn drive_bridge_notifier_starts_once_and_stops_with_state() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = AuditaurState::initialize(
+            AuditaurConfig {
+                enabled: Some(true),
+                service_name: Some("bridge-test".to_string()),
+                data_dir: Some(temp.path().to_path_buf()),
+                ..AuditaurConfig::default()
+            },
+            123,
+            None,
+        )
+        .unwrap();
+        let session_id = state.session_id.clone().unwrap();
+        crate::tracing::clear_sink(&session_id);
+
+        state
+            .register_drive_bridge(Some("main".to_string()))
+            .unwrap();
+        let first = state.start_bridge_notifier_if_needed();
+        assert!(first.is_some(), "first bridge registration starts notifier");
+        let (_, alive) = first.unwrap();
+        assert!(alive.load(Ordering::SeqCst));
+        assert!(
+            state.start_bridge_notifier_if_needed().is_none(),
+            "notifier startup is idempotent"
+        );
+        drop(state);
+        assert!(
+            !alive.load(Ordering::SeqCst),
+            "notifier lifetime flag stops with plugin state"
+        );
+    }
+
+    #[test]
+    fn drive_bridge_sweeps_stale_atomic_temp_files() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = AuditaurState::initialize(
+            AuditaurConfig {
+                enabled: Some(true),
+                service_name: Some("bridge-test".to_string()),
+                data_dir: Some(temp.path().to_path_buf()),
+                ..AuditaurConfig::default()
+            },
+            123,
+            None,
+        )
+        .unwrap();
+        let session_id = state.session_id.clone().unwrap();
+        crate::tracing::clear_sink(&session_id);
+
+        let bridge_dir = state.bridge_dir().unwrap();
+        let stale_temp = bridge_dir
+            .join(DRIVE_BRIDGE_REQUESTS_DIR)
+            .join("request-1.json.123.tmp");
+        std::fs::write(&stale_temp, b"partial").unwrap();
+        std::fs::File::open(&stale_temp)
+            .unwrap()
+            .set_modified(
+                SystemTime::now()
+                    - Duration::from_nanos(
+                        u64::try_from(DRIVE_BRIDGE_STALE_FILE_NANOS).unwrap() + 1_000_000,
+                    ),
+            )
+            .unwrap();
+
+        state
+            .register_drive_bridge(Some("main".to_string()))
+            .unwrap();
+        assert!(
+            !stale_temp.exists(),
+            "stale atomic-write temp files should be reclaimed"
         );
     }
 

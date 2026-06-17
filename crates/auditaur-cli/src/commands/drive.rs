@@ -2,13 +2,21 @@ use std::{
     fs,
     io::{ErrorKind, Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    path::PathBuf,
+    path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
-use auditaur_core::{model::TauriWindowState, storage::TauriWindowQuery};
+use auditaur_core::{
+    drive_bridge::{
+        DriveBridgeRequest, DriveBridgeResponse, DriveBridgeStatus, DRIVE_BRIDGE_DIR,
+        DRIVE_BRIDGE_IN_FLIGHT_DIR, DRIVE_BRIDGE_PROTOCOL_VERSION, DRIVE_BRIDGE_REQUESTS_DIR,
+        DRIVE_BRIDGE_RESPONSES_DIR, DRIVE_BRIDGE_STATUS_FILE,
+    },
+    model::TauriWindowState,
+    storage::TauriWindowQuery,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,6 +37,9 @@ const CDP_AUTO_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const CDP_EXPLICIT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CDP_READ_TIMEOUT: Duration = Duration::from_millis(500);
 const FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS: usize = 64 * 1024;
+const DRIVE_BRIDGE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const DRIVE_BRIDGE_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
+const DRIVE_BRIDGE_ACTIVE_WINDOW: i64 = 120_000_000_000;
 
 #[cfg(target_os = "macos")]
 const CURRENT_PLATFORM: &str = "macos";
@@ -57,9 +68,7 @@ pub fn inspect(selector: DriveAppSelector, cdp_port: Option<u16>, json: bool) ->
 
 pub fn wait(selector: DriveAppSelector, cdp_port: Option<u16>, options: WaitOptions) -> Result<()> {
     if cdp_port.is_none() {
-        return Err(anyhow!(
-            "`auditaur drive wait` requires --cdp-port <port>. Run `auditaur drive inspect` first, then pass the WebView remote-debugging port explicitly."
-        ));
+        return bridge_wait(selector, options);
     }
     let target = resolve_target(&selector)?;
     let attach = DriveAttachInfo::discover(target, cdp_port)?;
@@ -94,6 +103,9 @@ pub fn exists(
     cdp_port: Option<u16>,
     options: SelectorActionOptions,
 ) -> Result<()> {
+    if cdp_port.is_none() {
+        return bridge_selector_action(selector, options, "exists", None, false);
+    }
     let (attach, target, websocket_url) =
         resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "exists")?;
     let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
@@ -124,6 +136,9 @@ pub fn text(
     cdp_port: Option<u16>,
     options: SelectorActionOptions,
 ) -> Result<()> {
+    if cdp_port.is_none() {
+        return bridge_selector_action(selector, options, "text", None, false);
+    }
     let (attach, target, websocket_url) =
         resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "text")?;
     let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
@@ -163,6 +178,9 @@ pub fn click(
     cdp_port: Option<u16>,
     options: SelectorActionOptions,
 ) -> Result<()> {
+    if cdp_port.is_none() {
+        return bridge_selector_action(selector, options, "click", None, true);
+    }
     let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
     let expression = format!(
         "(() => {{ {resolver} if (!el) return {{ ok: false, visibleOnly, error: 'selector not found' }}; el.scrollIntoView({{ block: 'center', inline: 'center' }}); el.click(); return {{ ok: true, visibleOnly }}; }})()"
@@ -171,6 +189,24 @@ pub fn click(
 }
 
 pub fn fill(selector: DriveAppSelector, cdp_port: Option<u16>, options: FillOptions) -> Result<()> {
+    if cdp_port.is_none() {
+        let selector_options = SelectorActionOptions {
+            selector: options.selector,
+            target_id: options.target_id,
+            test_id: options.test_id,
+            step_id: options.step_id,
+            allow_unproven_target: options.allow_unproven_target,
+            visible_only: options.visible_only,
+            json: options.json,
+        };
+        return bridge_selector_action(
+            selector,
+            selector_options,
+            "fill",
+            Some(options.value),
+            true,
+        );
+    }
     let resolver = selector_resolver_js(&options.selector, options.visible_only)?;
     let value_json = serde_json::to_string(&options.value)?;
     let expression = format!(
@@ -193,6 +229,24 @@ pub fn type_text(
     cdp_port: Option<u16>,
     options: TypeOptions,
 ) -> Result<()> {
+    if cdp_port.is_none() {
+        let selector_options = SelectorActionOptions {
+            selector: options.selector,
+            target_id: options.target_id,
+            test_id: options.test_id,
+            step_id: options.step_id,
+            allow_unproven_target: options.allow_unproven_target,
+            visible_only: options.visible_only,
+            json: options.json,
+        };
+        return bridge_selector_action(
+            selector,
+            selector_options,
+            "type",
+            Some(options.value),
+            true,
+        );
+    }
     let (attach, target, websocket_url) =
         resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "type")?;
     require_mutation_allowed(&target, "type", options.allow_unproven_target)?;
@@ -245,6 +299,26 @@ pub fn press(
     cdp_port: Option<u16>,
     options: PressOptions,
 ) -> Result<()> {
+    if cdp_port.is_none() {
+        let selector_options = SelectorActionOptions {
+            selector: options
+                .selector
+                .unwrap_or_else(|| "<active-element>".to_string()),
+            target_id: options.target_id,
+            test_id: options.test_id,
+            step_id: options.step_id,
+            allow_unproven_target: options.allow_unproven_target,
+            visible_only: false,
+            json: options.json,
+        };
+        return bridge_selector_action(
+            selector,
+            selector_options,
+            "press",
+            Some(options.key),
+            true,
+        );
+    }
     let key_json = serde_json::to_string(&options.key)?;
     let selector_json = match &options.selector {
         Some(selector) => serde_json::to_string(selector)?,
@@ -272,6 +346,9 @@ pub fn screenshot(
     cdp_port: Option<u16>,
     options: ScreenshotOptions,
 ) -> Result<()> {
+    if cdp_port.is_none() {
+        return bridge_screenshot(selector, options);
+    }
     let (attach, target, websocket_url) = resolve_drive_target(
         selector,
         cdp_port,
@@ -330,6 +407,52 @@ pub fn screenshot(
         &options.step_id,
     );
     read::print_json_or_table(options.json, &result, || print_action_result(&result))
+}
+
+pub fn snapshot(
+    selector: DriveAppSelector,
+    cdp_port: Option<u16>,
+    options: SnapshotOptions,
+) -> Result<()> {
+    if cdp_port.is_none() {
+        let selector_options = SelectorActionOptions {
+            selector: options
+                .selector
+                .clone()
+                .unwrap_or_else(|| "body".to_string()),
+            target_id: options.target_id,
+            test_id: options.test_id,
+            step_id: options.step_id,
+            allow_unproven_target: false,
+            visible_only: false,
+            json: options.json,
+        };
+        let result =
+            bridge_selector_action_result(selector, selector_options, "snapshot", None, false)?;
+        if let Some(output) = &options.output {
+            fs::write(output, serde_json::to_vec_pretty(&result.payload)?)?;
+        }
+        read::print_json_or_table(options.json, &result, || print_action_result(&result))
+    } else {
+        let (attach, target, websocket_url) =
+            resolve_drive_target(selector, cdp_port, options.target_id.as_deref(), "snapshot")?;
+        let payload = capture_page_snapshot(&websocket_url, options.selector.as_deref())?;
+        if let Some(output) = &options.output {
+            fs::write(output, serde_json::to_vec_pretty(&payload)?)?;
+        }
+        let result = action_result(
+            &attach,
+            &target,
+            "snapshot",
+            options.selector,
+            false,
+            false,
+            payload,
+            &options.test_id,
+            &options.step_id,
+        );
+        read::print_json_or_table(options.json, &result, || print_action_result(&result))
+    }
 }
 
 #[derive(Debug)]
@@ -400,6 +523,16 @@ pub struct ScreenshotOptions {
     pub json: bool,
 }
 
+#[derive(Debug)]
+pub struct SnapshotOptions {
+    pub output: Option<PathBuf>,
+    pub selector: Option<String>,
+    pub target_id: Option<String>,
+    pub test_id: Option<String>,
+    pub step_id: Option<String>,
+    pub json: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DriveAttachInfo {
@@ -415,6 +548,7 @@ struct DriveAttachInfo {
     db_path: String,
     discovery_path: String,
     cdp: CdpAttachInfo,
+    bridge: BridgeAttachInfo,
     platform_backend: PlatformDriveBackend,
     future_actions: Vec<DriverActionSpec>,
     required_action_telemetry: Vec<&'static str>,
@@ -424,6 +558,7 @@ struct DriveAttachInfo {
 impl DriveAttachInfo {
     fn discover(app: DiscoveredApp, cdp_port: Option<u16>) -> Result<Self> {
         let cdp = CdpAttachInfo::discover(cdp_port, &app)?;
+        let bridge = BridgeAttachInfo::discover(&app);
         Ok(Self {
             status: match app.status {
                 DiscoveryStatus::Active => "active".to_string(),
@@ -440,11 +575,112 @@ impl DriveAttachInfo {
             db_path: app.database_path,
             discovery_path: app.discovery_path,
             cdp,
+            bridge,
             platform_backend: PlatformDriveBackend::current(cdp_port),
             future_actions: future_actions(),
             required_action_telemetry: required_action_telemetry(),
             note: "Drive is an optional app-driver layer; it observes Auditaur discovery metadata and talks to a separate CDP endpoint instead of mutating Auditaur's telemetry store.".to_string(),
         })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeAttachInfo {
+    status: String,
+    protocol_version: u8,
+    active: bool,
+    reason: Option<String>,
+    window_label: Option<String>,
+    last_heartbeat_unix_nanos: Option<i64>,
+    request_dir: String,
+    response_dir: String,
+    targets: Vec<CdpTarget>,
+    guidance: String,
+}
+
+impl BridgeAttachInfo {
+    fn discover(app: &DiscoveredApp) -> Self {
+        let bridge_dir = bridge_dir_for_app(app);
+        let request_dir = bridge_dir.join(DRIVE_BRIDGE_REQUESTS_DIR);
+        let response_dir = bridge_dir.join(DRIVE_BRIDGE_RESPONSES_DIR);
+        let status_path = bridge_dir.join(DRIVE_BRIDGE_STATUS_FILE);
+        let guidance = "Enable the Auditaur frontend drive bridge explicitly with initAuditaur({ driveBridge: true }) in exactly one debug/dev WebView per Auditaur session, then rerun the drive command without --cdp-port.".to_string();
+        let status = fs::read(&status_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<DriveBridgeStatus>(&bytes).ok());
+        let Some(status) = status else {
+            return Self {
+                status: "inactive".to_string(),
+                protocol_version: DRIVE_BRIDGE_PROTOCOL_VERSION,
+                active: false,
+                reason: Some("No active frontend drive bridge heartbeat was found.".to_string()),
+                window_label: None,
+                last_heartbeat_unix_nanos: None,
+                request_dir: request_dir.to_string_lossy().to_string(),
+                response_dir: response_dir.to_string_lossy().to_string(),
+                targets: Vec::new(),
+                guidance,
+            };
+        };
+        let age = now_unix_nanos().saturating_sub(status.last_heartbeat_unix_nanos);
+        let protocol_supported = status.protocol_version == DRIVE_BRIDGE_PROTOCOL_VERSION;
+        let heartbeat_fresh = age <= DRIVE_BRIDGE_ACTIVE_WINDOW;
+        let actionable = status.active && protocol_supported;
+        let mut bridge = Self {
+            status: if actionable && heartbeat_fresh {
+                "active"
+            } else if actionable {
+                "stale"
+            } else {
+                "inactive"
+            }
+            .to_string(),
+            protocol_version: status.protocol_version,
+            active: actionable,
+            reason: if !protocol_supported {
+                Some(format!(
+                    "Drive bridge protocol version {} is not supported by this CLI.",
+                    status.protocol_version
+                ))
+            } else if !status.active {
+                Some("Frontend drive bridge is not active.".to_string())
+            } else if !heartbeat_fresh {
+                Some(
+                    "Frontend drive bridge heartbeat is stale; drive actions will attempt the native request wake path."
+                        .to_string(),
+                )
+            } else {
+                None
+            },
+            window_label: status.window_label,
+            last_heartbeat_unix_nanos: Some(status.last_heartbeat_unix_nanos),
+            request_dir: request_dir.to_string_lossy().to_string(),
+            response_dir: response_dir.to_string_lossy().to_string(),
+            targets: Vec::new(),
+            guidance,
+        };
+        if actionable {
+            bridge.targets.push(CdpTarget {
+                id: "auditaur-bridge".to_string(),
+                target_type: Some("bridge".to_string()),
+                title: Some("Auditaur in-app drive bridge".to_string()),
+                url: None,
+                web_socket_debugger_url: None,
+                binding_status: "matched_session_bridge".to_string(),
+                binding_reason: Some(
+                    "Drive bridge request/response queue belongs to the observed Auditaur session."
+                        .to_string(),
+                ),
+                window_label: bridge.window_label.clone(),
+                webview_label: bridge.window_label.clone(),
+                ownership_status: "proven_session_bridge".to_string(),
+                ownership_proof: Some("auditaur_session_directory".to_string()),
+                ownership_proven: true,
+                ownership_guidance: None,
+            });
+        }
+        bridge
     }
 }
 
@@ -469,7 +705,7 @@ impl PlatformDriveBackend {
                 selector_backend: "cdp",
                 status: "unsupported_without_bridge",
                 selector_actions_supported: false,
-                guidance: "macOS Tauri apps use WKWebView, which does not expose Chrome DevTools Protocol targets. Auditaur telemetry can still observe the app, but selector actions require a future Auditaur in-app drive bridge or WebKit Remote Inspector backend; use macOS Accessibility automation only as a coarse fallback.".to_string(),
+                guidance: "macOS Tauri apps use WKWebView, which does not expose Chrome DevTools Protocol targets. Auditaur telemetry can still observe the app, and selector actions can use the explicit Auditaur in-app drive bridge when the frontend enables driveBridge; use macOS Accessibility automation only as a coarse fallback.".to_string(),
                 fallback: "macos_accessibility",
             },
             "windows" => Self {
@@ -1232,6 +1468,366 @@ fn resolve_drive_target(
     Ok((attach, cdp_target, websocket_url))
 }
 
+fn bridge_wait(selector: DriveAppSelector, options: WaitOptions) -> Result<()> {
+    let target = resolve_target(&selector)?;
+    let attach = DriveAttachInfo::discover(target, None)?;
+    require_bridge_active(&attach)?;
+    let bridge_target = bridge_target(&attach);
+    let started = Instant::now();
+    let timeout = Duration::from_millis(options.timeout_ms);
+    let mut matched = false;
+    while started.elapsed() <= timeout {
+        let mut request = bridge_request(
+            "exists",
+            Some(options.selector.clone()),
+            None,
+            options.visible_only,
+            options.test_id.clone(),
+            options.step_id.clone(),
+        );
+        request.window_label = attach.bridge.window_label.clone();
+        let response = execute_bridge_request(&attach, &request, DRIVE_BRIDGE_ACTION_TIMEOUT)?;
+        matched = response
+            .payload
+            .get("exists")
+            .and_then(Value::as_bool)
+            .unwrap_or(response.ok);
+        if matched {
+            break;
+        }
+        thread::sleep(WAIT_POLL_INTERVAL);
+    }
+    let wait_result = wait_result(
+        &attach,
+        &bridge_target,
+        &options,
+        matched,
+        started.elapsed().as_millis(),
+    );
+    read::print_json_or_table(options.json, &wait_result, || {
+        print_wait_result(&wait_result)
+    })?;
+    if matched {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Timed out after {}ms waiting for selector `{}`.",
+            options.timeout_ms,
+            options.selector
+        ))
+    }
+}
+
+fn bridge_selector_action(
+    selector: DriveAppSelector,
+    options: SelectorActionOptions,
+    action: &str,
+    value: Option<String>,
+    mutates_app: bool,
+) -> Result<()> {
+    let json = options.json;
+    let result = bridge_selector_action_result(selector, options, action, value, mutates_app)?;
+    let ok = result.ok;
+    let error = result
+        .payload
+        .get("error")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    read::print_json_or_table(json, &result, || print_action_result(&result))?;
+    if ok {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "drive {action} failed: {}",
+            error.unwrap_or_else(|| "bridge action returned ok=false".to_string())
+        ))
+    }
+}
+
+fn bridge_selector_action_result(
+    selector: DriveAppSelector,
+    options: SelectorActionOptions,
+    action: &str,
+    value: Option<String>,
+    mutates_app: bool,
+) -> Result<ActionResult> {
+    if options
+        .target_id
+        .as_deref()
+        .is_some_and(|target| target != "auditaur-bridge")
+    {
+        return Err(anyhow!(
+            "The Auditaur drive bridge only supports target `auditaur-bridge`."
+        ));
+    }
+    let target = resolve_target(&selector)?;
+    let attach = DriveAttachInfo::discover(target, None)?;
+    require_bridge_active(&attach)?;
+    let bridge_target = bridge_target(&attach);
+    let request_selector = if action == "press" && options.selector.as_str() == "<active-element>" {
+        None
+    } else {
+        Some(options.selector.clone())
+    };
+    let mut request = bridge_request(
+        action,
+        request_selector,
+        value,
+        options.visible_only,
+        options.test_id.clone(),
+        options.step_id.clone(),
+    );
+    request.window_label = attach.bridge.window_label.clone();
+    let response = execute_bridge_request(&attach, &request, DRIVE_BRIDGE_ACTION_TIMEOUT)?;
+    let mut payload = response.payload;
+    if let Some(error) = response.error {
+        if let Some(payload) = payload.as_object_mut() {
+            payload.entry("error".to_string()).or_insert(json!(error));
+        }
+    }
+    Ok(action_result(
+        &attach,
+        &bridge_target,
+        action,
+        Some(options.selector),
+        options.visible_only,
+        mutates_app,
+        payload,
+        &options.test_id,
+        &options.step_id,
+    ))
+}
+
+fn bridge_screenshot(selector: DriveAppSelector, options: ScreenshotOptions) -> Result<()> {
+    if options
+        .target_id
+        .as_deref()
+        .is_some_and(|target| target != "auditaur-bridge")
+    {
+        return Err(anyhow!(
+            "The Auditaur drive bridge only supports target `auditaur-bridge`."
+        ));
+    }
+    let target = resolve_target(&selector)?;
+    let attach = DriveAttachInfo::discover(target, None)?;
+    require_bridge_active(&attach)?;
+    let bridge_target = bridge_target(&attach);
+    let mut request = bridge_request(
+        "screenshot",
+        options.selector.clone(),
+        None,
+        false,
+        options.test_id.clone(),
+        options.step_id.clone(),
+    );
+    request.window_label = attach.bridge.window_label.clone();
+    let response = execute_bridge_request(&attach, &request, DRIVE_BRIDGE_ACTION_TIMEOUT)?;
+    let mut payload = response.payload;
+    let png_base64 = payload
+        .get("pngBase64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            let message = response
+                .error
+                .as_deref()
+                .or_else(|| payload.get("error").and_then(Value::as_str))
+                .unwrap_or("bridge response did not include pngBase64");
+            anyhow!("drive screenshot failed: {message}")
+        })?
+        .to_string();
+    let bytes = BASE64_STANDARD
+        .decode(png_base64.as_bytes())
+        .context("drive screenshot failed: bridge response had invalid pngBase64")?;
+    fs::write(&options.output, bytes)?;
+    if let Some(payload) = payload.as_object_mut() {
+        payload.remove("pngBase64");
+        payload.insert(
+            "output".to_string(),
+            json!(options.output.to_string_lossy().to_string()),
+        );
+        payload.insert("format".to_string(), json!("png"));
+    }
+    if let Some(snapshot_output) = &options.snapshot_output {
+        let snapshot = payload.get("snapshot").cloned();
+        let manifest = json!({
+            "schemaVersion": 1,
+            "action": "screenshot",
+            "serviceName": attach.service_name.clone(),
+            "sessionId": attach.session_id.clone(),
+            "pid": attach.pid,
+            "targetId": bridge_target.id.clone(),
+            "targetTitle": bridge_target.title.clone(),
+            "targetUrl": bridge_target.url.clone(),
+            "windowLabel": bridge_target.window_label.clone(),
+            "targetBindingStatus": bridge_target.binding_status.clone(),
+            "targetOwnershipStatus": bridge_target.ownership_status.clone(),
+            "ownershipProven": bridge_target.ownership_proven,
+            "selector": options.selector.clone(),
+            "testId": options.test_id.clone(),
+            "stepId": options.step_id.clone(),
+            "artifacts": {
+                "screenshot": options.output.to_string_lossy(),
+                "snapshot": snapshot_output.to_string_lossy(),
+            },
+            "snapshotTextLimitCharacters": FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS,
+            "snapshot": snapshot,
+            "snapshotError": null,
+        });
+        fs::write(snapshot_output, serde_json::to_vec_pretty(&manifest)?)?;
+        if let Some(payload) = payload.as_object_mut() {
+            payload.insert(
+                "snapshot".to_string(),
+                json!(snapshot_output.to_string_lossy().to_string()),
+            );
+            payload.insert(
+                "snapshotTextLimitCharacters".to_string(),
+                json!(FAILURE_SNAPSHOT_TEXT_LIMIT_CHARS),
+            );
+        }
+    }
+    let result = action_result(
+        &attach,
+        &bridge_target,
+        "screenshot",
+        options.selector.clone(),
+        false,
+        false,
+        payload,
+        &options.test_id,
+        &options.step_id,
+    );
+    read::print_json_or_table(options.json, &result, || print_action_result(&result))
+}
+
+fn require_bridge_active(attach: &DriveAttachInfo) -> Result<()> {
+    if attach.bridge.active {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Auditaur drive bridge is not active for session {}. {}",
+        attach.session_id,
+        attach.bridge.guidance
+    ))
+}
+
+fn bridge_request(
+    action: &str,
+    selector: Option<String>,
+    value: Option<String>,
+    visible_only: bool,
+    test_id: Option<String>,
+    step_id: Option<String>,
+) -> DriveBridgeRequest {
+    DriveBridgeRequest {
+        schema_version: 1,
+        protocol_version: DRIVE_BRIDGE_PROTOCOL_VERSION,
+        request_id: format!("{}-{}", std::process::id(), now_unix_nanos()),
+        action: action.to_string(),
+        selector,
+        value,
+        visible_only,
+        window_label: None,
+        test_id,
+        step_id,
+        created_at_unix_nanos: now_unix_nanos(),
+    }
+}
+
+fn execute_bridge_request(
+    attach: &DriveAttachInfo,
+    request: &DriveBridgeRequest,
+    timeout: Duration,
+) -> Result<DriveBridgeResponse> {
+    let request_dir = PathBuf::from(&attach.bridge.request_dir);
+    let response_dir = PathBuf::from(&attach.bridge.response_dir);
+    fs::create_dir_all(&request_dir)?;
+    fs::create_dir_all(&response_dir)?;
+    let request_path = request_dir.join(format!("{}.json", request.request_id));
+    atomic_write_json(&request_path, request)?;
+    let response_path = response_dir.join(format!("{}.json", request.request_id));
+    let deadline = Instant::now() + timeout;
+    while Instant::now() <= deadline {
+        if response_path.exists() {
+            let bytes = fs::read(&response_path)?;
+            fs::remove_file(&response_path)?;
+            return serde_json::from_slice(&bytes).map_err(Into::into);
+        }
+        thread::sleep(DRIVE_BRIDGE_POLL_INTERVAL);
+    }
+    let _ = fs::remove_file(&request_path);
+    let _ = fs::remove_file(
+        bridge_dir_for_attach(attach)
+            .join(DRIVE_BRIDGE_IN_FLIGHT_DIR)
+            .join(format!("{}.json", request.request_id)),
+    );
+    Err(anyhow!(
+        "Timed out after {}ms waiting for Auditaur drive bridge response to `{}`.",
+        timeout.as_millis(),
+        request.action
+    ))
+}
+
+fn bridge_target(attach: &DriveAttachInfo) -> CdpTarget {
+    CdpTarget {
+        id: "auditaur-bridge".to_string(),
+        target_type: Some("bridge".to_string()),
+        title: Some("Auditaur in-app drive bridge".to_string()),
+        url: None,
+        web_socket_debugger_url: None,
+        binding_status: "matched_session_bridge".to_string(),
+        binding_reason: Some(
+            "Drive bridge request/response queue belongs to the observed Auditaur session."
+                .to_string(),
+        ),
+        window_label: attach.bridge.window_label.clone(),
+        webview_label: attach.bridge.window_label.clone(),
+        ownership_status: "proven_session_bridge".to_string(),
+        ownership_proof: Some("auditaur_session_directory".to_string()),
+        ownership_proven: true,
+        ownership_guidance: None,
+    }
+}
+
+fn bridge_dir_for_app(app: &DiscoveredApp) -> PathBuf {
+    Path::new(&app.database_path)
+        .parent()
+        .map(|path| path.join(DRIVE_BRIDGE_DIR))
+        .unwrap_or_else(|| PathBuf::from(DRIVE_BRIDGE_DIR))
+}
+
+fn bridge_dir_for_attach(attach: &DriveAttachInfo) -> PathBuf {
+    PathBuf::from(&attach.bridge.request_dir)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(DRIVE_BRIDGE_DIR))
+}
+
+fn now_unix_nanos() -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    i64::try_from(now.as_nanos()).unwrap_or(i64::MAX)
+}
+
+fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("atomic write target has no parent directory"))?;
+    fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| anyhow!("atomic write target has no UTF-8 file name"))?;
+    let temp_path = parent.join(format!(
+        ".{file_name}.{}.tmp",
+        now_unix_nanos().saturating_abs()
+    ));
+    fs::write(&temp_path, bytes)?;
+    fs::rename(temp_path, path)?;
+    Ok(())
+}
+
 fn evaluate_expression(websocket_url: &str, expression: &str, timeout: Duration) -> Result<Value> {
     let mut socket = connect_cdp_websocket(websocket_url, timeout)?;
     let deadline = Instant::now() + timeout;
@@ -1645,7 +2241,7 @@ fn json_string(value: &Value, key: &str) -> Option<String> {
 fn launch_hint(cdp_port: Option<u16>) -> String {
     let port = cdp_port.unwrap_or(9222);
     if CURRENT_PLATFORM == "macos" {
-        return "macOS Tauri apps use WKWebView, which does not expose CDP/WebView2 remote-debugging targets. `auditaur drive` can still report Auditaur telemetry readiness, but selector actions need an Auditaur in-app drive bridge or WebKit Remote Inspector backend; use macOS Accessibility automation as a coarse fallback.".to_string();
+        return "macOS Tauri apps use WKWebView, which does not expose CDP/WebView2 remote-debugging targets. `auditaur drive` can still report Auditaur telemetry readiness, and selector actions can use the explicit Auditaur in-app drive bridge when the frontend enables driveBridge; use macOS Accessibility automation as a coarse fallback.".to_string();
     }
     let rerun_suffix = if cdp_port.is_some() {
         format!(" --cdp-port {port}")
@@ -1686,7 +2282,7 @@ fn future_actions() -> Vec<DriverActionSpec> {
             name: "screenshot",
             selector_required: false,
             mutates_app: false,
-            description: "capture a PNG screenshot through CDP Page.captureScreenshot",
+            description: "capture a PNG screenshot through CDP, or a DOM text summary PNG through the Auditaur in-app drive bridge",
         },
         DriverActionSpec {
             name: "click",
@@ -1757,6 +2353,17 @@ fn print_attach_info(info: &DriveAttachInfo, show_targets: bool) -> Result<()> {
         info.platform_backend.platform,
         info.platform_backend.webview_engine,
         table_cell(&info.platform_backend.guidance, 180)
+    );
+    println!(
+        "Bridge: {} - {}",
+        table_cell(&info.bridge.status, 40),
+        table_cell(
+            info.bridge
+                .reason
+                .as_deref()
+                .unwrap_or("Auditaur in-app drive bridge is active."),
+            180
+        )
     );
     if let Some(error) = &info.cdp.target_discovery_error {
         println!("Target discovery: {}", table_cell(error, 180));

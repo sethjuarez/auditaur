@@ -27,6 +27,22 @@ export const invoke = auditaur.invoke;
 
 By default, Auditaur instruments console logs, frontend errors, Tauri invokes, Tauri events, and W3C trace context propagation for wrapped invokes. Full payload capture is disabled by default.
 
+## Debug drive bridge
+
+For local/debug UI automation, apps can explicitly opt into the Auditaur in-app drive bridge. The bridge lets `auditaur drive` execute selector operations from inside the WebView when CDP is unavailable, such as macOS WKWebView:
+
+```ts
+await initAuditaur({
+  serviceName: 'my-tauri-app',
+  driveBridge: {
+    windowLabel: 'main',
+    pollIntervalMs: 100,
+  },
+});
+```
+
+The bridge is disabled by default, requires the Auditaur Tauri plugin commands permitted by `auditaur:default`, and should only be enabled in development/test builds. It supports the same CLI action names as the CDP path for `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `snapshot`, and `screenshot`; action telemetry is logged without recording filled or typed text values. Bridge screenshots are PNG summary artifacts rendered from DOM text inside the page, not compositor/browser chrome captures. The bridge is intentionally single-window for now: enable it in exactly one WebView per Auditaur session, usually with `windowLabel: 'main'`. If multiple windows enable it in the same session, target selection is unsupported and may be ambiguous.
+
 ## Custom invoke wrappers
 
 If you build your own Tauri invoke wrapper, use the exported trace context helpers so backend commands annotated with `#[tauri_plugin_auditaur::instrument_ipc]` can continue the frontend trace:

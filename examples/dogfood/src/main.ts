@@ -5,6 +5,8 @@ const FRONTEND_EVENT = 'dogfood:frontend-event';
 const BACKEND_EVENT = 'dogfood:backend-event';
 
 const output = document.querySelector<HTMLPreElement>('#output');
+const driveInput = document.querySelector<HTMLInputElement>('#drive-input');
+const driveTextarea = document.querySelector<HTMLTextAreaElement>('#drive-textarea');
 let client: AuditaurClient | undefined;
 
 function write(message: string) {
@@ -35,6 +37,9 @@ async function main() {
     instrumentTauriEvents: true,
     captureFullPayloads: true,
     batchIntervalMs: 500,
+    driveBridge: {
+      windowLabel: 'main',
+    },
   });
 
   await client.listen(BACKEND_EVENT, (event) => {
@@ -86,6 +91,15 @@ async function main() {
   button('backend-event', async () => {
     await client?.invoke('emit_backend_event');
     write('Requested backend event.');
+  });
+
+  driveInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      write(`Drive input Enter pressed with value: ${driveInput.value}`);
+    }
+  });
+  driveTextarea?.addEventListener('input', () => {
+    write(`Drive textarea input: ${driveTextarea.value}`);
   });
 
   window.addEventListener('pagehide', () => {

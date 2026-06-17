@@ -1,3 +1,8 @@
 [default]
-description = "Allow the Auditaur frontend SDK to export telemetry batches."
-permissions = ["allow-export-otel-batch"]
+description = "Allow the Auditaur frontend SDK to export telemetry batches and opt into the debug-only drive bridge."
+permissions = [
+  "allow-export-otel-batch",
+  "allow-register-drive-bridge",
+  "allow-poll-drive-bridge-request",
+  "allow-complete-drive-bridge-request",
+]

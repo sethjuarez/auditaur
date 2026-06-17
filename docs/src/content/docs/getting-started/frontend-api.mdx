@@ -22,6 +22,8 @@ const auditaur = await initAuditaur({
   propagateTauriInvokeTraceContext: true,
   instrumentTauriEvents: true,
   captureFullPayloads: false,
+  // Optional: enable only in development/test builds for selector-based drive.
+  driveBridge: false,
   onExportError(failure) {
     console.warn('Auditaur export failed', failure.error);
   },
@@ -44,6 +46,20 @@ The returned client exposes:
 | `shutdown()` | Removes console/error hooks and flushes pending telemetry. |
 
 Console and error instrumentation are enabled by default. Full payload capture is disabled by default; payload summaries and recursive key-based redaction help reduce accidental secret capture.
+
+`driveBridge` is an explicit opt-in debug/test feature. When enabled, the frontend polls the Auditaur plugin for local drive requests, runs selector operations inside the WebView, and writes responses back to the Auditaur session directory. This gives `auditaur drive` selector semantics on macOS WKWebView where CDP/WebView2 targets do not exist. Keep it disabled for normal application builds; enable it only for local dogfood, CI, or agent-driven smoke tests:
+
+```ts
+await initAuditaur({
+  serviceName: 'my-tauri-app',
+  driveBridge: {
+    windowLabel: 'main',
+    pollIntervalMs: 100,
+  },
+});
+```
+
+The bridge supports the same CLI action names as the CDP path for `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `snapshot`, and `screenshot`. It emits frontend action telemetry with `auditaur.driver.*` attributes and does not record filled or typed text values. Bridge screenshots are PNG summary artifacts rendered from DOM text inside the page, not compositor/browser chrome captures. The bridge is intentionally single-window for now: enable it in exactly one WebView per Auditaur session, usually with `windowLabel: 'main'`. If multiple windows enable the bridge in the same session, target selection is unsupported and may be ambiguous.
 
 The frontend invoke/event wrappers emit Auditaur's OTEL-shaped records directly and map them into SQLite spans plus Tauri-specific rows. When `instrumentTauriInvoke` is enabled, `propagateTauriInvokeTraceContext` defaults to `true` and sends W3C `traceparent` through Tauri invoke request headers plus the reserved `auditaurTraceContext` invoke argument for compatibility with older `instrument_ipc` commands. If your app already uses an argument named `auditaurTraceContext`, Auditaur leaves it untouched and skips propagation for that call; set `propagateTauriInvokeTraceContext: false` to disable this bridge globally.
 

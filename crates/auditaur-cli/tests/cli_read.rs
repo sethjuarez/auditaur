@@ -737,6 +737,296 @@ fn drive_inspect_reports_probable_unproven_target_ownership_guidance() {
 }
 
 #[test]
+fn drive_inspect_reports_active_in_app_bridge() {
+    let temp = TempDir::new().unwrap();
+    let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-inspect");
+    activate_drive_bridge(&db_path, "main");
+
+    let attach = run_json_with_env(
+        ["drive", "--app", "fixture", "inspect", "--json"],
+        temp.path().to_str().unwrap(),
+    );
+
+    assert_eq!(attach["bridge"]["status"], "active");
+    assert_eq!(attach["bridge"]["active"], true);
+    assert_eq!(attach["bridge"]["windowLabel"], "main");
+    assert_eq!(attach["bridge"]["protocolVersion"], 1);
+    assert_eq!(attach["bridge"]["targets"][0]["id"], "auditaur-bridge");
+    assert_eq!(
+        attach["bridge"]["targets"][0]["ownershipStatus"],
+        "proven_session_bridge"
+    );
+}
+
+#[test]
+fn drive_bridge_stale_heartbeat_still_attempts_native_wake_path() {
+    let temp = TempDir::new().unwrap();
+    let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-stale-heartbeat");
+    activate_drive_bridge_with_heartbeat(&db_path, "main", 1);
+
+    let attach = run_json_with_env(
+        ["drive", "--app", "fixture", "inspect", "--json"],
+        temp.path().to_str().unwrap(),
+    );
+    assert_eq!(attach["bridge"]["status"], "stale");
+    assert_eq!(attach["bridge"]["active"], true);
+    assert!(attach["bridge"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("native request wake path"));
+    assert_eq!(attach["bridge"]["targets"][0]["id"], "auditaur-bridge");
+
+    let worker =
+        start_fake_drive_bridge_worker(&db_path, json!({ "exists": true, "visibleOnly": false }));
+    let exists = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "exists",
+            "--selector",
+            "[data-testid=ready]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let request = worker.join().unwrap();
+
+    assert_eq!(exists["ok"], true);
+    assert_eq!(request["windowLabel"], "main");
+}
+
+#[test]
+fn drive_bridge_exists_fill_and_snapshot_without_cdp() {
+    let temp = TempDir::new().unwrap();
+    let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-actions");
+    activate_drive_bridge(&db_path, "main");
+
+    let exists_worker =
+        start_fake_drive_bridge_worker(&db_path, json!({ "exists": true, "visibleOnly": false }));
+    let exists = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "exists",
+            "--selector",
+            "[data-testid=ready]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let exists_request = exists_worker.join().unwrap();
+    assert_eq!(exists["ok"], true);
+    assert_eq!(exists["targetId"], "auditaur-bridge");
+    assert_eq!(exists["targetOwnershipStatus"], "proven_session_bridge");
+    assert_eq!(exists["payload"]["exists"], true);
+    assert_eq!(exists_request["action"], "exists");
+
+    let fill_worker = start_fake_drive_bridge_worker(&db_path, json!({ "ok": true }));
+    let fill = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "fill",
+            "--selector",
+            "input[name=q]",
+            "--value",
+            "auditaur",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let fill_request = fill_worker.join().unwrap();
+    assert_eq!(fill["ok"], true);
+    assert_eq!(fill["mutatesApp"], true);
+    assert_eq!(fill_request["action"], "fill");
+    assert_eq!(fill_request["value"], "auditaur");
+
+    let snapshot_path = temp.path().join("snapshot.json");
+    let snapshot_arg = snapshot_path.to_string_lossy().to_string();
+    let snapshot_payload = json!({
+        "title": "Dogfood",
+        "url": "tauri://localhost/",
+        "selected": { "selector": "body", "text": { "value": "Ready" } }
+    });
+    let snapshot_worker = start_fake_drive_bridge_worker(&db_path, snapshot_payload.clone());
+    let snapshot = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "snapshot",
+            "--selector",
+            "body",
+            "--output",
+            &snapshot_arg,
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    snapshot_worker.join().unwrap();
+    assert_eq!(snapshot["ok"], true);
+    assert_eq!(snapshot["action"], "snapshot");
+    assert_eq!(snapshot["payload"]["title"], "Dogfood");
+    let written: Value = serde_json::from_str(&fs::read_to_string(snapshot_path).unwrap()).unwrap();
+    assert_eq!(written, snapshot_payload);
+}
+
+#[test]
+fn drive_bridge_type_press_and_screenshot_without_cdp() {
+    let temp = TempDir::new().unwrap();
+    let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-parity");
+    activate_drive_bridge(&db_path, "main");
+
+    let type_worker = start_fake_drive_bridge_worker(
+        &db_path,
+        json!({ "ok": true, "visibleOnly": true, "insertedCharacters": 5 }),
+    );
+    let typed = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "type",
+            "--visible-only",
+            "--selector",
+            "textarea",
+            "--value",
+            "hello",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let type_request = type_worker.join().unwrap();
+    assert_eq!(typed["ok"], true);
+    assert_eq!(typed["action"], "type");
+    assert_eq!(typed["mutatesApp"], true);
+    assert_eq!(type_request["action"], "type");
+    assert_eq!(type_request["value"], "hello");
+    assert_eq!(type_request["visibleOnly"], true);
+    assert_eq!(type_request["windowLabel"], "main");
+
+    let press_worker = start_fake_drive_bridge_worker(&db_path, json!({ "ok": true }));
+    let pressed = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "press",
+            "--selector",
+            "textarea",
+            "--key",
+            "Enter",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let press_request = press_worker.join().unwrap();
+    assert_eq!(pressed["ok"], true);
+    assert_eq!(pressed["action"], "press");
+    assert_eq!(press_request["action"], "press");
+    assert_eq!(press_request["value"], "Enter");
+
+    let active_press_worker = start_fake_drive_bridge_worker(&db_path, json!({ "ok": true }));
+    let active_pressed = run_json_with_env(
+        [
+            "drive", "--app", "fixture", "--json", "press", "--key", "Escape",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let active_press_request = active_press_worker.join().unwrap();
+    assert_eq!(active_pressed["ok"], true);
+    assert_eq!(active_pressed["selector"], "<active-element>");
+    assert_eq!(active_press_request["action"], "press");
+    assert!(active_press_request
+        .get("selector")
+        .is_none_or(Value::is_null));
+    assert_eq!(active_press_request["value"], "Escape");
+
+    let screenshot_path = temp.path().join("bridge.png");
+    let manifest_path = temp.path().join("bridge.json");
+    let screenshot_arg = screenshot_path.to_string_lossy().to_string();
+    let manifest_arg = manifest_path.to_string_lossy().to_string();
+    let screenshot_worker = start_fake_drive_bridge_worker(
+        &db_path,
+        json!({
+            "format": "png",
+            "pngBase64": "aGVsbG8=",
+            "width": 320,
+            "height": 240,
+            "snapshot": { "title": "Bridge Page" }
+        }),
+    );
+    let screenshot = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "screenshot",
+            "--selector",
+            "body",
+            "--output",
+            &screenshot_arg,
+            "--snapshot-output",
+            &manifest_arg,
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let screenshot_request = screenshot_worker.join().unwrap();
+    assert_eq!(screenshot["ok"], true);
+    assert_eq!(screenshot["action"], "screenshot");
+    assert_eq!(screenshot["targetId"], "auditaur-bridge");
+    assert_eq!(screenshot["payload"]["output"], screenshot_arg);
+    assert_eq!(screenshot["payload"]["format"], "png");
+    assert!(screenshot["payload"].get("pngBase64").is_none());
+    assert_eq!(fs::read(screenshot_path).unwrap(), b"hello");
+    assert_eq!(screenshot_request["action"], "screenshot");
+    assert_eq!(screenshot_request["selector"], "body");
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["snapshot"]["title"], "Bridge Page");
+    assert_eq!(manifest["targetId"], "auditaur-bridge");
+}
+
+#[test]
+fn drive_bridge_wait_repeats_until_selector_exists() {
+    let temp = TempDir::new().unwrap();
+    let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-wait");
+    activate_drive_bridge(&db_path, "main");
+    let worker = start_fake_drive_bridge_sequence_worker(
+        &db_path,
+        vec![
+            json!({ "exists": false, "visibleOnly": false }),
+            json!({ "exists": true, "visibleOnly": false }),
+        ],
+    );
+
+    let wait = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "wait",
+            "--selector",
+            "[data-testid=ready]",
+            "--timeout-ms",
+            "1000",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+
+    let requests = worker.join().unwrap();
+    assert_eq!(wait["ok"], true);
+    assert_eq!(wait["targetId"], "auditaur-bridge");
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request["action"] == "exists"));
+}
+
+#[test]
 fn drive_resolves_explicit_session_id_when_app_name_is_ambiguous() {
     let temp = TempDir::new().unwrap();
     let first_db_path = temp
@@ -884,9 +1174,21 @@ fn drive_cdp_probe_reports_explicit_endpoint_errors() {
 }
 
 #[test]
-fn drive_wait_requires_explicit_cdp_port() {
-    let failure = run_failure(["drive", "wait", "--selector", "[data-testid=ready]"]);
-    assert!(failure.contains("requires --cdp-port"));
+fn drive_wait_without_cdp_requires_active_bridge() {
+    let temp = TempDir::new().unwrap();
+    write_drive_fixture(temp.path(), "instance-drive-wait-no-bridge");
+    let failure = run_failure_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "wait",
+            "--selector",
+            "[data-testid=ready]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    assert!(failure.contains("drive bridge is not active"));
 }
 
 #[test]
@@ -2159,7 +2461,136 @@ fn expected_capabilities() -> Vec<String> {
         "ipc".to_string(),
         "events".to_string(),
         "windows".to_string(),
+        "drive_bridge".to_string(),
     ]
+}
+
+fn activate_drive_bridge(db_path: &std::path::Path, window_label: &str) {
+    activate_drive_bridge_with_heartbeat(db_path, window_label, now_unix_nanos());
+}
+
+fn activate_drive_bridge_with_heartbeat(
+    db_path: &std::path::Path,
+    window_label: &str,
+    last_heartbeat_unix_nanos: i64,
+) {
+    let bridge_dir = db_path.parent().unwrap().join("drive-bridge");
+    fs::create_dir_all(bridge_dir.join("requests")).unwrap();
+    fs::create_dir_all(bridge_dir.join("in-flight")).unwrap();
+    fs::create_dir_all(bridge_dir.join("responses")).unwrap();
+    fs::write(
+        bridge_dir.join("status.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schemaVersion": 1,
+            "protocolVersion": 1,
+            "active": true,
+            "windowLabel": window_label,
+            "registeredAtUnixNanos": now_unix_nanos(),
+            "lastHeartbeatUnixNanos": last_heartbeat_unix_nanos
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn start_fake_drive_bridge_worker(
+    db_path: &std::path::Path,
+    payload: Value,
+) -> thread::JoinHandle<Value> {
+    start_fake_drive_bridge_sequence_worker(db_path, vec![payload])
+        .map(|requests| requests.into_iter().next().unwrap())
+}
+
+trait JoinMap<T> {
+    fn map<U: Send + 'static>(
+        self,
+        f: impl FnOnce(T) -> U + Send + 'static,
+    ) -> thread::JoinHandle<U>;
+}
+
+impl<T: Send + 'static> JoinMap<T> for thread::JoinHandle<T> {
+    fn map<U: Send + 'static>(
+        self,
+        f: impl FnOnce(T) -> U + Send + 'static,
+    ) -> thread::JoinHandle<U> {
+        thread::spawn(move || f(self.join().unwrap()))
+    }
+}
+
+fn start_fake_drive_bridge_sequence_worker(
+    db_path: &std::path::Path,
+    payloads: Vec<Value>,
+) -> thread::JoinHandle<Vec<Value>> {
+    let bridge_dir = db_path.parent().unwrap().join("drive-bridge");
+    thread::spawn(move || {
+        let mut requests = Vec::new();
+        for payload in payloads {
+            let request_path = wait_for_bridge_request(&bridge_dir);
+            let request: Value =
+                serde_json::from_str(&fs::read_to_string(&request_path).unwrap()).unwrap();
+            requests.push(request.clone());
+            let request_id = request["requestId"].as_str().unwrap();
+            fs::remove_file(&request_path).unwrap();
+            let response_path = bridge_dir
+                .join("responses")
+                .join(format!("{request_id}.json"));
+            fs::write(
+                response_path,
+                serde_json::to_vec_pretty(&json!({
+                    "schemaVersion": 1,
+                    "protocolVersion": 1,
+                    "requestId": request_id,
+                    "action": request["action"],
+                    "selector": request["selector"],
+                    "visibleOnly": request["visibleOnly"],
+                    "ok": payload.get("ok").and_then(Value::as_bool).unwrap_or_else(|| {
+                        payload
+                            .get("exists")
+                            .and_then(Value::as_bool)
+                            .or_else(|| payload.get("found").and_then(Value::as_bool))
+                            .unwrap_or(true)
+                    }),
+                    "payload": payload,
+                    "completedAtUnixNanos": now_unix_nanos()
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        requests
+    })
+}
+
+fn wait_for_bridge_request(bridge_dir: &std::path::Path) -> PathBuf {
+    let request_dir = bridge_dir.join("requests");
+    let in_flight_dir = bridge_dir.join("in-flight");
+    for _ in 0..100 {
+        if let Some(path) =
+            first_json_in_dir(&request_dir).or_else(|| first_json_in_dir(&in_flight_dir))
+        {
+            return path;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("timed out waiting for bridge request");
+}
+
+fn first_json_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut paths = fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.into_iter().next()
+}
+
+fn now_unix_nanos() -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    i64::try_from(now.as_nanos()).unwrap()
 }
 
 fn start_fake_cdp_endpoint() -> (u16, thread::JoinHandle<()>) {

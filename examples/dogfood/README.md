@@ -11,7 +11,7 @@ npm run build:api
 npm run tauri dev
 ```
 
-Click the buttons to emit a console log, throw a frontend error, call successful and failing commands, and emit/listen to events. The app flushes after each button click and on page hide so records are written before you inspect the database.
+Click the buttons to emit a console log, throw a frontend error, call successful and failing commands, and emit/listen to events. The app flushes after each button click and on page hide so records are written before you inspect the database. The dogfood frontend also enables the debug-only Auditaur drive bridge in its single main WebView so macOS/WKWebView selector actions can be smoke-tested without CDP.
 
 ## Smoke test it
 
@@ -22,6 +22,19 @@ From the repository root on Windows, run the repeatable smoke pass:
 ```
 
 The script builds the CLI and dogfood web bundle, launches the dogfood Tauri app with an isolated `AUDITAUR_DATA_DIR` and WebView2 CDP port, waits for `auditaur debug` readiness, drives each dogfood button, verifies frontend-required readiness, then reads `timeline` and `explain`.
+
+On macOS, use the in-app bridge instead of WebView2 CDP:
+
+```powershell
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json inspect
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json exists --selector '#successful-command'
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json click --selector '#successful-command'
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json fill --selector '#drive-input' --value 'filled by bridge'
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json type --selector '#drive-textarea' --value ' typed by bridge'
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json press --selector '#drive-input' --key Enter
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json snapshot --selector body --output dogfood-snapshot.json
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json screenshot --selector body --output dogfood-bridge.png --snapshot-output dogfood-bridge.json
+```
 
 ## Find the session database
 

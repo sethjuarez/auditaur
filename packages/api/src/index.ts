@@ -21,6 +21,7 @@ export type {
   TimedEventLike,
 } from './otel';
 export type {
+  AuditaurDriveBridgeConfig,
   FrontendErrorRecord,
   LogRecord,
   OTelBatch,
@@ -31,4 +32,6 @@ export type {
   AuditaurExportFailure,
   AuditaurInvokeArgs,
   AuditaurTraceContextCarrier,
+  DriveBridgeRequest,
+  DriveBridgeResponse,
 } from './types';

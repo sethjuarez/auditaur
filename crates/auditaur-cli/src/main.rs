@@ -427,6 +427,18 @@ enum DriveCommand {
         #[arg(long)]
         step_id: Option<String>,
     },
+    Snapshot {
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
     Click {
         #[arg(long)]
         selector: String,
@@ -610,6 +622,27 @@ fn main() -> Result<()> {
                     commands::drive::ScreenshotOptions {
                         output,
                         snapshot_output,
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Snapshot {
+                output,
+                selector,
+                target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::snapshot(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SnapshotOptions {
+                        output,
                         selector,
                         target_id: target,
                         test_id,

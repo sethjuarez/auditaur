@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-register-drive-bridge"
+description = "Enables the register_drive_bridge command without any pre-configured scope."
+commands.allow = ["register_drive_bridge"]
+
+[[permission]]
+identifier = "deny-register-drive-bridge"
+description = "Denies the register_drive_bridge command without any pre-configured scope."
+commands.deny = ["register_drive_bridge"]

@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { emit as tauriEmit, emitTo as tauriEmitTo, listen as tauriListen } from '@tauri-apps/api/event';
 import { instrumentConsole } from './console';
+import { startDriveBridge } from './drive-bridge';
 import { instrumentErrors } from './errors';
 import { instrumentedEmit, instrumentedEmitTo, instrumentedListen } from './events';
 import { AuditaurExporter } from './exporter';
@@ -31,6 +32,9 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
   }
   if (config.instrumentErrors ?? true) {
     cleanup.push(instrumentErrors(exporter));
+  }
+  if (config.driveBridge) {
+    cleanup.push(startDriveBridge(exporter, config.driveBridge));
   }
 
   return {
