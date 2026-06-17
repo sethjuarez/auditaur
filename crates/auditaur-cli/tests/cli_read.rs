@@ -12,8 +12,9 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     path::PathBuf,
-    process::Command,
+    process::{Command, Output, Stdio},
     thread,
+    time::{Duration, Instant},
 };
 use tempfile::{NamedTempFile, TempDir};
 use tungstenite::{accept, Message};
@@ -3252,7 +3253,7 @@ fn run_json_command(command: &mut Command) -> Value {
 }
 
 fn run_command(command: &mut Command) -> String {
-    let output = command.output().unwrap();
+    let output = run_bounded_command(command);
 
     assert!(
         output.status.success(),
@@ -3265,7 +3266,7 @@ fn run_command(command: &mut Command) -> String {
 }
 
 fn run_failure_command(command: &mut Command) -> String {
-    let output = command.output().unwrap();
+    let output = run_bounded_command(command);
     assert!(
         !output.status.success(),
         "stdout: {}\nstderr: {}",
@@ -3277,6 +3278,30 @@ fn run_failure_command(command: &mut Command) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+fn run_bounded_command(command: &mut Command) -> Output {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "command timed out after 10s\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn fixture_database() -> NamedTempFile {
