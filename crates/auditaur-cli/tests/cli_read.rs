@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::{
     fs,
     io::{Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     path::PathBuf,
     process::{Command, Output, Stdio},
     thread,
@@ -2669,7 +2669,7 @@ fn start_fake_cdp_wait_endpoint() -> (u16, thread::JoinHandle<()>) {
             r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
         );
         respond_http_json(&listener, &target_list_json(port));
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_tcp(&listener);
         let mut websocket = accept(stream).unwrap();
         loop {
             let message = websocket.read().unwrap();
@@ -2712,7 +2712,7 @@ fn start_fake_cdp_runtime_value_endpoint(value: Value) -> (u16, thread::JoinHand
             r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
         );
         respond_http_json(&listener, &target_list_json(port));
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_tcp(&listener);
         let mut websocket = accept(stream).unwrap();
         loop {
             let message = websocket.read().unwrap();
@@ -2804,7 +2804,7 @@ fn start_fake_cdp_screenshot_endpoint(data: &'static str) -> (u16, thread::JoinH
             r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
         );
         respond_http_json(&listener, &target_list_json(port));
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_tcp(&listener);
         let mut websocket = accept(stream).unwrap();
         loop {
             let message = websocket.read().unwrap();
@@ -2895,7 +2895,7 @@ fn start_fake_cdp_snapshot_error_endpoint(data: &'static str) -> (u16, thread::J
 }
 
 fn respond_websocket_screenshot(listener: &TcpListener, data: &'static str) {
-    let (stream, _) = listener.accept().unwrap();
+    let stream = accept_tcp(&listener);
     let mut websocket = accept(stream).unwrap();
     loop {
         let message = websocket.read().unwrap();
@@ -2925,7 +2925,7 @@ fn respond_websocket_screenshot(listener: &TcpListener, data: &'static str) {
 }
 
 fn respond_websocket_runtime_error(listener: &TcpListener, error_message: &'static str) {
-    let (stream, _) = listener.accept().unwrap();
+    let stream = accept_tcp(&listener);
     let mut websocket = accept(stream).unwrap();
     loop {
         let message = websocket.read().unwrap();
@@ -2957,7 +2957,7 @@ fn respond_websocket_runtime_error(listener: &TcpListener, error_message: &'stat
 }
 
 fn respond_websocket_runtime_value(listener: &TcpListener, value: Value) {
-    let (stream, _) = listener.accept().unwrap();
+    let stream = accept_tcp(&listener);
     let mut websocket = accept(stream).unwrap();
     loop {
         let message = websocket.read().unwrap();
@@ -2991,7 +2991,7 @@ fn respond_websocket_runtime_value(listener: &TcpListener, value: Value) {
 }
 
 fn respond_websocket_recording_runtime_value(listener: &TcpListener, value: Value) -> Vec<Value> {
-    let (stream, _) = listener.accept().unwrap();
+    let stream = accept_tcp(listener);
     let mut websocket = accept(stream).unwrap();
     let mut requests = Vec::new();
     loop {
@@ -3027,7 +3027,7 @@ fn respond_websocket_recording_runtime_value(listener: &TcpListener, value: Valu
 }
 
 fn respond_websocket_recording_insert_text(listener: &TcpListener) -> Vec<Value> {
-    let (stream, _) = listener.accept().unwrap();
+    let stream = accept_tcp(listener);
     let mut websocket = accept(stream).unwrap();
     let mut requests = Vec::new();
     loop {
@@ -3137,7 +3137,7 @@ fn start_fake_cdp_timeout_endpoint() -> (u16, thread::JoinHandle<()>) {
             r#"{"Browser":"Chrome/125.0.0.0","Protocol-Version":"1.3"}"#,
         );
         respond_http_json(&listener, &target_list_json(port));
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_tcp(&listener);
         let mut websocket = accept(stream).unwrap();
         let enable = websocket.read().unwrap();
         let enable: Value = serde_json::from_str(&enable.into_text().unwrap()).unwrap();
@@ -3155,7 +3155,7 @@ fn start_fake_cdp_timeout_endpoint() -> (u16, thread::JoinHandle<()>) {
 }
 
 fn respond_websocket_evaluate_true(listener: &TcpListener) {
-    let (stream, _) = listener.accept().unwrap();
+    let stream = accept_tcp(listener);
     let mut websocket = accept(stream).unwrap();
     loop {
         let message = websocket.read().unwrap();
@@ -3183,6 +3183,28 @@ fn respond_websocket_evaluate_true(listener: &TcpListener) {
             .unwrap();
         if method == "Runtime.evaluate" {
             break;
+        }
+    }
+}
+
+fn accept_tcp(listener: &TcpListener) -> TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                listener.set_nonblocking(false).unwrap();
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    listener.set_nonblocking(false).unwrap();
+                    panic!("timed out waiting for fake CDP connection");
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => panic!("failed accepting fake CDP connection: {error}"),
         }
     }
 }
@@ -3218,7 +3240,7 @@ fn respond_http_json(listener: &TcpListener, body: &str) {
 }
 
 fn respond_http_json_keep_alive(listener: &TcpListener, body: &str) {
-    let (mut stream, _) = listener.accept().unwrap();
+    let mut stream = accept_tcp(listener);
     let mut request = [0_u8; 512];
     let _ = stream.read(&mut request).unwrap();
     write!(
@@ -3235,7 +3257,7 @@ fn respond_http_json_keep_alive(listener: &TcpListener, body: &str) {
 }
 
 fn respond_http_json_after_delay(listener: &TcpListener, body: &str, delay: std::time::Duration) {
-    let (mut stream, _) = listener.accept().unwrap();
+    let mut stream = accept_tcp(listener);
     let mut request = [0_u8; 512];
     let _ = stream.read(&mut request).unwrap();
     thread::sleep(delay);
