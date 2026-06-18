@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.2.4...auditaur-cli-v0.2.5) - 2026-06-18
+
+### Added
+
+- add in-app drive bridge
+
+### Fixed
+
+- avoid Windows CLI stack overflow
+
+### Other
+
+- bound fake CDP server waits
+- test Rust workspace across OSes
+
 ## [0.2.4](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.2.3...auditaur-cli-v0.2.4) - 2026-06-17
 
 ### Fixed
