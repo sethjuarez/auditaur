@@ -47,11 +47,15 @@ The server speaks stdio JSON-RPC and does not write non-MCP content to stdout. T
 | Tool | Required arguments | Notes |
 | --- | --- | --- |
 | `doctor` | none | Accepts optional `db`. |
+| `get_health` | none | Reads local discovery files and reports heartbeat, database/schema, and collector capability health. |
 | `list_sessions` | none | Optional `db`; uses discovery when omitted. |
 | `list_logs` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
 | `list_errors` | none | Optional `db`, `sessionId`, `traceId`, `limit`. Use the CLI `exceptions` command when grouped issue-ready exception reports are needed. |
 | `list_traces` | none | Optional `db`, `sessionId`, `limit`. |
-| `get_trace` | `traceId` | Optional `db`; returns spans, logs, frontend errors, IPC calls, and events. |
+| `get_trace` | `traceId` | Optional `db`; returns spans, logs, frontend errors, IPC calls, events, and window rows. |
+| `get_related_telemetry` | none | Optional `db`, `sessionId`, `traceId`, `windowLabel`, time bounds, and `limit`; returns correlated spans, logs, frontend errors, IPC calls, events, and windows. |
+| `explain_recent_activity` | none | Optional `db`, `sessionId`, `traceId`, `windowLabel`, `sinceSeconds`, time bounds, and `limit`; returns counts and likely failure findings. |
+| `explain_failed_ipc` | none | Optional `db`, `sessionId`, `traceId`, `windowLabel`, time bounds, and `limit`; summarizes failed IPC and related telemetry for the latest traced failure. |
 | `list_apps` | none | Reads local discovery files. |
 | `list_ipc_calls` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
 | `list_events` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |

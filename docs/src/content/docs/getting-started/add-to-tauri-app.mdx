@@ -11,8 +11,8 @@ Current published packages:
 
 | Package | Version |
 | --- | --- |
-| `tauri-plugin-auditaur` | `0.1.3` |
-| `@auditaur/api` | `0.2.1` |
+| `tauri-plugin-auditaur` | `0.2.5` |
+| `@auditaur/api` | `0.4.0` |
 
 ## 1. Install the CLI
 
@@ -27,7 +27,7 @@ In `src-tauri\Cargo.toml`:
 
 ```toml
 [dependencies]
-tauri-plugin-auditaur = "0.1.3"
+tauri-plugin-auditaur = "0.2.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -74,7 +74,7 @@ In `src-tauri\capabilities\default.json`, include `auditaur:default`:
 ## 4. Add the frontend package
 
 ```powershell
-npm install @auditaur/api@0.2.1
+npm install @auditaur/api@0.4.0
 ```
 
 Initialize Auditaur once near app startup:
@@ -124,14 +124,24 @@ You can migrate command-by-command. Direct `@tauri-apps/api/core` calls still wo
 
 ## 6. Opt backend commands into IPC trace continuation
 
-For commands you want parented under frontend invoke traces:
+For commands you want parented under frontend invoke traces, prefer `auditaur_command`. It wraps `#[tauri::command]`, injects the trace carriers Auditaur needs, and keeps backend command spans parented to frontend invoke spans:
+
+```rust
+#[tauri_plugin_auditaur::auditaur_command]
+fn load_user(id: String) -> Result<String, String> {
+    tracing::info!(user.id = %id, "loading user");
+    Ok(id)
+}
+```
+
+If you need to keep an explicit `#[tauri::command]`, use the lower-level compatibility helper:
 
 ```rust
 use tauri_plugin_auditaur::IpcTraceContext;
 
 #[tauri::command]
 #[tauri_plugin_auditaur::instrument_ipc(err)]
-fn load_user(
+fn load_user_legacy(
     id: String,
     auditaur_trace_context: Option<IpcTraceContext>,
 ) -> Result<String, String> {
@@ -140,7 +150,7 @@ fn load_user(
 }
 ```
 
-Keep the explicit `#[tauri::command]`. The optional parameter must be named `auditaur_trace_context`.
+For `instrument_ipc`, the optional parameter must be named `auditaur_trace_context`.
 
 ## 7. Verify with doctor and read commands
 
@@ -175,4 +185,3 @@ If multiple active sessions exist, copy `databasePath` from `auditaur apps --jso
 auditaur logs --db "<databasePath>" --json
 auditaur exceptions --db "<databasePath>" --json
 ```
-

@@ -50,7 +50,7 @@ Run the MCP server:
 cargo run -p auditaur-cli -- mcp
 ```
 
-MCP clients should point at the built binary or the cargo command above. The tools include `list_apps`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, `get_trace`, and `list_windows`.
+MCP clients should point at the built binary or the cargo command above. The tools include `doctor`, `get_health`, `list_apps`, `list_sessions`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, `get_trace`, `get_related_telemetry`, `explain_recent_activity`, `explain_failed_ipc`, and `list_windows`.
 
 ## What works today
 

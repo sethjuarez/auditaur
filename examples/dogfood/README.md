@@ -77,4 +77,4 @@ Start the MCP server with:
 cargo run -p auditaur-cli -- mcp
 ```
 
-Then call tools such as `list_apps`, `list_errors`, `list_traces`, `list_ipc_calls`, `list_events`, and `get_trace`. An agent should be able to answer what failed by reading the `failing_command` frontend IPC/span records and the backend error log/span in the same SQLite session.
+Then call tools such as `get_health`, `list_apps`, `list_errors`, `list_traces`, `list_ipc_calls`, `list_events`, `get_trace`, `get_related_telemetry`, and `explain_failed_ipc`. An agent should be able to answer what failed by reading the `failing_command` frontend IPC/span records and the backend error log/span in the same SQLite session.

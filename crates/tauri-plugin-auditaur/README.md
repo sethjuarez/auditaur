@@ -8,7 +8,7 @@ Use this crate in a Tauri app to create a local Auditaur session database, recei
 
 ```toml
 [dependencies]
-tauri-plugin-auditaur = "0.1"
+tauri-plugin-auditaur = "0.2.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```

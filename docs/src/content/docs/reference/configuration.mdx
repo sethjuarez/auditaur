@@ -20,13 +20,17 @@ description: Auditaur plugin and frontend configuration.
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `serviceName` | required | Frontend service name. |
+| `serviceVersion` | none | Optional frontend service version stored on emitted records. |
 | `instrumentConsole` | `true` | Capture console logs. |
 | `instrumentErrors` | `true` | Capture uncaught errors and unhandled rejections. |
 | `instrumentTauriInvoke` | `true` | Wrap Tauri command calls. |
+| `propagateTauriInvokeTraceContext` | `true` | Send W3C `traceparent` plus the reserved compatibility invoke argument through wrapped Tauri invokes. |
 | `instrumentTauriEvents` | `true` | Wrap event emit/listen calls. |
 | `captureFullPayloads` | `false` | Store full payloads when they fit within the size cap. |
 | `maxPayloadBytes` | `16384` | Bounds captured payload summaries and payload values. |
 | `batchIntervalMs` | `1000` | Flush cadence. |
 | `maxBatchSize` | `64` | Flush when the in-memory batch reaches this size. |
+| `onExportError` | none | Callback for failed exports with attempted, queued, retained, and dropped record counts. |
+| `driveBridge` | `false` | Enables the debug/test in-app drive bridge. Pass `true` or `{ windowLabel, pollIntervalMs }`. |
 
 Important defaults: redaction is enabled, full payload capture is disabled in the frontend package, retention defaults to 256 MiB, and release builds are blocked unless explicitly allowed. Auditaur is intended to be dev/debug first; production collection should be an explicit product decision with consent, redaction, retention, and export handling reviewed.

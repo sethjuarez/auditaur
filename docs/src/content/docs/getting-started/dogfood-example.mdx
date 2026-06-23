@@ -22,7 +22,7 @@ npm run tauri dev
 
 Click each button in the app. The failing-command button is intentionally useful for agents: it creates a frontend `tauri.invoke failing_command` span with `ERROR` status and a backend tracing error that contains `Intentional dogfood backend failure`.
 
-The dogfood commands also opt into Auditaur's experimental Tauri IPC trace context bridge. The frontend invoke wrapper sends W3C `traceparent` in a reserved `auditaurTraceContext` argument, and the Rust commands use `IpcTraceContext` plus `#[tauri_plugin_auditaur::instrument_ipc]` to attach backend spans to the frontend invoke trace without command-name or timestamp heuristics.
+The dogfood commands also opt into Auditaur's Tauri IPC trace context bridge. The frontend invoke wrapper sends W3C `traceparent` through Tauri invoke request headers plus the reserved `auditaurTraceContext` compatibility argument, and the Rust commands use `#[tauri_plugin_auditaur::auditaur_command]` to attach backend spans to the frontend invoke trace without command-name or timestamp heuristics.
 
 Manual smoke path:
 
@@ -83,7 +83,7 @@ For MCP, start:
 cargo run -p auditaur-cli -- mcp
 ```
 
-Point your MCP client at that command and ask it to use `list_traces`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_windows`, and `get_trace` with the copied `databasePath`.
+Point your MCP client at that command and ask it to use `get_health`, `list_traces`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_windows`, `get_trace`, `get_related_telemetry`, or the `explain_*` tools with the copied `databasePath`.
 
 ## Last manual smoke result
 
@@ -99,7 +99,7 @@ The latest local manual smoke used the dogfood app on Windows with an isolated `
 - `auditaur trace <traceId> --json` returned trace detail for the failing command span and its IPC row.
 - `auditaur timeline --json` returned a chronological view across spans, logs, errors, IPC calls, events, and window state.
 - `auditaur explain` summarized the intentional failing command path.
-- MCP `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, and `get_trace` returned real dogfood telemetry from the same SQLite DB.
+- MCP `get_health`, `list_logs`, `list_errors`, `list_ipc_calls`, `list_events`, `list_traces`, `get_trace`, and related/explain tools returned real dogfood telemetry from the same SQLite DB.
 - MCP `list_windows` returned stored startup and lifecycle window rows when window capture was available.
 
 Exact caveats:

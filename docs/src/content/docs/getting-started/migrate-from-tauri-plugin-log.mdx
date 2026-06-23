@@ -46,7 +46,7 @@ Add Auditaur in `src-tauri\Cargo.toml`:
 
 ```toml
 [dependencies]
-tauri-plugin-auditaur = "0.1.3"
+tauri-plugin-auditaur = "0.2.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -84,7 +84,7 @@ Add `auditaur:default` to `src-tauri\capabilities\default.json`:
 Install the frontend package:
 
 ```powershell
-npm install @auditaur/api@0.2.1
+npm install @auditaur/api@0.4.0
 ```
 
 Create a local wrapper such as `src\services\tauri.ts`:
@@ -117,21 +117,17 @@ await invoke('render_video', { id });
 
 ## Add backend trace continuation where it matters
 
-Commands continue to work without changes. For high-value commands, add `instrument_ipc` so frontend invoke spans connect to backend command spans:
+Commands continue to work without changes. For high-value commands, use `auditaur_command` so frontend invoke spans connect to backend command spans:
 
 ```rust
-use tauri_plugin_auditaur::IpcTraceContext;
-
-#[tauri::command]
-#[tauri_plugin_auditaur::instrument_ipc(err)]
-fn render_video(
-    id: String,
-    auditaur_trace_context: Option<IpcTraceContext>,
-) -> Result<(), String> {
+#[tauri_plugin_auditaur::auditaur_command]
+fn render_video(id: String) -> Result<(), String> {
     tracing::info!(video.id = %id, "rendering video");
     Ok(())
 }
 ```
+
+If a command must keep an explicit `#[tauri::command]`, use `#[tauri_plugin_auditaur::instrument_ipc]` with an optional `auditaur_trace_context: Option<IpcTraceContext>` parameter.
 
 ## Verify the migration
 
@@ -165,4 +161,3 @@ Only enable release-build collection after you have reviewed:
 2. Whether full payload capture is disabled or safely redacted.
 3. Whether users explicitly consent to diagnostic collection/export.
 4. Where exported bundles or issue drafts will be stored.
-
