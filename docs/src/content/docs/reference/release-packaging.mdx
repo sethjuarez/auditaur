@@ -82,7 +82,7 @@ For a single local preflight before a release, run:
 .\scripts\preflight-release.ps1
 ```
 
-This runs the skill drift check, Rust formatting and targeted tests, API tests/build, docs build, CLI crate package verification, and `gh skill publish .github --dry-run` when GitHub CLI is available. Add `-IncludeDogfoodSmoke` to include the live Windows dogfood app pass, `-AllowDirtyPackage` while validating uncommitted local changes, or `-SkipGhSkillDryRun` when GitHub CLI is unavailable.
+This runs the skill drift check, Rust formatting and targeted tests, API tests/build, docs build, Rust workspace package verification, and `gh skill publish .github --dry-run` when GitHub CLI is available. Add `-IncludeDogfoodSmoke` to include the live Windows dogfood app pass, `-AllowDirtyPackage` while validating uncommitted local changes, or `-SkipGhSkillDryRun` when GitHub CLI is unavailable.
 
 The live dogfood app smoke is also available as a manual GitHub Actions workflow named **Dogfood Smoke**. It is intentionally `workflow_dispatch` only because it launches the Windows Tauri/WebView app and is heavier than normal PR validation.
 

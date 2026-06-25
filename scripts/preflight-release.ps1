@@ -21,9 +21,21 @@ function Invoke-Step {
     }
 }
 
+function Resolve-Python {
+    foreach ($name in @("python", "python3")) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+    }
+
+    throw "Release preflight requires python or python3 on PATH."
+}
+
 Push-Location $repoRoot
 try {
-    Invoke-Step "Skill drift check" { python scripts\check-skill-drift.py }
+    $python = Resolve-Python
+    Invoke-Step "Skill drift check" { & $python scripts\check-skill-drift.py }
     Invoke-Step "Rust formatting" { cargo fmt --check }
     Invoke-Step "Collector receiver compatibility tests" { cargo test -p auditaur-collector receiver }
     Invoke-Step "CLI tests" { cargo test -p auditaur-cli -- --test-threads=1 }
@@ -31,8 +43,8 @@ try {
     Invoke-Step "API build" { npm --prefix packages\api run build }
     Invoke-Step "Docs build" { npm --prefix docs run build }
 
-    Invoke-Step "CLI crate package verification" {
-        $args = @("package", "-p", "auditaur-cli")
+    Invoke-Step "Rust workspace package verification" {
+        $args = @("package", "--workspace")
         if ($AllowDirtyPackage) {
             $args += "--allow-dirty"
         }
