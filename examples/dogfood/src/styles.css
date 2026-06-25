@@ -54,6 +54,7 @@ label {
 }
 
 input,
+select,
 textarea {
   border: 1px solid #475569;
   border-radius: 10px;
@@ -85,6 +86,11 @@ button {
 
 button:hover {
   background: #7dd3fc;
+}
+
+.inline-control {
+  align-items: center;
+  display: flex;
 }
 
 pre {

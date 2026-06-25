@@ -607,7 +607,7 @@ fn discovers_apps_and_reads_default_database() {
 }
 
 #[test]
-fn drive_reports_attach_info_and_cdp_endpoint() {
+fn drive_reports_tauri_native_attach_info_and_ignores_cdp_port() {
     let temp = TempDir::new().unwrap();
     let db_path = temp
         .path()
@@ -632,62 +632,35 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
             last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
         },
     );
-    let (port, server) = start_fake_cdp_endpoint();
-    let port_arg = port.to_string();
 
     let attach = run_json_with_env(
-        [
-            "drive",
-            "--app",
-            "fixture",
-            "--cdp-port",
-            &port_arg,
-            "--json",
-        ],
+        ["drive", "--app", "fixture", "--cdp-port", "65535", "--json"],
         temp.path().to_str().unwrap(),
     );
 
-    server.join().unwrap();
     assert_eq!(attach["serviceName"], "auditaur-fixture");
     assert_eq!(attach["pid"], 42);
     assert_eq!(attach["sessionId"], "session-fixture");
     assert_eq!(attach["dbPath"], db_path.to_string_lossy().to_string());
-    assert_eq!(attach["cdp"]["status"], "available");
-    assert_eq!(attach["cdp"]["port"], port);
-    assert_eq!(attach["cdp"]["product"], "Chrome/125.0.0.0");
-    assert_eq!(attach["cdp"]["targetBindingStatus"], "matched");
+    assert_eq!(attach["cdp"]["status"], "unavailable");
+    assert!(attach["cdp"]["port"].is_null());
+    assert!(attach["cdp"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("not used"));
+    assert!(attach["cdp"]["launchHint"]
+        .as_str()
+        .unwrap()
+        .contains("Tauri-native in-app driver"));
     assert_eq!(
-        attach["cdp"]["targetOwnershipStatus"],
-        "matched_window_telemetry"
+        attach["platformBackend"]["selectorBackend"],
+        "tauri_in_app_driver"
     );
-    assert_eq!(attach["cdp"]["targets"][0]["id"], "target-fixture");
     assert_eq!(
-        attach["cdp"]["targets"][0]["bindingStatus"],
-        "matched_window_title"
+        attach["platformBackend"]["status"],
+        "supported_with_drive_bridge"
     );
-    assert_eq!(attach["cdp"]["targets"][0]["windowLabel"], "main");
-    assert_eq!(
-        attach["cdp"]["targets"][0]["ownershipStatus"],
-        "matched_window_telemetry"
-    );
-    assert_eq!(attach["cdp"]["targets"][0]["ownershipProven"], false);
-    if cfg!(target_os = "macos") {
-        assert_eq!(attach["platformBackend"]["platform"], "macos");
-        assert_eq!(attach["platformBackend"]["webviewEngine"], "WKWebView");
-        assert_eq!(
-            attach["platformBackend"]["status"],
-            "unsupported_without_bridge"
-        );
-        assert_eq!(attach["platformBackend"]["selectorActionsSupported"], false);
-        assert!(attach["platformBackend"]["guidance"]
-            .as_str()
-            .unwrap()
-            .contains("in-app drive bridge"));
-        assert!(attach["cdp"]["launchHint"]
-            .as_str()
-            .unwrap()
-            .contains("WKWebView"));
-    }
+    assert_eq!(attach["platformBackend"]["selectorActionsSupported"], true);
     assert!(attach["futureActions"]
         .as_array()
         .unwrap()
@@ -697,44 +670,6 @@ fn drive_reports_attach_info_and_cdp_endpoint() {
         .as_array()
         .unwrap()
         .contains(&json!("auditaur.test_id")));
-}
-
-#[test]
-fn drive_inspect_reports_probable_unproven_target_ownership_guidance() {
-    let temp = TempDir::new().unwrap();
-    write_drive_fixture(temp.path(), "instance-drive-probable-ownership");
-    let (port, server) = start_fake_cdp_probable_endpoint();
-    let port_arg = port.to_string();
-
-    let attach = run_json_with_env(
-        [
-            "drive",
-            "--app",
-            "fixture",
-            "--cdp-port",
-            &port_arg,
-            "inspect",
-            "--json",
-        ],
-        temp.path().to_str().unwrap(),
-    );
-
-    server.join().unwrap();
-    assert_eq!(attach["cdp"]["targetBindingStatus"], "probable");
-    assert_eq!(attach["cdp"]["targetOwnershipStatus"], "probable_unproven");
-    assert!(attach["cdp"]["targetOwnershipNote"]
-        .as_str()
-        .unwrap()
-        .contains("--allow-unproven-target"));
-    assert_eq!(
-        attach["cdp"]["targets"][0]["ownershipProof"],
-        "single_window_single_target"
-    );
-    assert_eq!(attach["cdp"]["targets"][0]["ownershipProven"], false);
-    assert!(attach["cdp"]["targets"][0]["ownershipGuidance"]
-        .as_str()
-        .unwrap()
-        .contains("Mutating actions require --allow-unproven-target"));
 }
 
 #[test]
@@ -993,6 +928,99 @@ fn drive_bridge_type_press_and_screenshot_without_cdp() {
 }
 
 #[test]
+fn drive_bridge_hover_select_check_and_evaluate_without_cdp() {
+    let temp = TempDir::new().unwrap();
+    let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-more-actions");
+    activate_drive_bridge(&db_path, "main");
+
+    let hover_worker = start_fake_drive_bridge_worker(&db_path, json!({ "ok": true }));
+    let hover = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "hover",
+            "--selector",
+            "button.menu",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let hover_request = hover_worker.join().unwrap();
+    assert_eq!(hover["ok"], true);
+    assert_eq!(hover["action"], "hover");
+    assert_eq!(hover_request["action"], "hover");
+    assert_eq!(hover_request["selector"], "button.menu");
+
+    let select_worker = start_fake_drive_bridge_worker(
+        &db_path,
+        json!({ "ok": true, "selectedValues": ["one", "two"], "missingValues": [] }),
+    );
+    let selected = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "select",
+            "--selector",
+            "select[name=choice]",
+            "--value",
+            "one",
+            "--value",
+            "two",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let select_request = select_worker.join().unwrap();
+    assert_eq!(selected["ok"], true);
+    assert_eq!(selected["action"], "select");
+    assert_eq!(select_request["action"], "select");
+    assert_eq!(select_request["value"], "one");
+    assert_eq!(select_request["values"], json!(["one", "two"]));
+
+    let check_worker =
+        start_fake_drive_bridge_worker(&db_path, json!({ "ok": true, "checked": true }));
+    let checked = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "check",
+            "--selector",
+            "input[type=checkbox]",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let check_request = check_worker.join().unwrap();
+    assert_eq!(checked["ok"], true);
+    assert_eq!(checked["action"], "check");
+    assert_eq!(check_request["action"], "check");
+
+    let evaluate_worker =
+        start_fake_drive_bridge_worker(&db_path, json!({ "ok": true, "value": 42 }));
+    let evaluated = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--json",
+            "evaluate",
+            "--expression",
+            "window.answer",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let evaluate_request = evaluate_worker.join().unwrap();
+    assert_eq!(evaluated["ok"], true);
+    assert_eq!(evaluated["action"], "evaluate");
+    assert_eq!(evaluated["payload"]["value"], 42);
+    assert_eq!(evaluate_request["action"], "evaluate");
+    assert_eq!(evaluate_request["value"], "window.answer");
+}
+
+#[test]
 fn drive_bridge_wait_repeats_until_selector_exists() {
     let temp = TempDir::new().unwrap();
     let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-wait");
@@ -1100,81 +1128,6 @@ fn drive_resolves_explicit_session_id_when_app_name_is_ambiguous() {
 }
 
 #[test]
-fn drive_cdp_probe_waits_for_realistic_local_endpoint_latency() {
-    let temp = TempDir::new().unwrap();
-    write_drive_fixture(temp.path(), "instance-drive-delayed-cdp");
-    let (port, server) = start_fake_cdp_delayed_endpoint();
-    let port_arg = port.to_string();
-
-    let attach = run_json_with_env(
-        [
-            "drive",
-            "--app",
-            "fixture",
-            "--cdp-port",
-            &port_arg,
-            "--json",
-        ],
-        temp.path().to_str().unwrap(),
-    );
-
-    server.join().unwrap();
-    assert_eq!(attach["cdp"]["status"], "available");
-    assert_eq!(attach["cdp"]["targets"][0]["id"], "target-fixture");
-}
-
-#[test]
-fn drive_cdp_probe_reads_content_length_without_waiting_for_socket_close() {
-    let temp = TempDir::new().unwrap();
-    write_drive_fixture(temp.path(), "instance-drive-keepalive-cdp");
-    let (port, server) = start_fake_cdp_keep_alive_endpoint();
-    let port_arg = port.to_string();
-
-    let attach = run_json_with_env(
-        [
-            "drive",
-            "--app",
-            "fixture",
-            "--cdp-port",
-            &port_arg,
-            "--json",
-        ],
-        temp.path().to_str().unwrap(),
-    );
-
-    server.join().unwrap();
-    assert_eq!(attach["cdp"]["status"], "available");
-    assert_eq!(attach["cdp"]["targets"][0]["id"], "target-fixture");
-}
-
-#[test]
-fn drive_cdp_probe_reports_explicit_endpoint_errors() {
-    let temp = TempDir::new().unwrap();
-    write_drive_fixture(temp.path(), "instance-drive-bad-cdp");
-    let (port, server) = start_fake_cdp_invalid_version_endpoint();
-    let port_arg = port.to_string();
-
-    let attach = run_json_with_env(
-        [
-            "drive",
-            "--app",
-            "fixture",
-            "--cdp-port",
-            &port_arg,
-            "--json",
-        ],
-        temp.path().to_str().unwrap(),
-    );
-
-    server.join().unwrap();
-    assert_eq!(attach["cdp"]["status"], "unavailable");
-    assert!(attach["cdp"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("invalid JSON"));
-}
-
-#[test]
 fn drive_wait_without_cdp_requires_active_bridge() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-wait-no-bridge");
@@ -1193,6 +1146,7 @@ fn drive_wait_without_cdp_requires_active_bridge() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP targets"]
 fn drive_wait_rejects_ambiguous_cdp_targets_without_target_id() {
     let temp = TempDir::new().unwrap();
     let db_path = temp
@@ -1240,6 +1194,7 @@ fn drive_wait_rejects_ambiguous_cdp_targets_without_target_id() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP Runtime.evaluate"]
 fn drive_wait_uses_cdp_runtime_evaluate_without_mutating_observability_store() {
     let temp = TempDir::new().unwrap();
     let db_path = temp
@@ -1303,6 +1258,7 @@ fn drive_wait_uses_cdp_runtime_evaluate_without_mutating_observability_store() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP Runtime.evaluate"]
 fn drive_wait_visible_only_uses_visible_selector_expression() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-visible-wait");
@@ -1343,6 +1299,7 @@ fn drive_wait_visible_only_uses_visible_selector_expression() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP targets"]
 fn drive_wait_auto_selects_single_target_bound_to_observed_window() {
     let temp = TempDir::new().unwrap();
     let db_path = temp
@@ -1393,6 +1350,7 @@ fn drive_wait_auto_selects_single_target_bound_to_observed_window() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP Runtime.evaluate"]
 fn drive_wait_timeout_prints_structured_json_and_exits_nonzero() {
     let temp = TempDir::new().unwrap();
     let db_path = temp
@@ -1445,6 +1403,7 @@ fn drive_wait_timeout_prints_structured_json_and_exits_nonzero() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP DOM evaluation"]
 fn drive_exists_and_text_report_dom_values() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-actions");
@@ -1501,17 +1460,16 @@ fn drive_exists_and_text_report_dom_values() {
 #[test]
 fn drive_action_accepts_json_after_subcommand() {
     let temp = TempDir::new().unwrap();
-    write_drive_fixture(temp.path(), "instance-drive-subcommand-json");
-    let (port, server) = start_fake_cdp_runtime_value_endpoint(json!(true));
-    let port_arg = port.to_string();
+    let db_path = write_drive_fixture(temp.path(), "instance-drive-subcommand-json");
+    activate_drive_bridge(&db_path, "main");
+    let worker =
+        start_fake_drive_bridge_worker(&db_path, json!({ "exists": true, "visibleOnly": false }));
 
     let exists = run_json_with_env(
         [
             "drive",
             "--app",
             "fixture",
-            "--cdp-port",
-            &port_arg,
             "exists",
             "--selector",
             "[data-testid=ready]",
@@ -1520,12 +1478,13 @@ fn drive_action_accepts_json_after_subcommand() {
         temp.path().to_str().unwrap(),
     );
 
-    server.join().unwrap();
+    worker.join().unwrap();
     assert_eq!(exists["ok"], true);
     assert_eq!(exists["payload"]["exists"], true);
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP target ownership"]
 fn drive_read_action_allows_probable_target_without_mutation_opt_in() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-probable-read");
@@ -1554,6 +1513,7 @@ fn drive_read_action_allows_probable_target_without_mutation_opt_in() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP DOM actions"]
 fn drive_read_actions_report_not_found_as_json_failure() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-read-failures");
@@ -1603,6 +1563,7 @@ fn drive_read_actions_report_not_found_as_json_failure() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP DOM actions"]
 fn drive_click_fill_and_press_report_action_telemetry() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-mutating-actions");
@@ -1690,9 +1651,89 @@ fn drive_click_fill_and_press_report_action_telemetry() {
     assert_eq!(press["ok"], true);
     assert_eq!(press["action"], "press");
     assert_eq!(press["selector"], "<active-element>");
+
+    let (select_port, select_server) = start_fake_cdp_recording_runtime_value_endpoint(json!({
+        "ok": true,
+        "selectedValues": ["two"],
+        "missingValues": []
+    }));
+    let select_port_arg = select_port.to_string();
+    let select = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &select_port_arg,
+            "--json",
+            "select",
+            "--selector",
+            "select[name=choice]",
+            "--value",
+            "two",
+            "--allow-unproven-target",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    let select_requests = select_server.join().unwrap();
+    let select_expression = select_requests
+        .iter()
+        .find(|request| request["method"] == "Runtime.evaluate")
+        .unwrap()["params"]["expression"]
+        .as_str()
+        .unwrap();
+    assert_eq!(select["ok"], true);
+    assert_eq!(select["action"], "select");
+    assert_eq!(select["payload"]["selectedValues"], json!(["two"]));
+    assert!(select_expression.contains("HTMLSelectElement"));
+
+    let (check_port, check_server) =
+        start_fake_cdp_runtime_value_endpoint(json!({ "ok": true, "checked": true }));
+    let check_port_arg = check_port.to_string();
+    let check = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &check_port_arg,
+            "--json",
+            "check",
+            "--selector",
+            "input[type=checkbox]",
+            "--allow-unproven-target",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    check_server.join().unwrap();
+    assert_eq!(check["ok"], true);
+    assert_eq!(check["action"], "check");
+
+    let (evaluate_port, evaluate_server) = start_fake_cdp_runtime_value_endpoint(json!(42));
+    let evaluate_port_arg = evaluate_port.to_string();
+    let evaluated = run_json_with_env(
+        [
+            "drive",
+            "--app",
+            "fixture",
+            "--cdp-port",
+            &evaluate_port_arg,
+            "--json",
+            "evaluate",
+            "--expression",
+            "window.answer",
+            "--allow-unproven-target",
+        ],
+        temp.path().to_str().unwrap(),
+    );
+    evaluate_server.join().unwrap();
+    assert_eq!(evaluated["ok"], true);
+    assert_eq!(evaluated["action"], "evaluate");
+    assert_eq!(evaluated["payload"]["value"], 42);
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP input events"]
 fn drive_type_focuses_editable_selector_and_inserts_text_with_cdp_input() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-type");
@@ -1752,6 +1793,7 @@ fn drive_type_focuses_editable_selector_and_inserts_text_with_cdp_input() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge with proven session ownership"]
 fn drive_mutating_action_requires_opt_in_for_probable_target() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-probable-mutation-blocked");
@@ -1779,6 +1821,7 @@ fn drive_mutating_action_requires_opt_in_for_probable_target() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge with proven session ownership"]
 fn drive_mutating_action_requires_opt_in_for_matched_but_unproven_target() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-matched-mutation-blocked");
@@ -1807,6 +1850,7 @@ fn drive_mutating_action_requires_opt_in_for_matched_but_unproven_target() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge with proven session ownership"]
 fn drive_mutating_action_requires_opt_in_for_unverified_target() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture_without_windows(temp.path(), "instance-drive-unverified-mutation-blocked");
@@ -1834,6 +1878,7 @@ fn drive_mutating_action_requires_opt_in_for_unverified_target() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge with proven session ownership"]
 fn drive_mutating_action_can_opt_into_probable_target() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-probable-mutation-allowed");
@@ -1870,6 +1915,7 @@ fn drive_mutating_action_can_opt_into_probable_target() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge with proven session ownership"]
 fn drive_mutating_action_accepts_legacy_probable_opt_in_alias() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-probable-mutation-legacy-alias");
@@ -1902,6 +1948,7 @@ fn drive_mutating_action_accepts_legacy_probable_opt_in_alias() {
 }
 
 #[test]
+#[ignore = "drive now uses the Tauri-native bridge instead of CDP DOM actions"]
 fn drive_mutating_action_reports_dom_error_as_json_failure() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-mutating-failure");
@@ -1934,6 +1981,7 @@ fn drive_mutating_action_reports_dom_error_as_json_failure() {
 }
 
 #[test]
+#[ignore = "drive now uses bridge-provided screenshot bytes instead of CDP Page.captureScreenshot"]
 fn drive_screenshot_writes_png_bytes_and_reports_target_context() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-screenshot");
@@ -1965,6 +2013,7 @@ fn drive_screenshot_writes_png_bytes_and_reports_target_context() {
 }
 
 #[test]
+#[ignore = "drive now uses bridge-provided screenshot/snapshot artifacts instead of CDP"]
 fn drive_failure_artifacts_write_screenshot_and_bounded_snapshot() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-failure-artifacts");
@@ -2026,6 +2075,7 @@ fn drive_failure_artifacts_write_screenshot_and_bounded_snapshot() {
 }
 
 #[test]
+#[ignore = "drive now uses bridge-provided screenshot/snapshot artifacts instead of CDP"]
 fn drive_screenshot_keeps_png_when_snapshot_capture_fails() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-snapshot-failure");

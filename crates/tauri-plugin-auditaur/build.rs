@@ -3,6 +3,7 @@ const COMMANDS: &[&str] = &[
     "register_drive_bridge",
     "poll_drive_bridge_request",
     "complete_drive_bridge_request",
+    "capture_drive_bridge_screenshot",
 ];
 
 fn main() {

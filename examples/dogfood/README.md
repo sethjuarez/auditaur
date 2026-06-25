@@ -21,9 +21,9 @@ From the repository root on Windows, run the repeatable smoke pass:
 .\scripts\dogfood-smoke.ps1
 ```
 
-The script builds the CLI and dogfood web bundle, launches the dogfood Tauri app with an isolated `AUDITAUR_DATA_DIR` and WebView2 CDP port, waits for `auditaur debug` readiness, drives each dogfood button, verifies frontend-required readiness, then reads `timeline` and `explain`.
+The script builds the CLI and dogfood web bundle, launches the dogfood Tauri app with an isolated `AUDITAUR_DATA_DIR`, waits for `auditaur debug` readiness, drives the app through the Tauri-native bridge, verifies native window screenshot capture, checks frontend-required readiness, then reads `timeline` and `explain`.
 
-On macOS, use the in-app bridge instead of WebView2 CDP:
+The same drive commands work on macOS/WKWebView because they use the in-app bridge instead of CDP:
 
 ```powershell
 cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json inspect

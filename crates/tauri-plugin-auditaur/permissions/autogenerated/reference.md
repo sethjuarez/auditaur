@@ -8,6 +8,7 @@ Allow the Auditaur frontend SDK to export telemetry batches and opt into the deb
 - `allow-register-drive-bridge`
 - `allow-poll-drive-bridge-request`
 - `allow-complete-drive-bridge-request`
+- `allow-capture-drive-bridge-screenshot`
 
 ## Permission Table
 
@@ -17,6 +18,32 @@ Allow the Auditaur frontend SDK to export telemetry batches and opt into the deb
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`auditaur:allow-capture-drive-bridge-screenshot`
+
+</td>
+<td>
+
+Enables the capture_drive_bridge_screenshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`auditaur:deny-capture-drive-bridge-screenshot`
+
+</td>
+<td>
+
+Denies the capture_drive_bridge_screenshot command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>

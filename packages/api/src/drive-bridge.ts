@@ -10,6 +10,7 @@ import type {
 const REGISTER_COMMAND = 'plugin:auditaur|register_drive_bridge';
 const POLL_COMMAND = 'plugin:auditaur|poll_drive_bridge_request';
 const COMPLETE_COMMAND = 'plugin:auditaur|complete_drive_bridge_request';
+const CAPTURE_SCREENSHOT_COMMAND = 'plugin:auditaur|capture_drive_bridge_screenshot';
 const REQUEST_EVENT = 'auditaur://drive-bridge/request';
 const PROTOCOL_VERSION = 1;
 const SNAPSHOT_TEXT_LIMIT_CHARS = 64 * 1024;
@@ -17,6 +18,29 @@ const MAX_SCREENSHOT_DIMENSION = 2048;
 const HEARTBEAT_INTERVAL_MS = 1_000;
 const POLL_INTERVAL_MS = 1_000;
 const POLL_TIMEOUT_MS = 35_000;
+
+interface NativeScreenshotPayload {
+  format: 'png';
+  pngBase64: string;
+  width: number;
+  height: number;
+  screenshotBackend: string;
+  windowLabel?: string;
+  windowTitle?: string;
+  nativeWindowId?: number;
+  nativeWindowTitle?: string;
+  nativeAppName?: string;
+}
+
+let nativeScreenshotInvoker: (windowLabel: string | undefined) => Promise<NativeScreenshotPayload> =
+  (windowLabel) => invoke<NativeScreenshotPayload>(CAPTURE_SCREENSHOT_COMMAND, { windowLabel });
+
+export function setDriveBridgeNativeScreenshotInvokerForTests(
+  invoker: ((windowLabel: string | undefined) => Promise<NativeScreenshotPayload>) | undefined,
+): void {
+  nativeScreenshotInvoker = invoker
+    ?? ((windowLabel) => invoke<NativeScreenshotPayload>(CAPTURE_SCREENSHOT_COMMAND, { windowLabel }));
+}
 
 export function startDriveBridge(
   exporter: AuditaurExporter,
@@ -181,6 +205,11 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
       (el as HTMLElement).click?.();
       return { ok: true, visibleOnly: request.visibleOnly };
     }
+    case 'hover': {
+      const el = requireSelector(request.selector, request.visibleOnly);
+      hoverElement(el);
+      return { ok: true, visibleOnly: request.visibleOnly };
+    }
 
     function selectorNotFoundMessage(selector: string | undefined): string {
       return selector ? `Selector \`${selector}\` was not found.` : 'Selector was not provided.';
@@ -199,11 +228,29 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
       pressKey(request.selector, request.value ?? '', request.visibleOnly);
       return { ok: true, visibleOnly: request.visibleOnly };
     }
+    case 'select': {
+      const el = requireSelector(request.selector, request.visibleOnly);
+      const values = request.values?.length ? request.values : [request.value ?? ''];
+      return selectElementValues(el, values, request.visibleOnly);
+    }
+    case 'check': {
+      const el = requireSelector(request.selector, request.visibleOnly);
+      setChecked(el, true);
+      return { ok: true, checked: true, visibleOnly: request.visibleOnly };
+    }
+    case 'uncheck': {
+      const el = requireSelector(request.selector, request.visibleOnly);
+      setChecked(el, false);
+      return { ok: true, checked: false, visibleOnly: request.visibleOnly };
+    }
+    case 'evaluate': {
+      return evaluateExpression(request.value ?? '');
+    }
     case 'snapshot': {
       return captureSnapshot(request.selector);
     }
     case 'screenshot': {
-      return captureScreenshot(request.selector);
+      return captureScreenshot(request.selector, request.windowLabel);
     }
     default:
       throw new Error(`unsupported drive bridge action: ${request.action}`);
@@ -319,6 +366,88 @@ function pressKey(selector: string | undefined, key: string, visibleOnly: boolea
   }
 }
 
+function hoverElement(el: Element): void {
+  (el as HTMLElement).scrollIntoView?.({ block: 'center', inline: 'center' });
+  const rect = el.getBoundingClientRect?.();
+  const clientX = Math.round((rect?.left ?? 0) + (rect?.width ?? 0) / 2);
+  const clientY = Math.round((rect?.top ?? 0) + (rect?.height ?? 0) / 2);
+  const eventInit = { bubbles: true, cancelable: true, clientX, clientY };
+  for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'mousemove']) {
+    const EventConstructor = type.startsWith('pointer') && typeof PointerEvent === 'function'
+      ? PointerEvent
+      : typeof MouseEvent === 'function' ? MouseEvent : Event;
+    el.dispatchEvent(new EventConstructor(type, eventInit));
+  }
+}
+
+function selectElementValues(el: Element, values: string[], visibleOnly: boolean): Record<string, unknown> {
+  if (!(el instanceof HTMLSelectElement)) {
+    throw new Error('selector is not a select element');
+  }
+  const requested = new Set(values);
+  const matched = new Set<string>();
+  for (const option of Array.from(el.options)) {
+    const selected = requested.has(option.value);
+    option.selected = selected;
+    if (selected) {
+      matched.add(option.value);
+    }
+  }
+  const missingValues = values.filter((value) => !matched.has(value));
+  el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return {
+    ok: missingValues.length === 0,
+    visibleOnly,
+    selectedValues: Array.from(el.selectedOptions).map((option) => option.value),
+    missingValues,
+    ...(missingValues.length ? { error: `option value(s) not found: ${missingValues.join(', ')}` } : {}),
+  };
+}
+
+function setChecked(el: Element, checked: boolean): void {
+  if (!(el instanceof HTMLInputElement) || (el.type !== 'checkbox' && el.type !== 'radio')) {
+    throw new Error('selector is not a checkbox or radio input');
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked');
+  if (descriptor?.set) {
+    descriptor.set.call(el, checked);
+  } else {
+    el.checked = checked;
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+async function evaluateExpression(expression: string): Promise<Record<string, unknown>> {
+  if (!expression.trim()) {
+    throw new Error('evaluate requires a JavaScript expression');
+  }
+  const evaluate = globalThis.eval;
+  const value = await evaluate(expression);
+  return { ok: true, value: serializableEvaluationValue(value) };
+}
+
+function serializableEvaluationValue(value: unknown): unknown {
+  if (value === undefined) {
+    return null;
+  }
+  if (value instanceof Element) {
+    return {
+      element: true,
+      tagName: value.tagName,
+      id: value.id || undefined,
+      className: value.className || undefined,
+      text: clipText(elementText(value)),
+    };
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return String(value);
+  }
+}
+
 function setNativeValue(
   el: HTMLInputElement | HTMLTextAreaElement,
   prototype: HTMLInputElement | HTMLTextAreaElement,
@@ -346,11 +475,57 @@ function captureSnapshot(selector: string | undefined): Record<string, unknown> 
   };
 }
 
-async function captureScreenshot(selector: string | undefined): Promise<Record<string, unknown>> {
+async function captureScreenshot(
+  selector: string | undefined,
+  windowLabel: string | undefined,
+): Promise<Record<string, unknown>> {
   const target = selector ? document.querySelector(selector) : document.documentElement;
   if (!target) {
     throw new Error('selector not found');
   }
+  const snapshot = captureSnapshot(selector);
+  try {
+    return {
+      ...(await nativeScreenshotInvoker(windowLabel)),
+      selector,
+      screenshotScope: 'window',
+      snapshot,
+    };
+  } catch (error) {
+    return {
+      ...captureDomSummaryScreenshot(target, selector, snapshot),
+      nativeScreenshotError: errorMessage(error),
+    };
+  }
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    const message = record.message ?? record.error;
+    if (typeof message === 'string') {
+      return message;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
+
+function captureDomSummaryScreenshot(
+  target: Element,
+  selector: string | undefined,
+  snapshot: Record<string, unknown>,
+): Record<string, unknown> {
   const rect = target.getBoundingClientRect?.();
   const rawWidth = Math.ceil(rect?.width || document.documentElement.clientWidth || window.innerWidth || 1);
   const rawHeight = Math.ceil(rect?.height || document.documentElement.clientHeight || window.innerHeight || 1);
@@ -392,7 +567,7 @@ async function captureScreenshot(selector: string | undefined): Promise<Record<s
     height,
     selector,
     screenshotBackend: 'bridge_dom_summary_canvas',
-    snapshot: captureSnapshot(selector),
+    snapshot,
   };
 }
 

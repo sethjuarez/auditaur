@@ -5,4 +5,5 @@ permissions = [
   "allow-register-drive-bridge",
   "allow-poll-drive-bridge-request",
   "allow-complete-drive-bridge-request",
+  "allow-capture-drive-bridge-screenshot",
 ]

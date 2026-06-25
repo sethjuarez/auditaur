@@ -78,6 +78,7 @@ impl Builder {
                 commands::register_drive_bridge,
                 commands::poll_drive_bridge_request,
                 commands::complete_drive_bridge_request,
+                commands::capture_drive_bridge_screenshot,
             ])
             .on_window_ready(|window| {
                 record_window_ready(&window);
