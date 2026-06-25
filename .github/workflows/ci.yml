@@ -27,8 +27,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libayatana-appindicator3-dev \
+            libegl1-mesa-dev \
+            libgbm-dev \
             libpipewire-0.3-dev \
             librsvg2-dev \
+            libwayland-dev \
             libwebkit2gtk-4.1-dev
       - uses: Swatinem/rust-cache@v2
       - run: python scripts/check-skill-drift.py
