@@ -43,6 +43,8 @@ pub struct DriveBridgeRequest {
     pub action: String,
     pub selector: Option<String>,
     pub value: Option<String>,
+    #[serde(default)]
+    pub values: Vec<String>,
     pub visible_only: bool,
     #[serde(default)]
     pub window_label: Option<String>,

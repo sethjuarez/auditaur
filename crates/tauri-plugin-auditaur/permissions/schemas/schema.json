@@ -295,6 +295,18 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the capture_drive_bridge_screenshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-drive-bridge-screenshot",
+          "markdownDescription": "Enables the capture_drive_bridge_screenshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_drive_bridge_screenshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-drive-bridge-screenshot",
+          "markdownDescription": "Denies the capture_drive_bridge_screenshot command without any pre-configured scope."
+        },
+        {
           "description": "Enables the complete_drive_bridge_request command without any pre-configured scope.",
           "type": "string",
           "const": "allow-complete-drive-bridge-request",
@@ -343,10 +355,10 @@
           "markdownDescription": "Denies the register_drive_bridge command without any pre-configured scope."
         },
         {
-          "description": "Allow the Auditaur frontend SDK to export telemetry batches and opt into the debug-only drive bridge.\n#### This default permission set includes:\n\n- `allow-export-otel-batch`\n- `allow-register-drive-bridge`\n- `allow-poll-drive-bridge-request`\n- `allow-complete-drive-bridge-request`",
+          "description": "Allow the Auditaur frontend SDK to export telemetry batches and opt into the debug-only drive bridge.\n#### This default permission set includes:\n\n- `allow-export-otel-batch`\n- `allow-register-drive-bridge`\n- `allow-poll-drive-bridge-request`\n- `allow-complete-drive-bridge-request`\n- `allow-capture-drive-bridge-screenshot`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allow the Auditaur frontend SDK to export telemetry batches and opt into the debug-only drive bridge.\n#### This default permission set includes:\n\n- `allow-export-otel-batch`\n- `allow-register-drive-bridge`\n- `allow-poll-drive-bridge-request`\n- `allow-complete-drive-bridge-request`"
+          "markdownDescription": "Allow the Auditaur frontend SDK to export telemetry batches and opt into the debug-only drive bridge.\n#### This default permission set includes:\n\n- `allow-export-otel-batch`\n- `allow-register-drive-bridge`\n- `allow-poll-drive-bridge-request`\n- `allow-complete-drive-bridge-request`\n- `allow-capture-drive-bridge-screenshot`"
         }
       ]
     }

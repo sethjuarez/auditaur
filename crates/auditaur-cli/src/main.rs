@@ -359,7 +359,7 @@ struct DriveArgs {
     latest: bool,
     #[arg(long, global = true)]
     active: bool,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, hide = true)]
     cdp_port: Option<u16>,
     #[arg(long, global = true)]
     json: bool,
@@ -444,7 +444,7 @@ enum DriveCommand {
         selector: String,
         #[arg(long)]
         target: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         allow_unproven_target: bool,
         #[arg(long, hide = true)]
         allow_probable_target: bool,
@@ -460,7 +460,7 @@ enum DriveCommand {
         value: String,
         #[arg(long)]
         target: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         allow_unproven_target: bool,
         #[arg(long, hide = true)]
         allow_probable_target: bool,
@@ -476,7 +476,79 @@ enum DriveCommand {
         selector: Option<String>,
         #[arg(long)]
         target: Option<String>,
+        #[arg(long, hide = true)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
         #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Hover {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, hide = true)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Select {
+        #[arg(long)]
+        selector: String,
+        #[arg(long, required = true)]
+        value: Vec<String>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, hide = true)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Check {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, hide = true)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Uncheck {
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, hide = true)]
+        allow_unproven_target: bool,
+        #[arg(long, hide = true)]
+        allow_probable_target: bool,
+        #[arg(long)]
+        test_id: Option<String>,
+        #[arg(long)]
+        step_id: Option<String>,
+    },
+    Evaluate {
+        #[arg(long)]
+        expression: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, hide = true)]
         allow_unproven_target: bool,
         #[arg(long, hide = true)]
         allow_probable_target: bool,
@@ -730,6 +802,122 @@ fn inner_main() -> Result<()> {
                     commands::drive::PressOptions {
                         key,
                         selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Hover {
+                selector,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::hover(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SelectorActionOptions {
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        visible_only: drive_visible_only,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Select {
+                selector,
+                value,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::select(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SelectOptions {
+                        selector,
+                        values: value,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        visible_only: drive_visible_only,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Check {
+                selector,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::check(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SelectorActionOptions {
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        visible_only: drive_visible_only,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Uncheck {
+                selector,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::uncheck(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::SelectorActionOptions {
+                        selector,
+                        target_id: target,
+                        test_id,
+                        step_id,
+                        allow_unproven_target: allow_unproven_target || allow_probable_target,
+                        visible_only: drive_visible_only,
+                        json: args.json,
+                    },
+                )
+            }
+            Some(DriveCommand::Evaluate {
+                expression,
+                target,
+                allow_unproven_target,
+                allow_probable_target,
+                test_id,
+                step_id,
+            }) => {
+                let app_selector = args.selector();
+                commands::drive::evaluate(
+                    app_selector,
+                    args.cdp_port,
+                    commands::drive::EvaluateOptions {
+                        expression,
                         target_id: target,
                         test_id,
                         step_id,

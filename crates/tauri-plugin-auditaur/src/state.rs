@@ -269,6 +269,25 @@ impl AuditaurState {
         Ok(())
     }
 
+    pub fn ensure_drive_bridge_available(&self) -> Result<(), AuditaurError> {
+        if !self.enabled {
+            return Err(AuditaurError::new(
+                "Auditaur is disabled; native drive screenshots require an enabled Auditaur session.",
+            ));
+        }
+        self.session_id.as_ref().ok_or_else(|| {
+            AuditaurError::new(
+                "Auditaur is enabled without a session id; native drive screenshots are unavailable.",
+            )
+        })?;
+        self.bridge_dir.as_ref().ok_or_else(|| {
+            AuditaurError::new(
+                "Auditaur is enabled without a drive bridge directory; native drive screenshots are unavailable.",
+            )
+        })?;
+        Ok(())
+    }
+
     pub fn tracing_layer(&self) -> crate::tracing::AuditaurTracingLayer {
         match (&self.session_id, &self.store) {
             (Some(session_id), Some(store)) => {
@@ -915,6 +934,7 @@ mod tests {
             action: "exists".to_string(),
             selector: Some("#ready".to_string()),
             value: None,
+            values: Vec::new(),
             visible_only: true,
             window_label: Some("main".to_string()),
             test_id: Some("test".to_string()),

@@ -1,6 +1,6 @@
 ---
 name: auditaur-debug
-description: Debug Auditaur-enabled Tauri apps. Use when asked to inspect app startup, telemetry readiness, frontend errors, IPC, events, traces, WebView/CDP targets, or dogfood/smoke-test an Auditaur integration.
+description: Debug Auditaur-enabled Tauri apps. Use when asked to inspect app startup, telemetry readiness, frontend errors, IPC, events, traces, Tauri-native drive bridge targets, or dogfood/smoke-test an Auditaur integration.
 license: MIT
 ---
 
@@ -22,22 +22,21 @@ For a running app, watch until core telemetry is ready:
 auditaur debug --app <app-name> --active --json watch --until-ready --timeout-seconds 120
 ```
 
-If the task requires frontend telemetry, add `--require-frontend`. If the task requires WebView selector actions on Windows/WebView2, launch the app with a remote debugging port and add `--cdp-port <port>`.
+If the task requires frontend telemetry, add `--require-frontend`. If the task requires WebView selector actions, use the Auditaur in-app drive bridge: enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session.
 
 ```bash
-WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222" npm run tauri dev
-auditaur debug --app <app-name> --active --cdp-port 9222 --require-frontend --json watch --until-ready --timeout-seconds 120
+npm run tauri dev
+auditaur debug --app <app-name> --active --require-frontend --json watch --until-ready --timeout-seconds 120
 ```
 
 On Windows PowerShell:
 
 ```powershell
-$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9222'
 npm run tauri dev
-auditaur debug --app <app-name> --active --cdp-port 9222 --require-frontend --json watch --until-ready --timeout-seconds 120
+auditaur debug --app <app-name> --active --require-frontend --json watch --until-ready --timeout-seconds 120
 ```
 
-On macOS, Tauri uses WKWebView, which does not expose Chrome DevTools Protocol/WebView2 targets. Use the Auditaur in-app drive bridge for selector actions: the app must explicitly enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session, then `auditaur drive` commands should run without `--cdp-port`.
+Auditaur drive is Tauri-native and does not require Chrome DevTools Protocol/WebView2 targets on any platform. The app must explicitly enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session, then `auditaur drive` commands run without `--cdp-port`.
 
 ## Starting the app
 
@@ -55,7 +54,7 @@ Use wrapper mode only when the agent or a smoke script needs to own a repeatable
 If the agent should start the app, wrap the existing command:
 
 ```bash
-auditaur debug --app <app-name> --active --cdp-port 9222 --json run --timeout-seconds 180 -- npm run tauri dev
+auditaur debug --app <app-name> --active --json run --timeout-seconds 180 -- npm run tauri dev
 ```
 
 `debug run` reports readiness and intentionally leaves the app running after it becomes ready. Clean up the spawned app process when the validation is done.
@@ -77,16 +76,16 @@ If readiness is false, follow the stage messages and `hints` instead of guessing
 
 ## Driving the WebView
 
-When CDP readiness is ok, inspect targets before mutating the app if there is more than one target:
+Inspect the Tauri-native drive bridge before mutating the app:
 
 ```bash
-auditaur drive --app <app-name> --active --cdp-port 9222 --json inspect
+auditaur drive --app <app-name> --active --json inspect
 ```
 
-If CDP target selection is ambiguous, pass the specific target id:
+If target selection is needed, use the bridge target:
 
 ```bash
-auditaur drive --app <app-name> --active --cdp-port 9222 --json click --target <target-id> --selector '<css>' --allow-unproven-target
+auditaur drive --app <app-name> --active --json click --target auditaur-bridge --selector '<css>'
 ```
 
 Use read-only actions first when possible:
@@ -96,20 +95,19 @@ auditaur drive --app <app-name> --active --json exists --selector '<css>'
 auditaur drive --app <app-name> --active --json text --selector '<css>'
 auditaur drive --app <app-name> --active --json snapshot --selector body --output failure.json
 auditaur drive --app <app-name> --active --json screenshot --selector body --output failure.png --snapshot-output failure.json
-auditaur drive --app <app-name> --active --cdp-port 9222 --json screenshot --output failure.png --snapshot-output failure.json --selector body
 ```
 
 Review snapshot artifacts before sharing them; they may contain DOM text, URLs, or other sensitive content.
 
-For text entry, use `fill` when a direct DOM value setter plus `input`/`change` events is enough. Use `type` when a framework-controlled input or textarea needs CDP text insertion after focus:
+For text entry, use `fill` when a direct DOM value setter plus `input`/`change` events is enough. Use `type` when a framework-controlled input or textarea needs focused text insertion:
 
 ```bash
-auditaur drive --app <app-name> --active --cdp-port 9222 --json type --selector 'textarea' --value 'hello' --visible-only --allow-unproven-target
+auditaur drive --app <app-name> --active --json type --selector 'textarea' --value 'hello' --visible-only
 ```
 
-Prefer `--visible-only` (or `--visible`) with selector actions (`wait`, `exists`, `text`, `click`, `fill`, and `type`) when validating modals, focus overlays, or fullscreen shells that leave duplicate hidden DOM behind.
+Prefer `--visible-only` (or `--visible`) with selector actions (`wait`, `exists`, `text`, `click`, `fill`, `type`, `hover`, `select`, `check`, and `uncheck`) when validating modals, focus overlays, or fullscreen shells that leave duplicate hidden DOM behind.
 
-If `drive inspect` on macOS reports CDP unavailable for a WKWebView app, do not keep retrying WebView2 flags. Check `bridge.status`; when it is `active`, use bridge-backed `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `snapshot`, and `screenshot` without `--cdp-port`. Bridge screenshots are PNG summary artifacts rendered from DOM text inside the page, not compositor/browser chrome captures. If the bridge is inactive, use Auditaur telemetry (`timeline`, `ipc`, `traces`, `explain`) for truth and pair it with Accessibility automation only when manual UI input must be simulated.
+If `drive inspect` reports `bridge.status` inactive, do not retry WebView2/CDP flags. Enable `driveBridge`, then use `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `evaluate`, `snapshot`, and `screenshot` without `--cdp-port`. Bridge screenshots first try native window capture (`screenshotBackend=tauri_native_window_xcap`) for real app-window pixels, then fall back to the DOM text summary PNG (`screenshotBackend=bridge_dom_summary_canvas`) with `nativeScreenshotError` when OS permissions or window matching prevent native capture. `evaluate` runs arbitrary JavaScript in the WebView, so keep the bridge restricted to development/test sessions. If the bridge is inactive, use Auditaur telemetry (`timeline`, `ipc`, `traces`, `explain`) for truth and pair it with Accessibility automation only when manual UI input must be simulated.
 
 ## Inspecting telemetry
 
@@ -134,8 +132,8 @@ Prefer `--session <id>`, `--db <path>`, `--active`, `--latest`, `--pid`, or `--i
 - No discovery file: app is still compiling, has not launched, or the Auditaur plugin is not registered.
 - Database not readable/schema invalid: app initialized partially or data directory is wrong.
 - No frontend telemetry: frontend API did not initialize, no frontend action has fired, or export failed in the UI.
-- CDP unavailable on macOS/WKWebView: expected; use the in-app bridge when enabled, otherwise use telemetry plus Accessibility fallback.
-- CDP target ambiguity: stale WebView targets or multiple app instances are sharing a remote debugging port; run `drive inspect`, clean stale processes, use a fresh port, or pass `--target`.
+- Drive bridge inactive: enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView, otherwise use telemetry plus Accessibility fallback.
+- Target ambiguity: use `--target auditaur-bridge`; if multiple sessions match, disambiguate with `--session-id`, `--instance-id`, `--pid`, `--latest`, or `--active`.
 - JSON output contamination: use `debug run --json` from a current Auditaur CLI; child startup output should not appear in JSON lines.
 
 ## Validation loop
@@ -144,7 +142,7 @@ For high-confidence changes:
 
 1. Run the relevant tests/builds.
 2. Launch or attach with `auditaur debug`.
-3. Drive a representative UI path if CDP is needed.
+3. Drive a representative UI path through the Tauri-native bridge when UI coverage is needed.
 4. Re-check `debug status --require-frontend` when frontend telemetry matters.
 5. Inspect `timeline` and `explain`.
 6. Clean up spawned app processes and temporary telemetry directories.

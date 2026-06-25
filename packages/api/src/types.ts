@@ -57,9 +57,24 @@ export interface DriveBridgeRequest {
   schemaVersion: number;
   protocolVersion: number;
   requestId: string;
-  action: 'exists' | 'text' | 'click' | 'fill' | 'type' | 'press' | 'snapshot' | 'screenshot' | string;
+  action:
+    | 'exists'
+    | 'text'
+    | 'click'
+    | 'fill'
+    | 'type'
+    | 'press'
+    | 'hover'
+    | 'select'
+    | 'check'
+    | 'uncheck'
+    | 'evaluate'
+    | 'snapshot'
+    | 'screenshot'
+    | string;
   selector?: string;
   value?: string;
+  values?: string[];
   visibleOnly: boolean;
   windowLabel?: string;
   testId?: string;

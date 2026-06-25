@@ -7,6 +7,9 @@ const BACKEND_EVENT = 'dogfood:backend-event';
 const output = document.querySelector<HTMLPreElement>('#output');
 const driveInput = document.querySelector<HTMLInputElement>('#drive-input');
 const driveTextarea = document.querySelector<HTMLTextAreaElement>('#drive-textarea');
+const driveSelect = document.querySelector<HTMLSelectElement>('#drive-select');
+const driveCheckbox = document.querySelector<HTMLInputElement>('#drive-checkbox');
+const driveHoverTarget = document.querySelector<HTMLButtonElement>('#drive-hover-target');
 let client: AuditaurClient | undefined;
 
 function write(message: string) {
@@ -100,6 +103,15 @@ async function main() {
   });
   driveTextarea?.addEventListener('input', () => {
     write(`Drive textarea input: ${driveTextarea.value}`);
+  });
+  driveSelect?.addEventListener('change', () => {
+    write(`Drive select changed: ${driveSelect.value}`);
+  });
+  driveCheckbox?.addEventListener('change', () => {
+    write(`Drive checkbox changed: ${driveCheckbox.checked}`);
+  });
+  driveHoverTarget?.addEventListener('mouseover', () => {
+    write('Drive hover target hovered.');
   });
 
   window.addEventListener('pagehide', () => {
