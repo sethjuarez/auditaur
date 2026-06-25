@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.2.5...tauri-plugin-auditaur-v0.3.0) - 2026-06-25
+
+### Added
+
+- add native Tauri drive bridge
+
+### Other
+
+- refresh current package and tool docs
+
 ## [0.2.5](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.2.4...tauri-plugin-auditaur-v0.2.5) - 2026-06-18
 
 ### Added
