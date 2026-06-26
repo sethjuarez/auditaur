@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/sethjuarez/auditaur/compare/api-v0.4.0...api-v0.5.0) (2026-06-26)
+
+
+### Features
+
+* add native Tauri drive bridge ([bbff788](https://github.com/sethjuarez/auditaur/commit/bbff78817595b2fb808f51ad8f09566c4e52133d))
+* add native Tauri drive bridge ([b8e1c2f](https://github.com/sethjuarez/auditaur/commit/b8e1c2f1224ff8407e239ba1b9045cd7ddfc1c68))
+
 ## [0.4.0](https://github.com/sethjuarez/auditaur/compare/api-v0.3.0...api-v0.4.0) (2026-06-18)
 
 
