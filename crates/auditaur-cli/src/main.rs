@@ -670,7 +670,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: false,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -691,7 +690,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: false,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -744,8 +742,8 @@ fn inner_main() -> Result<()> {
             Some(DriveCommand::Click {
                 selector,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -758,7 +756,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -768,8 +765,8 @@ fn inner_main() -> Result<()> {
                 selector,
                 value,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -783,7 +780,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -793,8 +789,8 @@ fn inner_main() -> Result<()> {
                 key,
                 selector,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -808,7 +804,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         json: args.json,
                     },
                 )
@@ -816,8 +811,8 @@ fn inner_main() -> Result<()> {
             Some(DriveCommand::Hover {
                 selector,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -830,7 +825,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -840,8 +834,8 @@ fn inner_main() -> Result<()> {
                 selector,
                 value,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -855,7 +849,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -864,8 +857,8 @@ fn inner_main() -> Result<()> {
             Some(DriveCommand::Check {
                 selector,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -878,7 +871,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -887,8 +879,8 @@ fn inner_main() -> Result<()> {
             Some(DriveCommand::Uncheck {
                 selector,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -901,7 +893,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         visible_only: drive_visible_only,
                         json: args.json,
                     },
@@ -910,8 +901,8 @@ fn inner_main() -> Result<()> {
             Some(DriveCommand::Evaluate {
                 expression,
                 target,
-                allow_unproven_target,
-                allow_probable_target,
+                allow_unproven_target: _,
+                allow_probable_target: _,
                 test_id,
                 step_id,
             }) => {
@@ -924,7 +915,6 @@ fn inner_main() -> Result<()> {
                         target_id: target,
                         test_id,
                         step_id,
-                        allow_unproven_target: allow_unproven_target || allow_probable_target,
                         json: args.json,
                     },
                 )
@@ -1101,7 +1091,6 @@ fn try_run_drive_type(raw_args: &[String]) -> Result<bool> {
         target_id: None,
         test_id: None,
         step_id: None,
-        allow_unproven_target: false,
         visible_only: false,
         json: false,
     };
@@ -1142,9 +1131,7 @@ fn try_run_drive_type(raw_args: &[String]) -> Result<bool> {
             "--target" => options.target_id = Some(next_arg(raw_args, &mut index, "--target")?),
             "--test-id" => options.test_id = Some(next_arg(raw_args, &mut index, "--test-id")?),
             "--step-id" => options.step_id = Some(next_arg(raw_args, &mut index, "--step-id")?),
-            "--allow-unproven-target" | "--allow-probable-target" => {
-                options.allow_unproven_target = true
-            }
+            "--allow-unproven-target" | "--allow-probable-target" => {}
             "--visible" | "--visible-only" => options.visible_only = true,
             unknown => {
                 return Err(anyhow::anyhow!(
