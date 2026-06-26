@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/sethjuarez/auditaur/compare/api-v0.5.0...api-v0.5.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* polish native drive bridge release readiness ([10728a4](https://github.com/sethjuarez/auditaur/commit/10728a477dc107dd498f17efe1fdaf483ccb00a0))
+* polish native drive bridge release readiness ([aaeb7a7](https://github.com/sethjuarez/auditaur/commit/aaeb7a7f1343890ed446624362b289b918133d32))
+
 ## [0.5.0](https://github.com/sethjuarez/auditaur/compare/api-v0.4.0...api-v0.5.0) (2026-06-26)
 
 
