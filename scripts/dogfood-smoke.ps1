@@ -88,6 +88,62 @@ function Stop-ProcessTree {
     }
 }
 
+function Write-RecentFileLines {
+    param(
+        [string]$Path,
+        [int]$Tail = 120
+    )
+
+    if (Test-Path $Path) {
+        Write-Host ""
+        Write-Host "Recent output from ${Path}:"
+        Get-Content -Path $Path -Tail $Tail -ErrorAction SilentlyContinue
+    }
+}
+
+function Wait-DebugReady {
+    param(
+        [int]$TimeoutSeconds,
+        [System.Diagnostics.Process]$AppProcess,
+        [string]$StdoutLog,
+        [string]$StderrLog
+    )
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $lastStatus = $null
+    while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if ($AppProcess.HasExited) {
+            Write-RecentFileLines -Path $StdoutLog
+            Write-RecentFileLines -Path $StderrLog
+            throw "dogfood app process exited before Auditaur readiness with code $($AppProcess.ExitCode)"
+        }
+
+        try {
+            $lastStatus = Invoke-JsonLineCommand -CommandArgs @(
+                "debug", "--app", "auditaur-dogfood", "--active", "--require-drive-bridge", "--json", "status"
+            )
+            $stageSummary = @($lastStatus.stages | ForEach-Object { "$($_.name)=$($_.status)" }) -join ", "
+            Write-Host "Readiness ready=$($lastStatus.ready): $stageSummary"
+            if ($lastStatus.ready) {
+                return $lastStatus
+            }
+        }
+        catch {
+            Write-Host "Readiness probe failed: $($_.Exception.Message)"
+        }
+
+        Start-Sleep -Seconds 2
+    }
+
+    if ($lastStatus) {
+        Write-Host "Last readiness status:"
+        $lastStatus | ConvertTo-Json -Depth 8
+    }
+    Write-RecentFileLines -Path $StdoutLog
+    Write-RecentFileLines -Path $StderrLog
+    throw "Timed out after ${TimeoutSeconds}s waiting for Auditaur debug readiness with drive bridge."
+}
+
 New-Item -ItemType Directory -Force $DataDir | Out-Null
 
 Write-Host "Building CLI and dogfood web..."
@@ -108,14 +164,18 @@ $env:AUDITAUR_DATA_DIR = $DataDir
 $app = $null
 try {
     Write-Host "Starting dogfood app with AUDITAUR_DATA_DIR=$DataDir..."
-    $app = Start-Process -FilePath "npm.cmd" -ArgumentList @("run", "tauri", "dev") -WorkingDirectory $dogfood -PassThru
+    $appStdout = Join-Path $DataDir "dogfood-app.stdout.log"
+    $appStderr = Join-Path $DataDir "dogfood-app.stderr.log"
+    $app = Start-Process `
+        -FilePath "npm.cmd" `
+        -ArgumentList @("run", "tauri", "dev") `
+        -WorkingDirectory $dogfood `
+        -RedirectStandardOutput $appStdout `
+        -RedirectStandardError $appStderr `
+        -PassThru
 
-    Write-Host "Waiting for Auditaur readiness..."
-    $watchArgs = @(
-        "debug", "--app", "auditaur-dogfood", "--active", "--json", "watch",
-        "--until-ready", "--timeout-seconds", "$TimeoutSeconds"
-    )
-    Invoke-JsonLineCommand -CommandArgs $watchArgs | Out-Null
+    Write-Host "Waiting for Auditaur readiness and Tauri-native drive bridge..."
+    Wait-DebugReady -TimeoutSeconds $TimeoutSeconds -AppProcess $app -StdoutLog $appStdout -StderrLog $appStderr | Out-Null
     Write-Host "Inspecting Tauri-native drive bridge..."
     $inspect = Wait-DriveBridgeActive -TimeoutSeconds 30
     Assert-Condition ($inspect.bridge.targets.Count -gt 0) "drive bridge did not report a target"

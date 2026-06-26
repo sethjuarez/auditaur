@@ -3,14 +3,10 @@ name: Dogfood Smoke
 on:
   workflow_dispatch:
     inputs:
-      cdp_port:
-        description: WebView2 remote debugging port
-        required: false
-        default: "9666"
       timeout_seconds:
         description: Readiness timeout in seconds
         required: false
-        default: "240"
+        default: "300"
 
 permissions:
   contents: read
@@ -41,4 +37,4 @@ jobs:
       - name: Run dogfood smoke
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\dogfood-smoke.ps1 -CdpPort ${{ inputs.cdp_port }} -TimeoutSeconds ${{ inputs.timeout_seconds }}
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\dogfood-smoke.ps1 -TimeoutSeconds ${{ inputs.timeout_seconds }}
