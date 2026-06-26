@@ -12,6 +12,10 @@ use std::os::windows::process::CommandExt;
 
 use anyhow::{anyhow, Context, Result};
 use auditaur_core::{
+    drive_bridge::{
+        DriveBridgeStatus, DRIVE_BRIDGE_DIR, DRIVE_BRIDGE_STALE_FILE_NANOS,
+        DRIVE_BRIDGE_STATUS_FILE,
+    },
     model::TelemetrySource,
     storage::{
         FrontendErrorQuery, LogQuery, SpanEventQuery, SpanQuery, TauriEventQuery, TauriIpcQuery,
@@ -37,6 +41,7 @@ pub struct DebugSelector {
     pub active: bool,
     pub cdp_port: Option<u16>,
     pub require_frontend: bool,
+    pub require_drive_bridge: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -295,6 +300,7 @@ fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
         .db
         .clone()
         .or_else(|| app.as_ref().map(|app| PathBuf::from(&app.database_path)));
+    let db_for_drive_bridge = db.clone();
     if let Some(app) = &app {
         if app.status == DiscoveryStatus::Active {
             stages.push(stage(
@@ -330,6 +336,13 @@ fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
         }
     };
 
+    push_drive_bridge_stage(
+        db_for_drive_bridge.as_deref(),
+        selector.require_drive_bridge,
+        &mut stages,
+        &mut hints,
+    );
+
     if let Some(cdp_port) = selector.cdp_port {
         let cdp = cdp_status(cdp_port);
         stages.push(stage(
@@ -341,7 +354,11 @@ fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
             },
             cdp.message.clone(),
         ));
-        let ready = readiness(&stages, selector.require_frontend);
+        let ready = readiness(
+            &stages,
+            selector.require_frontend,
+            selector.require_drive_bridge,
+        );
         Ok(DebugStatus {
             schema_version: 1,
             generated_at_unix_nanos: read::current_time_unix_nanos(),
@@ -360,7 +377,11 @@ fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
             DebugStageStatus::Skipped,
             "pass --cdp-port to include WebView/CDP readiness",
         ));
-        let ready = readiness(&stages, selector.require_frontend);
+        let ready = readiness(
+            &stages,
+            selector.require_frontend,
+            selector.require_drive_bridge,
+        );
         Ok(DebugStatus {
             schema_version: 1,
             generated_at_unix_nanos: read::current_time_unix_nanos(),
@@ -374,6 +395,108 @@ fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
             hints,
         })
     }
+}
+
+fn push_drive_bridge_stage(
+    db: Option<&Path>,
+    required: bool,
+    stages: &mut Vec<DebugStage>,
+    hints: &mut Vec<String>,
+) {
+    let Some(db) = db else {
+        stages.push(stage(
+            "drive_bridge",
+            if required {
+                DebugStageStatus::Waiting
+            } else {
+                DebugStageStatus::Skipped
+            },
+            "waiting for a telemetry database path before checking drive bridge readiness",
+        ));
+        return;
+    };
+    let Some(data_dir) = db.parent() else {
+        stages.push(stage(
+            "drive_bridge",
+            DebugStageStatus::Error,
+            format!(
+                "telemetry database path has no parent directory: {}",
+                db.display()
+            ),
+        ));
+        return;
+    };
+
+    let status_path = data_dir
+        .join(DRIVE_BRIDGE_DIR)
+        .join(DRIVE_BRIDGE_STATUS_FILE);
+    if !status_path.is_file() {
+        stages.push(stage(
+            "drive_bridge",
+            if required {
+                DebugStageStatus::Waiting
+            } else {
+                DebugStageStatus::Skipped
+            },
+            "drive bridge status file has not been written; enable initAuditaur({ driveBridge: true }) to drive the WebView",
+        ));
+        if required {
+            hints.push("Enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView for this Auditaur session.".to_string());
+        }
+        return;
+    }
+
+    let status = match std::fs::read_to_string(&status_path)
+        .with_context(|| {
+            format!(
+                "failed to read drive bridge status {}",
+                status_path.display()
+            )
+        })
+        .and_then(|contents| {
+            serde_json::from_str::<DriveBridgeStatus>(&contents).with_context(|| {
+                format!(
+                    "failed to parse drive bridge status {}",
+                    status_path.display()
+                )
+            })
+        }) {
+        Ok(status) => status,
+        Err(error) => {
+            stages.push(stage(
+                "drive_bridge",
+                DebugStageStatus::Error,
+                format!("drive bridge status is unreadable: {error}"),
+            ));
+            return;
+        }
+    };
+
+    let heartbeat_age_nanos = read::current_time_unix_nanos() - status.last_heartbeat_unix_nanos;
+    let heartbeat_fresh = heartbeat_age_nanos <= DRIVE_BRIDGE_STALE_FILE_NANOS;
+    let actionable = status.active && heartbeat_fresh;
+    let stage_status = if actionable {
+        DebugStageStatus::Ok
+    } else if required {
+        DebugStageStatus::Waiting
+    } else {
+        DebugStageStatus::Skipped
+    };
+    let message = if !status.active {
+        "drive bridge is registered but inactive".to_string()
+    } else if !heartbeat_fresh {
+        "drive bridge heartbeat is stale".to_string()
+    } else {
+        format!(
+            "drive bridge is active{}",
+            status
+                .window_label
+                .as_ref()
+                .map(|label| format!(" for window `{label}`"))
+                .unwrap_or_default()
+        )
+    };
+    stages.push(stage("drive_bridge", stage_status, message));
 }
 
 fn load_database_status(
@@ -694,7 +817,7 @@ fn get_cdp_json(port: u16, path: &str) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&body)?)
 }
 
-fn readiness(stages: &[DebugStage], require_frontend: bool) -> bool {
+fn readiness(stages: &[DebugStage], require_frontend: bool, require_drive_bridge: bool) -> bool {
     let required = [
         "app_discovery",
         "heartbeat",
@@ -716,6 +839,11 @@ fn readiness(stages: &[DebugStage], require_frontend: bool) -> bool {
             .iter()
             .find(|stage| stage.name == "frontend_telemetry")
             .is_some_and(|stage| stage.status == DebugStageStatus::Ok))
+        && (!require_drive_bridge
+            || stages
+                .iter()
+                .find(|stage| stage.name == "drive_bridge")
+                .is_some_and(|stage| stage.status == DebugStageStatus::Ok))
 }
 
 fn stage(
