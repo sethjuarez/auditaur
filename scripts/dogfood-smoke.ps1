@@ -113,9 +113,18 @@ function Wait-DebugReady {
     $lastStatus = $null
     while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
         if ($AppProcess.HasExited) {
+            Start-Sleep -Milliseconds 500
+            $exitCode = "unknown"
+            try {
+                $AppProcess.Refresh()
+                $exitCode = "$($AppProcess.ExitCode)"
+            }
+            catch {
+                $exitCode = "unavailable"
+            }
             Write-RecentFileLines -Path $StdoutLog
             Write-RecentFileLines -Path $StderrLog
-            throw "dogfood app process exited before Auditaur readiness with code $($AppProcess.ExitCode)"
+            throw "dogfood app process exited before Auditaur readiness with code $exitCode"
         }
 
         try {
@@ -167,8 +176,8 @@ try {
     $appStdout = Join-Path $DataDir "dogfood-app.stdout.log"
     $appStderr = Join-Path $DataDir "dogfood-app.stderr.log"
     $app = Start-Process `
-        -FilePath "npm.cmd" `
-        -ArgumentList @("run", "tauri", "dev") `
+        -FilePath "cmd.exe" `
+        -ArgumentList @("/d", "/s", "/c", "npm run tauri dev") `
         -WorkingDirectory $dogfood `
         -RedirectStandardOutput $appStdout `
         -RedirectStandardError $appStderr `
