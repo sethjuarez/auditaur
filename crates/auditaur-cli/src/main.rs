@@ -12,7 +12,7 @@ use std::path::PathBuf;
     name = "auditaur",
     version,
     about = "Runtime observability for Tauri apps and AI agents.",
-    after_help = "Bootstrap commands:\n  init skill [--path <repo-root>] [--force] [--json]  Install the Auditaur debug agent skill"
+    after_help = "Bootstrap commands:\n  init skill [--path <repo-root>] [--agents-path] [--force] [--json]  Install the Auditaur debug agent skill"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -305,6 +305,8 @@ struct DebugArgs {
     #[arg(long, global = true)]
     require_frontend: bool,
     #[arg(long, global = true)]
+    require_drive_bridge: bool,
+    #[arg(long, global = true)]
     json: bool,
 }
 
@@ -320,6 +322,7 @@ impl DebugArgs {
             active: self.active,
             cdp_port: self.cdp_port,
             require_frontend: self.require_frontend,
+            require_drive_bridge: self.require_drive_bridge,
         }
     }
 }

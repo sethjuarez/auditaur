@@ -2235,13 +2235,13 @@ fn future_actions() -> Vec<DriverActionSpec> {
             name: "wait",
             selector_required: true,
             mutates_app: false,
-            description: "wait for a selector to appear through CDP Runtime.evaluate",
+            description: "wait for a selector to appear through the Tauri-native in-app driver",
         },
         DriverActionSpec {
             name: "screenshot",
             selector_required: false,
             mutates_app: false,
-            description: "capture a PNG screenshot through CDP, or a DOM text summary PNG through the Auditaur in-app drive bridge",
+            description: "capture a PNG screenshot through native window capture, falling back to a DOM text summary PNG",
         },
         DriverActionSpec {
             name: "hover",
@@ -2289,7 +2289,7 @@ fn future_actions() -> Vec<DriverActionSpec> {
             name: "type",
             selector_required: true,
             mutates_app: true,
-            description: "insert text through CDP input events after focusing an editable element",
+            description: "insert text through in-WebView input events after focusing an editable element",
         },
         DriverActionSpec {
             name: "press",

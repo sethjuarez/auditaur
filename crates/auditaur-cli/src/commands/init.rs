@@ -9,7 +9,8 @@ use serde::Serialize;
 use crate::commands::read;
 
 pub(crate) const AUDITAUR_DEBUG_SKILL: &str = include_str!("../../assets/auditaur-debug-skill.md");
-const SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-debug", "SKILL.md"];
+const GITHUB_SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-debug", "SKILL.md"];
+const AGENTS_SKILL_RELATIVE_PATH: [&str; 4] = [".agents", "skills", "auditaur-debug", "SKILL.md"];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,11 +20,16 @@ struct InitSkillResult {
     overwritten: bool,
 }
 
-pub fn skill(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
+pub fn skill(path: Option<&Path>, force: bool, agents_path: bool, json: bool) -> Result<()> {
     let root = path
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir().context("failed to resolve current directory")?);
-    let output = SKILL_RELATIVE_PATH
+    let relative_path = if agents_path {
+        AGENTS_SKILL_RELATIVE_PATH
+    } else {
+        GITHUB_SKILL_RELATIVE_PATH
+    };
+    let output = relative_path
         .iter()
         .fold(root, |path, segment| path.join(segment));
     let existed = output.exists();
@@ -72,6 +78,7 @@ pub fn run(args: &[String]) -> Result<()> {
 
     let mut path = None;
     let mut force = false;
+    let mut agents_path = false;
     let mut json = false;
     let mut index = 1;
     while index < args.len() {
@@ -84,6 +91,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 path = Some(PathBuf::from(value));
             }
             "--force" => force = true,
+            "--agents-path" => agents_path = true,
             "--json" => json = true,
             "--help" | "-h" => {
                 print_skill_help();
@@ -93,7 +101,7 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         index += 1;
     }
-    skill(path.as_deref(), force, json)
+    skill(path.as_deref(), force, agents_path, json)
 }
 
 fn print_help() {
@@ -104,5 +112,5 @@ fn print_help() {
 }
 
 fn print_skill_help() {
-    println!("Usage: auditaur init skill [--path <repo-root>] [--force] [--json]");
+    println!("Usage: auditaur init skill [--path <repo-root>] [--agents-path] [--force] [--json]");
 }

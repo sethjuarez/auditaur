@@ -22,7 +22,7 @@ For a running app, watch until core telemetry is ready:
 auditaur debug --app <app-name> --active --json watch --until-ready --timeout-seconds 120
 ```
 
-If the task requires frontend telemetry, add `--require-frontend`. If the task requires WebView selector actions, use the Auditaur in-app drive bridge: enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session.
+If the task requires frontend telemetry, add `--require-frontend`. If the task requires WebView selector actions, use the Auditaur in-app drive bridge: enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session and add `--require-drive-bridge` to readiness watches.
 
 ```bash
 npm run tauri dev
@@ -70,6 +70,7 @@ Inspect the `stages` array:
 - `window`: Tauri window telemetry exists.
 - `backend_telemetry`: backend/plugin logs, spans, or window rows exist.
 - `frontend_telemetry`: frontend logs/errors/IPC/events exist; required only with `--require-frontend`.
+- `drive_bridge`: Tauri-native in-app drive bridge status exists and has a fresh heartbeat; required only with `--require-drive-bridge`.
 - `cdp_endpoint`: Chrome DevTools Protocol is reachable; checked only with `--cdp-port`.
 
 If readiness is false, follow the stage messages and `hints` instead of guessing from terminal output.

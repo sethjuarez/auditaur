@@ -252,6 +252,32 @@ fn debug_status_reports_readiness_for_database_and_discovered_app() {
         .unwrap()
         .iter()
         .any(|stage| stage["name"] == "frontend_telemetry" && stage["status"] == "ok"));
+    assert!(discovered["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "drive_bridge" && stage["status"] == "skipped"));
+
+    let data_dir = TempDir::new().unwrap();
+    let db_path = write_drive_fixture(data_dir.path(), "debug-drive-bridge");
+    activate_drive_bridge(&db_path, "main");
+    let drive_ready = run_json_with_env(
+        [
+            "debug",
+            "--app",
+            "fixture",
+            "--require-drive-bridge",
+            "--json",
+            "status",
+        ],
+        data_dir.path().to_str().unwrap(),
+    );
+    assert_eq!(drive_ready["ready"], true);
+    assert!(drive_ready["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "drive_bridge" && stage["status"] == "ok"));
 }
 
 #[test]
@@ -288,6 +314,26 @@ fn debug_status_reports_waiting_when_required_readiness_is_missing() {
         .unwrap()
         .iter()
         .any(|stage| stage["name"] == "frontend_telemetry" && stage["status"] == "waiting"));
+
+    let data_dir = TempDir::new().unwrap();
+    write_drive_fixture(data_dir.path(), "debug-no-drive-bridge");
+    let drive_bridge_required = run_json_with_env(
+        [
+            "debug",
+            "--app",
+            "fixture",
+            "--require-drive-bridge",
+            "--json",
+            "status",
+        ],
+        data_dir.path().to_str().unwrap(),
+    );
+    assert_eq!(drive_bridge_required["ready"], false);
+    assert!(drive_bridge_required["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["name"] == "drive_bridge" && stage["status"] == "waiting"));
 }
 
 #[test]
@@ -333,6 +379,29 @@ fn init_skill_installs_auditaur_debug_skill() {
     ]);
     assert_eq!(overwritten["overwritten"], true);
     assert!(fs::read_to_string(skill_path)
+        .unwrap()
+        .contains("name: auditaur-debug"));
+
+    let agents_skill_path = repo
+        .path()
+        .join(".agents")
+        .join("skills")
+        .join("auditaur-debug")
+        .join("SKILL.md");
+    let agents_installed = run_json([
+        "init",
+        "skill",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--agents-path",
+        "--json",
+    ]);
+    assert_eq!(agents_installed["ok"], true);
+    assert_eq!(
+        agents_installed["path"],
+        agents_skill_path.to_string_lossy().to_string()
+    );
+    assert!(fs::read_to_string(agents_skill_path)
         .unwrap()
         .contains("name: auditaur-debug"));
 }
@@ -666,6 +735,11 @@ fn drive_reports_tauri_native_attach_info_and_ignores_cdp_port() {
         .unwrap()
         .iter()
         .any(|action| action["name"] == "click"));
+    assert!(attach["futureActions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|action| !action["description"].as_str().unwrap().contains("CDP")));
     assert!(attach["requiredActionTelemetry"]
         .as_array()
         .unwrap()
