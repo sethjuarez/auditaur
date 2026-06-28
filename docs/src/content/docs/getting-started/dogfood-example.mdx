@@ -34,6 +34,16 @@ cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json screen
 
 Selector screenshots should report `screenshotBackend=tauri_native_webview_snapshot`, `screenshotScope=selector`, and `selectorRect` when native WebView capture succeeds.
 
+## Run a confidence drill
+
+Use `drill run` when you want Auditaur to own the dogfood app lifecycle and return a stable pass/fail result:
+
+```powershell
+cargo run -p auditaur-cli -- drill run --app auditaur-dogfood --require-drive-bridge --selector "#output" --expect-text "Auditaur initialized" -- npm --prefix examples\dogfood run tauri dev
+```
+
+The drill waits for a fresh dogfood Auditaur session, checks the Tauri-native drive bridge, verifies the selector text, writes `auditaur-drill-report.json`, and cleans up the spawned app process tree. See [Drill Confidence Runs](/getting-started/drill-confidence-runs/) for report, hook, and exit-code details.
+
 Manual smoke path:
 
 1. Emit console log.
