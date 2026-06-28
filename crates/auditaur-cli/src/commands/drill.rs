@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(not(windows))]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -1080,6 +1082,8 @@ fn spawn_command(command: &[String]) -> Result<Child> {
         .stderr(Stdio::null());
     #[cfg(windows)]
     child_command.creation_flags(0x0800_0000);
+    #[cfg(not(windows))]
+    child_command.process_group(0);
     child_command
         .spawn()
         .with_context(|| format!("failed to start `{}`", command.join(" ")))
@@ -1173,21 +1177,17 @@ fn cleanup_process_tree(pid: u32) -> Result<()> {
 
 #[cfg(not(windows))]
 fn cleanup_process_tree(pid: u32) -> Result<()> {
-    let _ = Command::new("pkill")
-        .args(["-TERM", "-P", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let process_group = format!("-{pid}");
     let status = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
+        .args(["-TERM", &process_group])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .status()
         .context("failed to invoke kill")?;
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow!("kill failed for pid {pid}"))
+        Err(anyhow!("kill failed for process group {pid}"))
     }
 }
 
