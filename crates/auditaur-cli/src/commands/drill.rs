@@ -1,8 +1,9 @@
 use std::{
     collections::HashSet,
     fs,
-    path::PathBuf,
-    process::{Child, Command, Stdio},
+    io::Read,
+    path::{Path, PathBuf},
+    process::{Child, Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -15,13 +16,14 @@ use auditaur_core::{
     redaction::redact_json,
     storage::{FrontendErrorQuery, TauriIpcQuery},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::{
     commands::{debug, drive, polish, read},
     discovery::{self, DiscoveredApp, DiscoveryStatus},
+    output::bounded_text,
 };
 
 const EXIT_PASSED: i32 = 0;
@@ -30,6 +32,9 @@ const EXIT_RUNNER_ERROR: i32 = 2;
 const EXIT_APP_EXITED: i32 = 3;
 const EXIT_TIMEOUT: i32 = 4;
 const EXIT_CLEANUP_FAILED: i32 = 5;
+const DEFAULT_HOOK_TIMEOUT_MS: u64 = 30_000;
+const HOOK_OUTPUT_MAX_CHARS: usize = 65_536;
+const HOOK_OUTPUT_MAX_BYTES: usize = HOOK_OUTPUT_MAX_CHARS * 4;
 
 #[derive(Debug)]
 pub struct DrillRunOptions {
@@ -41,6 +46,7 @@ pub struct DrillRunOptions {
     pub report: PathBuf,
     pub selector: Option<String>,
     pub expect_text: Option<String>,
+    pub script: Option<PathBuf>,
     pub json: bool,
     pub command: Vec<String>,
 }
@@ -54,6 +60,7 @@ struct DrillReport {
     exit_code: i32,
     app: DrillApp,
     command: DrillCommandReport,
+    script: Option<DrillScriptReport>,
     options: DrillOptionsReport,
     phases: Vec<DrillPhase>,
     summary: DrillSummary,
@@ -101,6 +108,71 @@ struct DrillOptionsReport {
     timeout_seconds: u64,
     selector: Option<String>,
     expect_text: Option<String>,
+    script: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrillScript {
+    #[serde(default)]
+    setup: Vec<DrillHook>,
+    #[serde(default)]
+    teardown: Vec<DrillHook>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrillHook {
+    name: String,
+    run: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default = "default_hook_timeout_ms")]
+    timeout_ms: u64,
+    #[serde(default = "default_hook_cwd")]
+    cwd: PathBuf,
+    #[serde(default)]
+    always: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DrillScriptReport {
+    path: String,
+    workspace_root: String,
+    setup: Vec<DrillHookReport>,
+    teardown: Vec<DrillHookReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DrillHookReport {
+    name: String,
+    lifecycle: DrillHookLifecycle,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    timeout_ms: u64,
+    always: bool,
+    exit_code: Option<i32>,
+    duration_ms: u128,
+    timed_out: bool,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DrillHookLifecycle {
+    Setup,
+    Teardown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookExitKind {
+    Passed,
+    Failed,
+    TimedOut,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,6 +225,37 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
     let preexisting = matching_sessions(&options.app)?;
     let mut report = DrillReport::new(&options, &preexisting);
     let mut exit_code = EXIT_PASSED;
+    let script = match load_script(&options) {
+        Ok(script) => script,
+        Err(error) => {
+            exit_code = EXIT_RUNNER_ERROR;
+            report.push_phase(DrillPhase::failed(
+                "script",
+                "scriptConfig",
+                Instant::now(),
+                format!("failed to load drill script: {error}"),
+                None,
+            ));
+            return finish(report, &options, exit_code);
+        }
+    };
+    if let Some(script) = &script {
+        report.set_script(script);
+    }
+
+    if let Some(script) = &script {
+        if run_hooks(
+            script,
+            DrillHookLifecycle::Setup,
+            &mut report,
+            &mut exit_code,
+        )
+        .is_err()
+        {
+            run_teardown_hooks(&script, &mut report, &mut exit_code);
+            return finish(report, &options, exit_code);
+        }
+    }
 
     let spawn_start = Instant::now();
     let mut child = match spawn_command(&options.command) {
@@ -177,6 +280,9 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
                 format!("failed to start wrapped command: {error}"),
                 None,
             ));
+            if let Some(script) = &script {
+                run_teardown_hooks(script, &mut report, &mut exit_code);
+            }
             return finish(report, &options, exit_code);
         }
     };
@@ -276,7 +382,372 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
         }
     }
 
+    if let Some(script) = &script {
+        run_teardown_hooks(script, &mut report, &mut exit_code);
+    }
+
     finish(report, &options, exit_code)
+}
+
+fn load_script(options: &DrillRunOptions) -> Result<Option<ResolvedDrillScript>> {
+    let Some(path) = &options.script else {
+        return Ok(None);
+    };
+    let workspace_root = std::env::current_dir()
+        .context("failed to resolve current workspace")?
+        .canonicalize()
+        .context("failed to canonicalize current workspace")?;
+    let script_path = resolve_existing_path(&workspace_root, path)
+        .with_context(|| format!("invalid script path `{}`", path.display()))?;
+    let contents = fs::read_to_string(&script_path)
+        .with_context(|| format!("failed to read `{}`", script_path.display()))?;
+    let script: DrillScript = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse `{}`", script_path.display()))?;
+    let setup = resolve_hooks(&workspace_root, script.setup, DrillHookLifecycle::Setup)?;
+    let teardown = resolve_hooks(
+        &workspace_root,
+        script.teardown,
+        DrillHookLifecycle::Teardown,
+    )?;
+    Ok(Some(ResolvedDrillScript {
+        path: script_path,
+        workspace_root,
+        setup,
+        teardown,
+    }))
+}
+
+#[derive(Debug)]
+struct ResolvedDrillScript {
+    path: PathBuf,
+    workspace_root: PathBuf,
+    setup: Vec<ResolvedDrillHook>,
+    teardown: Vec<ResolvedDrillHook>,
+}
+
+#[derive(Debug)]
+struct ResolvedDrillHook {
+    name: String,
+    run: String,
+    args: Vec<String>,
+    timeout_ms: u64,
+    cwd: PathBuf,
+    always: bool,
+}
+
+fn resolve_hooks(
+    workspace_root: &Path,
+    hooks: Vec<DrillHook>,
+    lifecycle: DrillHookLifecycle,
+) -> Result<Vec<ResolvedDrillHook>> {
+    hooks
+        .into_iter()
+        .map(|hook| resolve_hook(workspace_root, hook, lifecycle))
+        .collect()
+}
+
+fn resolve_hook(
+    workspace_root: &Path,
+    hook: DrillHook,
+    lifecycle: DrillHookLifecycle,
+) -> Result<ResolvedDrillHook> {
+    if hook.timeout_ms == 0 {
+        return Err(anyhow!(
+            "{} hook `{}` timeoutMs must be greater than 0",
+            lifecycle_name(lifecycle),
+            hook.name
+        ));
+    }
+    if hook.run.trim().is_empty() {
+        return Err(anyhow!(
+            "{} hook `{}` run must not be empty",
+            lifecycle_name(lifecycle),
+            hook.name
+        ));
+    }
+    let cwd = resolve_existing_path(workspace_root, &hook.cwd).with_context(|| {
+        format!(
+            "{} hook `{}` has invalid cwd `{}`",
+            lifecycle_name(lifecycle),
+            hook.name,
+            hook.cwd.display()
+        )
+    })?;
+    if !cwd.is_dir() {
+        return Err(anyhow!(
+            "{} hook `{}` cwd `{}` is not a directory",
+            lifecycle_name(lifecycle),
+            hook.name,
+            cwd.display()
+        ));
+    }
+    Ok(ResolvedDrillHook {
+        name: hook.name,
+        run: hook.run,
+        args: hook.args,
+        timeout_ms: hook.timeout_ms,
+        cwd,
+        always: hook.always,
+    })
+}
+
+fn resolve_existing_path(workspace_root: &Path, path: &Path) -> Result<PathBuf> {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
+    };
+    let resolved = joined.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize `{}` relative to `{}`",
+            path.display(),
+            workspace_root.display()
+        )
+    })?;
+    if !resolved.starts_with(workspace_root) {
+        return Err(anyhow!(
+            "`{}` resolves outside workspace `{}`",
+            path.display(),
+            workspace_root.display()
+        ));
+    }
+    Ok(resolved)
+}
+
+fn run_hooks(
+    script: &ResolvedDrillScript,
+    lifecycle: DrillHookLifecycle,
+    report: &mut DrillReport,
+    exit_code: &mut i32,
+) -> Result<()> {
+    let hooks = match lifecycle {
+        DrillHookLifecycle::Setup => &script.setup,
+        DrillHookLifecycle::Teardown => &script.teardown,
+    };
+    for (index, hook) in hooks.iter().enumerate() {
+        let hook_report = execute_hook(hook, lifecycle);
+        let id = format!("script-{}-{}", lifecycle_name(lifecycle), index + 1);
+        let result = serde_json::to_value(&hook_report)?;
+        match hook_exit_kind(&hook_report) {
+            HookExitKind::Passed => {
+                report.push_hook(script, hook_report.clone());
+                report.push_phase(DrillPhase::passed(
+                    id,
+                    "commandHook",
+                    Instant::now(),
+                    format!("{} hook `{}` passed", lifecycle_name(lifecycle), hook.name),
+                    Some(result),
+                ));
+            }
+            HookExitKind::TimedOut => {
+                apply_hook_exit(exit_code, lifecycle, HookExitKind::TimedOut);
+                report.push_hook(script, hook_report.clone());
+                report.push_phase(DrillPhase::failed(
+                    id,
+                    "commandHook",
+                    Instant::now(),
+                    format!(
+                        "{} hook `{}` timed out after {}ms",
+                        lifecycle_name(lifecycle),
+                        hook.name,
+                        hook.timeout_ms
+                    ),
+                    Some(result),
+                ));
+                return Err(anyhow!(
+                    "{} hook `{}` timed out",
+                    lifecycle_name(lifecycle),
+                    hook.name
+                ));
+            }
+            HookExitKind::Failed => {
+                apply_hook_exit(exit_code, lifecycle, HookExitKind::Failed);
+                report.push_hook(script, hook_report.clone());
+                report.push_phase(DrillPhase::failed(
+                    id,
+                    "commandHook",
+                    Instant::now(),
+                    format!("{} hook `{}` failed", lifecycle_name(lifecycle), hook.name),
+                    Some(result),
+                ));
+                return Err(anyhow!(
+                    "{} hook `{}` failed",
+                    lifecycle_name(lifecycle),
+                    hook.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_teardown_hooks(script: &ResolvedDrillScript, report: &mut DrillReport, exit_code: &mut i32) {
+    let _ = run_hooks(script, DrillHookLifecycle::Teardown, report, exit_code);
+}
+
+fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> DrillHookReport {
+    let started = Instant::now();
+    let timeout = Duration::from_millis(hook.timeout_ms);
+    let mut command = Command::new(&hook.run);
+    command
+        .args(&hook.args)
+        .current_dir(&hook.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+
+    match command.spawn() {
+        Ok(child) => wait_for_hook_output(hook, lifecycle, started, timeout, child),
+        Err(error) => hook_report_from_error(hook, lifecycle, started, error),
+    }
+}
+
+fn wait_for_hook_output(
+    hook: &ResolvedDrillHook,
+    lifecycle: DrillHookLifecycle,
+    started: Instant,
+    timeout: Duration,
+    mut child: Child,
+) -> DrillHookReport {
+    let stdout = child.stdout.take().map(read_stream_thread);
+    let stderr = child.stderr.take().map(read_stream_thread);
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break exit_code(status),
+            Ok(None) if started.elapsed() >= timeout => {
+                timed_out = true;
+                let _ = cleanup_process_tree(child.id());
+                break child.wait().ok().and_then(exit_code);
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => return hook_report_from_error(hook, lifecycle, started, error),
+        }
+    };
+
+    hook_report(
+        hook,
+        lifecycle,
+        started,
+        status,
+        timed_out,
+        join_stream_thread(stdout),
+        join_stream_thread(stderr),
+    )
+}
+
+fn read_stream_thread<T>(mut stream: T) -> thread::JoinHandle<String>
+where
+    T: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    if output.len() < HOOK_OUTPUT_MAX_BYTES {
+                        let remaining = HOOK_OUTPUT_MAX_BYTES - output.len();
+                        output.extend_from_slice(&buffer[..count.min(remaining)]);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        bounded_text(&String::from_utf8_lossy(&output), HOOK_OUTPUT_MAX_CHARS)
+    })
+}
+
+fn join_stream_thread(handle: Option<thread::JoinHandle<String>>) -> String {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
+fn hook_report_from_error(
+    hook: &ResolvedDrillHook,
+    lifecycle: DrillHookLifecycle,
+    started: Instant,
+    error: std::io::Error,
+) -> DrillHookReport {
+    hook_report(
+        hook,
+        lifecycle,
+        started,
+        None,
+        false,
+        "",
+        format!("failed to run hook command: {error}"),
+    )
+}
+
+fn hook_report(
+    hook: &ResolvedDrillHook,
+    lifecycle: DrillHookLifecycle,
+    started: Instant,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    stdout: impl AsRef<str>,
+    stderr: impl AsRef<str>,
+) -> DrillHookReport {
+    DrillHookReport {
+        name: hook.name.clone(),
+        lifecycle,
+        command: hook.run.clone(),
+        args: hook.args.clone(),
+        cwd: hook.cwd.to_string_lossy().to_string(),
+        timeout_ms: hook.timeout_ms,
+        always: hook.always,
+        exit_code,
+        duration_ms: started.elapsed().as_millis(),
+        timed_out,
+        stdout: bounded_text(stdout.as_ref(), HOOK_OUTPUT_MAX_CHARS),
+        stderr: bounded_text(stderr.as_ref(), HOOK_OUTPUT_MAX_CHARS),
+    }
+}
+
+fn hook_exit_kind(report: &DrillHookReport) -> HookExitKind {
+    if report.timed_out {
+        HookExitKind::TimedOut
+    } else if report.exit_code == Some(0) {
+        HookExitKind::Passed
+    } else {
+        HookExitKind::Failed
+    }
+}
+
+fn apply_hook_exit(exit_code: &mut i32, lifecycle: DrillHookLifecycle, hook_exit: HookExitKind) {
+    if *exit_code != EXIT_PASSED {
+        return;
+    }
+    *exit_code = match (lifecycle, hook_exit) {
+        (_, HookExitKind::TimedOut) => EXIT_TIMEOUT,
+        (DrillHookLifecycle::Setup, HookExitKind::Failed) => EXIT_CHECK_FAILED,
+        (DrillHookLifecycle::Teardown, HookExitKind::Failed) => EXIT_CLEANUP_FAILED,
+        (_, HookExitKind::Passed) => EXIT_PASSED,
+    };
+}
+
+fn exit_code(status: ExitStatus) -> Option<i32> {
+    status.code()
+}
+
+fn default_hook_timeout_ms() -> u64 {
+    DEFAULT_HOOK_TIMEOUT_MS
+}
+
+fn default_hook_cwd() -> PathBuf {
+    PathBuf::from(".")
+}
+
+fn lifecycle_name(lifecycle: DrillHookLifecycle) -> &'static str {
+    match lifecycle {
+        DrillHookLifecycle::Setup => "setup",
+        DrillHookLifecycle::Teardown => "teardown",
+    }
 }
 
 fn run_post_readiness_phases(
@@ -812,12 +1283,22 @@ impl DrillReport {
                 running_at_readiness: None,
                 timed_out: false,
             },
+            script: options.script.as_ref().map(|path| DrillScriptReport {
+                path: path.to_string_lossy().to_string(),
+                workspace_root: String::new(),
+                setup: Vec::new(),
+                teardown: Vec::new(),
+            }),
             options: DrillOptionsReport {
                 require_frontend: options.require_frontend,
                 require_drive_bridge: options.require_drive_bridge,
                 timeout_seconds: options.timeout_seconds,
                 selector: options.selector.clone(),
                 expect_text: options.expect_text.clone(),
+                script: options
+                    .script
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string()),
             },
             phases: Vec::new(),
             summary: DrillSummary::default(),
@@ -841,6 +1322,30 @@ impl DrillReport {
 
     fn push_phase(&mut self, phase: DrillPhase) {
         self.phases.push(phase);
+    }
+
+    fn set_script(&mut self, script: &ResolvedDrillScript) {
+        self.script = Some(DrillScriptReport {
+            path: script.path.to_string_lossy().to_string(),
+            workspace_root: script.workspace_root.to_string_lossy().to_string(),
+            setup: Vec::new(),
+            teardown: Vec::new(),
+        });
+    }
+
+    fn push_hook(&mut self, script: &ResolvedDrillScript, hook: DrillHookReport) {
+        let script_report = self.script.get_or_insert_with(|| DrillScriptReport {
+            path: script.path.to_string_lossy().to_string(),
+            workspace_root: script.workspace_root.to_string_lossy().to_string(),
+            setup: Vec::new(),
+            teardown: Vec::new(),
+        });
+        script_report.path = script.path.to_string_lossy().to_string();
+        script_report.workspace_root = script.workspace_root.to_string_lossy().to_string();
+        match hook.lifecycle {
+            DrillHookLifecycle::Setup => script_report.setup.push(hook),
+            DrillHookLifecycle::Teardown => script_report.teardown.push(hook),
+        }
     }
 }
 
@@ -894,6 +1399,7 @@ impl DrillPhase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn exit_codes_map_to_status() {
@@ -927,6 +1433,7 @@ mod tests {
             report: PathBuf::from("report.json"),
             selector: None,
             expect_text: None,
+            script: None,
             json: false,
             command: vec!["fixture".to_string()],
         };
@@ -950,6 +1457,164 @@ mod tests {
     }
 
     #[test]
+    fn parses_command_hook_script_schema() {
+        let script: DrillScript = serde_json::from_value(json!({
+            "setup": [{
+                "name": "Seed data",
+                "run": "npm",
+                "args": ["run", "seed"],
+                "timeoutMs": 30000,
+                "cwd": "."
+            }],
+            "teardown": [{
+                "name": "Clean data",
+                "run": "npm",
+                "args": ["run", "cleanup"],
+                "always": true
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(script.setup.len(), 1);
+        assert_eq!(script.setup[0].name, "Seed data");
+        assert_eq!(script.setup[0].args, vec!["run", "seed"]);
+        assert_eq!(script.setup[0].timeout_ms, 30_000);
+        assert_eq!(script.setup[0].cwd, PathBuf::from("."));
+        assert_eq!(script.teardown[0].timeout_ms, DEFAULT_HOOK_TIMEOUT_MS);
+        assert!(script.teardown[0].always);
+    }
+
+    #[test]
+    fn rejects_unknown_script_fields() {
+        let error = serde_json::from_value::<DrillScript>(json!({
+            "setup": [],
+            "future": []
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn rejects_hook_cwd_outside_workspace() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let workspace_root = workspace.path().canonicalize().unwrap();
+        let hook = DrillHook {
+            name: "Bad cwd".to_string(),
+            run: "npm".to_string(),
+            args: Vec::new(),
+            timeout_ms: 1_000,
+            cwd: outside.path().to_path_buf(),
+            always: false,
+        };
+
+        let error = resolve_hook(&workspace_root, hook, DrillHookLifecycle::Setup).unwrap_err();
+
+        assert!(error.to_string().contains("invalid cwd"));
+    }
+
+    #[test]
+    fn truncates_hook_output_on_character_boundaries() {
+        let workspace = TempDir::new().unwrap();
+        let hook = resolved_hook("Verbose", workspace.path());
+
+        let report = hook_report(
+            &hook,
+            DrillHookLifecycle::Setup,
+            Instant::now(),
+            Some(0),
+            false,
+            "a🦀b".repeat(HOOK_OUTPUT_MAX_CHARS),
+            "",
+        );
+
+        assert_eq!(report.stdout.chars().count(), HOOK_OUTPUT_MAX_CHARS);
+        assert!(report.stdout.ends_with('🦀') || report.stdout.ends_with('a'));
+    }
+
+    #[test]
+    fn hook_failures_map_to_stable_exit_codes() {
+        let mut exit_code = EXIT_PASSED;
+        apply_hook_exit(
+            &mut exit_code,
+            DrillHookLifecycle::Setup,
+            HookExitKind::Failed,
+        );
+        assert_eq!(exit_code, EXIT_CHECK_FAILED);
+
+        let mut exit_code = EXIT_PASSED;
+        apply_hook_exit(
+            &mut exit_code,
+            DrillHookLifecycle::Teardown,
+            HookExitKind::Failed,
+        );
+        assert_eq!(exit_code, EXIT_CLEANUP_FAILED);
+
+        let mut exit_code = EXIT_PASSED;
+        apply_hook_exit(
+            &mut exit_code,
+            DrillHookLifecycle::Teardown,
+            HookExitKind::TimedOut,
+        );
+        assert_eq!(exit_code, EXIT_TIMEOUT);
+    }
+
+    #[test]
+    fn teardown_failure_preserves_prior_app_failure() {
+        let mut exit_code = EXIT_APP_EXITED;
+
+        apply_hook_exit(
+            &mut exit_code,
+            DrillHookLifecycle::Teardown,
+            HookExitKind::Failed,
+        );
+
+        assert_eq!(exit_code, EXIT_APP_EXITED);
+    }
+
+    #[test]
+    fn aggregates_hook_results_into_report() {
+        let workspace = TempDir::new().unwrap();
+        let script = ResolvedDrillScript {
+            path: workspace.path().join("drill.json"),
+            workspace_root: workspace.path().to_path_buf(),
+            setup: Vec::new(),
+            teardown: Vec::new(),
+        };
+        let options = test_options(Some(script.path.clone()));
+        let mut report = DrillReport::new(&options, &[]);
+        report.set_script(&script);
+        let setup_hook = hook_report(
+            &resolved_hook("Seed", workspace.path()),
+            DrillHookLifecycle::Setup,
+            Instant::now(),
+            Some(0),
+            false,
+            "seeded",
+            "",
+        );
+        let teardown_hook = hook_report(
+            &resolved_hook("Clean", workspace.path()),
+            DrillHookLifecycle::Teardown,
+            Instant::now(),
+            Some(1),
+            false,
+            "",
+            "failed",
+        );
+
+        report.push_hook(&script, setup_hook);
+        report.push_hook(&script, teardown_hook);
+
+        let value = redacted_report_value(&report).unwrap();
+        assert_eq!(value["script"]["setup"][0]["name"], "Seed");
+        assert_eq!(value["script"]["setup"][0]["stdout"], "seeded");
+        assert_eq!(value["script"]["teardown"][0]["name"], "Clean");
+        assert_eq!(value["script"]["teardown"][0]["exitCode"], 1);
+    }
+
+    #[test]
     fn new_run_selector_accepts_started_or_heartbeat_after_spawn() {
         let started_at = OffsetDateTime::parse("2026-06-27T22:00:00Z", &Rfc3339).unwrap();
         let app = discovered_app("2026-06-27T21:59:00Z", "2026-06-27T22:00:01Z");
@@ -963,6 +1628,33 @@ mod tests {
         let app = discovered_app("2026-06-27T21:59:00Z", "2026-06-27T21:59:30Z");
 
         assert!(!app_started_or_heartbeat_after(&app, started_at));
+    }
+
+    fn test_options(script: Option<PathBuf>) -> DrillRunOptions {
+        DrillRunOptions {
+            app: "fixture".to_string(),
+            require_frontend: false,
+            require_drive_bridge: false,
+            timeout_seconds: 1,
+            interval_ms: 100,
+            report: PathBuf::from("report.json"),
+            selector: None,
+            expect_text: None,
+            script,
+            json: false,
+            command: vec!["fixture".to_string()],
+        }
+    }
+
+    fn resolved_hook(name: &str, cwd: &Path) -> ResolvedDrillHook {
+        ResolvedDrillHook {
+            name: name.to_string(),
+            run: "fixture".to_string(),
+            args: Vec::new(),
+            timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
+            cwd: cwd.to_path_buf(),
+            always: false,
+        }
     }
 
     fn discovered_app(started_at: &str, last_heartbeat_at: &str) -> DiscoveredApp {
