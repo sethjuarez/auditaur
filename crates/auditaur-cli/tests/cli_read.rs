@@ -334,6 +334,16 @@ fn debug_status_reports_waiting_when_required_readiness_is_missing() {
 }
 
 #[test]
+fn drill_run_help_exposes_first_slice_options() {
+    let help = run_stdout(["drill", "run", "--help"]);
+    assert!(help.contains("--app"));
+    assert!(help.contains("--require-frontend"));
+    assert!(help.contains("--require-drive-bridge"));
+    assert!(help.contains("--expect-text"));
+    assert!(help.contains("--report"));
+}
+
+#[test]
 fn init_skill_installs_auditaur_debug_skill() {
     let repo = TempDir::new().unwrap();
     let skill_path = repo

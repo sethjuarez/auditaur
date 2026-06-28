@@ -49,6 +49,10 @@ enum Command {
         #[command(subcommand)]
         command: Option<DriveCommand>,
     },
+    Drill {
+        #[command(subcommand)]
+        command: DrillCommand,
+    },
     Sessions {
         #[arg(long)]
         db: Option<PathBuf>,
@@ -348,6 +352,32 @@ enum DebugCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum DrillCommand {
+    Run {
+        #[arg(long)]
+        app: String,
+        #[arg(long)]
+        require_frontend: bool,
+        #[arg(long)]
+        require_drive_bridge: bool,
+        #[arg(long, default_value_t = 180)]
+        timeout_seconds: u64,
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(long, default_value = "auditaur-drill-report.json")]
+        report: PathBuf,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
+        expect_text: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+}
+
 #[derive(Debug, Args)]
 struct DriveArgs {
     #[arg(long, global = true)]
@@ -623,6 +653,37 @@ fn inner_main() -> Result<()> {
                 args.json,
                 command,
             ),
+        },
+        Command::Drill { command } => match command {
+            DrillCommand::Run {
+                app,
+                require_frontend,
+                require_drive_bridge,
+                timeout_seconds,
+                interval_ms,
+                report,
+                selector,
+                expect_text,
+                json,
+                command,
+            } => {
+                let exit_code = commands::drill::run(commands::drill::DrillRunOptions {
+                    app,
+                    require_frontend,
+                    require_drive_bridge,
+                    timeout_seconds,
+                    interval_ms,
+                    report,
+                    selector,
+                    expect_text,
+                    json,
+                    command,
+                })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
         },
         Command::Drive { args, command } => match command {
             None => {
