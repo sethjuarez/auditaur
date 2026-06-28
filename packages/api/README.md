@@ -29,7 +29,7 @@ By default, Auditaur instruments console logs, frontend errors, Tauri invokes, T
 
 ## Debug drive bridge
 
-For local/debug UI automation, apps can explicitly opt into the Auditaur in-app drive bridge. The bridge lets `auditaur drive` execute Tauri-native selector operations from inside the WebView on every platform without a browser debugging endpoint:
+For local/debug UI automation, apps can explicitly opt into the Auditaur in-app drive bridge. The bridge lets `auditaur drive` execute Tauri-native selector operations from inside the WebView on every platform:
 
 ```ts
 await initAuditaur({
@@ -41,7 +41,7 @@ await initAuditaur({
 });
 ```
 
-The bridge is disabled by default, requires the Auditaur Tauri plugin commands permitted by `auditaur:default`, and should only be enabled in development/test builds. It supports `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `evaluate`, `snapshot`, and `screenshot`; action telemetry is logged without recording filled, typed, or selected text values. Bridge screenshots first try native window capture for real app-window pixels, then fall back to a DOM text summary PNG when OS permissions or window matching prevent native capture. `evaluate` runs arbitrary JavaScript in the WebView, so keep the bridge restricted to development/test sessions. The bridge is intentionally single-window for now: enable it in exactly one WebView per Auditaur session, usually with `windowLabel: 'main'`. If multiple windows enable it in the same session, target selection is unsupported and may be ambiguous.
+The bridge is disabled by default, requires the Auditaur Tauri plugin commands permitted by `auditaur:default`, and should only be enabled in development/test builds. It supports `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `evaluate`, `snapshot`, and `screenshot`; action telemetry is logged without recording filled, typed, or selected text values. Bridge screenshots first try native WebView capture for occlusion-free WebView pixels; selector screenshots crop that WebView image and include `screenshotScope=selector` plus `selectorRect`. If WebView capture fails, Auditaur falls back to native window capture and then to a DOM text summary PNG when OS permissions or window matching prevent native capture. `evaluate` runs arbitrary JavaScript in the WebView, so keep the bridge restricted to development/test sessions. The bridge is intentionally single-window for now: enable it in exactly one WebView per Auditaur session, usually with `windowLabel: 'main'`. If multiple windows enable it in the same session, target selection is unsupported and may be ambiguous.
 
 ## Custom invoke wrappers
 

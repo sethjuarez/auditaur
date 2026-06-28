@@ -237,7 +237,9 @@ try {
     Assert-Condition (Test-Path $snapshotPath) "drive snapshot did not write $snapshotPath"
     Assert-Condition (Test-Path $screenshotPath) "drive screenshot did not write $screenshotPath"
     Assert-Condition (Test-Path $screenshotSnapshotPath) "drive screenshot did not write $screenshotSnapshotPath"
-    Assert-Condition ($screenshot.payload.screenshotBackend -eq "tauri_native_window_xcap") "drive screenshot did not use native window capture: $($screenshot.payload.screenshotBackend); native error: $($screenshot.payload.nativeScreenshotError)"
+    Assert-Condition ($screenshot.payload.screenshotBackend -eq "tauri_native_webview_snapshot") "drive screenshot did not use native WebView capture: $($screenshot.payload.screenshotBackend); webview error: $($screenshot.payload.webviewScreenshotError); native error: $($screenshot.payload.nativeScreenshotError)"
+    Assert-Condition ($screenshot.payload.screenshotScope -eq "selector") "drive screenshot did not report selector scope: $($screenshot.payload.screenshotScope)"
+    Assert-Condition ($null -ne $screenshot.payload.selectorRect) "drive screenshot did not report selector geometry"
     Assert-Condition ($screenshot.payload.width -gt 0 -and $screenshot.payload.height -gt 0) "drive screenshot reported invalid dimensions"
 
     Write-Host "Confirming frontend-required readiness..."

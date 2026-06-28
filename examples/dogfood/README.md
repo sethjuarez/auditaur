@@ -11,7 +11,7 @@ npm run build:api
 npm run tauri dev
 ```
 
-Click the buttons to emit a console log, throw a frontend error, call successful and failing commands, and emit/listen to events. The app flushes after each button click and on page hide so records are written before you inspect the database. The dogfood frontend also enables the debug-only Auditaur drive bridge in its single main WebView so macOS/WKWebView selector actions can be smoke-tested without CDP.
+Click the buttons to emit a console log, throw a frontend error, call successful and failing commands, and emit/listen to events. The app flushes after each button click and on page hide so records are written before you inspect the database. The dogfood frontend also enables the debug-only Auditaur drive bridge in its single main WebView so macOS/WKWebView selector actions can be smoke-tested through the Tauri-native bridge.
 
 ## Smoke test it
 
@@ -23,7 +23,7 @@ From the repository root on Windows, run the repeatable smoke pass:
 
 The script builds the CLI and dogfood web bundle, launches the dogfood Tauri app with an isolated `AUDITAUR_DATA_DIR`, waits for `auditaur debug` readiness, drives the app through the Tauri-native bridge, verifies native window screenshot capture, checks frontend-required readiness, then reads `timeline` and `explain`.
 
-The same drive commands work on macOS/WKWebView because they use the in-app bridge instead of CDP:
+The same drive commands work on macOS/WKWebView because they use the Tauri-native in-app bridge:
 
 ```powershell
 cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json inspect

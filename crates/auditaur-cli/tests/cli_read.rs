@@ -673,7 +673,7 @@ fn discovers_apps_and_reads_default_database() {
 }
 
 #[test]
-fn drive_reports_tauri_native_attach_info_and_ignores_cdp_port() {
+fn drive_reports_tauri_native_attach_info_with_legacy_port_flag() {
     let temp = TempDir::new().unwrap();
     let db_path = temp
         .path()
@@ -713,7 +713,7 @@ fn drive_reports_tauri_native_attach_info_and_ignores_cdp_port() {
     assert!(attach["cdp"]["reason"]
         .as_str()
         .unwrap()
-        .contains("not used"));
+        .contains("Tauri-native in-app driver"));
     assert!(attach["cdp"]["launchHint"]
         .as_str()
         .unwrap()
@@ -804,7 +804,7 @@ fn drive_bridge_stale_heartbeat_still_attempts_native_wake_path() {
 }
 
 #[test]
-fn drive_bridge_exists_fill_and_snapshot_without_cdp() {
+fn drive_bridge_exists_fill_and_snapshot_through_bridge() {
     let temp = TempDir::new().unwrap();
     let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-actions");
     activate_drive_bridge(&db_path, "main");
@@ -882,7 +882,7 @@ fn drive_bridge_exists_fill_and_snapshot_without_cdp() {
 }
 
 #[test]
-fn drive_bridge_type_press_and_screenshot_without_cdp() {
+fn drive_bridge_type_press_and_screenshot_through_bridge() {
     let temp = TempDir::new().unwrap();
     let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-parity");
     activate_drive_bridge(&db_path, "main");
@@ -1000,7 +1000,7 @@ fn drive_bridge_type_press_and_screenshot_without_cdp() {
 }
 
 #[test]
-fn drive_bridge_hover_select_check_and_evaluate_without_cdp() {
+fn drive_bridge_hover_select_check_and_evaluate_through_bridge() {
     let temp = TempDir::new().unwrap();
     let db_path = write_drive_fixture(temp.path(), "instance-drive-bridge-more-actions");
     activate_drive_bridge(&db_path, "main");
@@ -1201,7 +1201,7 @@ fn drive_resolves_explicit_session_id_when_app_name_is_ambiguous() {
 }
 
 #[test]
-fn drive_wait_without_cdp_requires_active_bridge() {
+fn drive_wait_requires_active_bridge() {
     let temp = TempDir::new().unwrap();
     write_drive_fixture(temp.path(), "instance-drive-wait-no-bridge");
     let failure = run_failure_with_env(

@@ -6,7 +6,20 @@ license: MIT
 
 # Auditaur debug workflow
 
-Use Auditaur as the first diagnostic surface for Tauri app debugging. Prefer machine-readable JSON when acting as an agent.
+Use Auditaur as the first diagnostic surface for Tauri app debugging. Prefer machine-readable JSON when acting as an agent. The canonical mental model is: Auditaur observes the app; it does not replace the app's normal dev command.
+
+## Intent map
+
+Translate common user phrases to the appropriate Auditaur workflow:
+
+| User phrase | Agent interpretation |
+| --- | --- |
+| "observe the app" | Attach to the already-running app and watch readiness. |
+| "start with Auditaur" / "Auditaur start the app" | Start the normal app command under Auditaur observation with `debug run -- <normal command>`. |
+| "debug the app with Auditaur" | Check readiness first, then inspect logs/timeline/traces/IPC. |
+| "drive the app" / "click in the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
+
+Never invent an `auditaur start` command. Preserve the app's normal startup command and wrap or observe it.
 
 ## Readiness first
 
@@ -36,7 +49,7 @@ npm run tauri dev
 auditaur debug --app <app-name> --active --require-frontend --json watch --until-ready --timeout-seconds 120
 ```
 
-Auditaur drive is Tauri-native and does not require Chrome DevTools Protocol/WebView2 targets on any platform. The app must explicitly enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session, then `auditaur drive` commands run without `--cdp-port`.
+Auditaur drive uses the Tauri-native in-app drive bridge. The app must explicitly enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session, then `auditaur drive` sends bounded requests through that bridge.
 
 ## Starting the app
 
@@ -71,7 +84,7 @@ Inspect the `stages` array:
 - `backend_telemetry`: backend/plugin logs, spans, or window rows exist.
 - `frontend_telemetry`: frontend logs/errors/IPC/events exist; required only with `--require-frontend`.
 - `drive_bridge`: Tauri-native in-app drive bridge status exists and has a fresh heartbeat; required only with `--require-drive-bridge`.
-- `cdp_endpoint`: Chrome DevTools Protocol is reachable; checked only with `--cdp-port`.
+- `cdp_endpoint`: legacy browser-debug endpoint readiness; checked only when explicitly requested.
 
 If readiness is false, follow the stage messages and `hints` instead of guessing from terminal output.
 
@@ -108,7 +121,9 @@ auditaur drive --app <app-name> --active --json type --selector 'textarea' --val
 
 Prefer `--visible-only` (or `--visible`) with selector actions (`wait`, `exists`, `text`, `click`, `fill`, `type`, `hover`, `select`, `check`, and `uncheck`) when validating modals, focus overlays, or fullscreen shells that leave duplicate hidden DOM behind.
 
-If `drive inspect` reports `bridge.status` inactive, do not retry WebView2/CDP flags. Enable `driveBridge`, then use `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `evaluate`, `snapshot`, and `screenshot` without `--cdp-port`. Bridge screenshots first try native window capture (`screenshotBackend=tauri_native_window_xcap`) for real app-window pixels, then fall back to the DOM text summary PNG (`screenshotBackend=bridge_dom_summary_canvas`) with `nativeScreenshotError` when OS permissions or window matching prevent native capture. `evaluate` runs arbitrary JavaScript in the WebView, so keep the bridge restricted to development/test sessions. If the bridge is inactive, use Auditaur telemetry (`timeline`, `ipc`, `traces`, `explain`) for truth and pair it with Accessibility automation only when manual UI input must be simulated.
+If `drive inspect` reports `bridge.status` inactive, enable `driveBridge` in the frontend. Once active, use `wait`, `exists`, `text`, `click`, `fill`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `evaluate`, `snapshot`, and `screenshot` through the Tauri-native bridge. Bridge screenshots first try native WebView capture (`screenshotBackend=tauri_native_webview_snapshot`) for occlusion-free WebView pixels; selector screenshots crop that WebView image and report `screenshotScope=selector` plus `selectorRect`. If WebView capture fails, Auditaur falls back to native window capture (`screenshotBackend=tauri_native_window_xcap`) and then to the DOM text summary PNG (`screenshotBackend=bridge_dom_summary_canvas`) with error metadata. `evaluate` runs arbitrary JavaScript in the WebView, so keep the bridge restricted to development/test sessions. If the bridge is inactive, use Auditaur telemetry (`timeline`, `ipc`, `traces`, `explain`) for truth and pair it with Accessibility automation only when manual UI input must be simulated.
+
+Legacy compatibility: `--cdp-port` may appear in older commands, but `auditaur drive` ignores it. Use positive wording for drive commands: say they use the Tauri-native drive bridge.
 
 ## Inspecting telemetry
 

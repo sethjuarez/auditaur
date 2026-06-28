@@ -25,21 +25,40 @@ interface NativeScreenshotPayload {
   width: number;
   height: number;
   screenshotBackend: string;
+  screenshotScope?: string;
   windowLabel?: string;
   windowTitle?: string;
   nativeWindowId?: number;
   nativeWindowTitle?: string;
   nativeAppName?: string;
+  webviewScreenshotError?: string;
 }
 
-let nativeScreenshotInvoker: (windowLabel: string | undefined) => Promise<NativeScreenshotPayload> =
-  (windowLabel) => invoke<NativeScreenshotPayload>(CAPTURE_SCREENSHOT_COMMAND, { windowLabel });
+interface ScreenshotTargetRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  devicePixelRatio: number;
+}
+
+interface NativeScreenshotOptions {
+  windowLabel: string | undefined;
+  targetRect: ScreenshotTargetRect | undefined;
+}
+
+let nativeScreenshotInvoker: (options: NativeScreenshotOptions) => Promise<NativeScreenshotPayload> =
+  ({ windowLabel, targetRect }) =>
+    invoke<NativeScreenshotPayload>(CAPTURE_SCREENSHOT_COMMAND, { windowLabel, targetRect });
 
 export function setDriveBridgeNativeScreenshotInvokerForTests(
-  invoker: ((windowLabel: string | undefined) => Promise<NativeScreenshotPayload>) | undefined,
+  invoker: ((options: NativeScreenshotOptions) => Promise<NativeScreenshotPayload>) | undefined,
 ): void {
   nativeScreenshotInvoker = invoker
-    ?? ((windowLabel) => invoke<NativeScreenshotPayload>(CAPTURE_SCREENSHOT_COMMAND, { windowLabel }));
+    ?? (({ windowLabel, targetRect }) =>
+      invoke<NativeScreenshotPayload>(CAPTURE_SCREENSHOT_COMMAND, { windowLabel, targetRect }));
 }
 
 export function startDriveBridge(
@@ -484,11 +503,14 @@ async function captureScreenshot(
     throw new Error('selector not found');
   }
   const snapshot = captureSnapshot(selector);
+  const targetRect = selector ? screenshotTargetRect(target) : undefined;
   try {
+    const nativeScreenshot = await nativeScreenshotInvoker({ windowLabel, targetRect });
     return {
-      ...(await nativeScreenshotInvoker(windowLabel)),
+      ...nativeScreenshot,
       selector,
-      screenshotScope: 'window',
+      screenshotScope: nativeScreenshot.screenshotScope ?? (targetRect ? 'selector' : 'webview'),
+      selectorRect: targetRect,
       snapshot,
     };
   } catch (error) {
@@ -497,6 +519,19 @@ async function captureScreenshot(
       nativeScreenshotError: errorMessage(error),
     };
   }
+}
+
+function screenshotTargetRect(target: Element): ScreenshotTargetRect {
+  const rect = target.getBoundingClientRect();
+  return {
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    viewportWidth: window.innerWidth || document.documentElement.clientWidth || 1,
+    viewportHeight: window.innerHeight || document.documentElement.clientHeight || 1,
+    devicePixelRatio: window.devicePixelRatio || 1,
+  };
 }
 
 function errorMessage(error: unknown): string {

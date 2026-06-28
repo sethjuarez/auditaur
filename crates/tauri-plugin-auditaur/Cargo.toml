@@ -18,12 +18,44 @@ directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri-plugin-auditaur-macros = { version = "0.3.2", path = "../tauri-plugin-auditaur-macros" }
-tauri.workspace = true
+tauri = { workspace = true, features = ["wry"] }
 time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 xcap = "0.9.6"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38.2"
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSBitmapImageRep",
+    "NSImage",
+    "NSImageRep",
+] }
+objc2-core-foundation = "0.3.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSObject",
+    "NSString",
+    "NSValue",
+] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "WKSnapshotConfiguration",
+    "WKWebView",
+    "block2",
+    "objc2-core-foundation",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true
