@@ -340,6 +340,7 @@ fn drill_run_help_exposes_first_slice_options() {
     assert!(help.contains("--require-frontend"));
     assert!(help.contains("--require-drive-bridge"));
     assert!(help.contains("--expect-text"));
+    assert!(help.contains("--script"));
     assert!(help.contains("--report"));
 }
 

@@ -372,6 +372,8 @@ enum DrillCommand {
         #[arg(long)]
         expect_text: Option<String>,
         #[arg(long)]
+        script: Option<PathBuf>,
+        #[arg(long)]
         json: bool,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
@@ -664,6 +666,7 @@ fn inner_main() -> Result<()> {
                 report,
                 selector,
                 expect_text,
+                script,
                 json,
                 command,
             } => {
@@ -676,6 +679,7 @@ fn inner_main() -> Result<()> {
                     report,
                     selector,
                     expect_text,
+                    script,
                     json,
                     command,
                 })?;
