@@ -1,0 +1,97 @@
+---
+title: Drill Confidence Runs
+description: Use auditaur drill run for repeatable Tauri app smoke and confidence checks.
+---
+
+`auditaur drill run` is the built-in confidence runner for Auditaur-enabled Tauri apps. Use it when a script or agent should own the full lifecycle: start the normal app command, wait for a fresh Auditaur session, run readiness and drive checks against that session, write a redacted report, and clean up the spawned process tree.
+
+`drill run` is different from `debug run`: `debug run` starts an app under observation and leaves it running after readiness, while `drill run` is meant to finish with a pass/fail exit code.
+
+## Run the dogfood drill
+
+From the Auditaur repository root:
+
+```powershell
+cargo run -p auditaur-cli -- drill run --app auditaur-dogfood --require-drive-bridge --selector "#output" --expect-text "Auditaur initialized" -- npm --prefix examples\dogfood run tauri dev
+```
+
+This command:
+
+1. Snapshots existing `auditaur-dogfood` sessions before startup.
+2. Starts the normal dogfood Tauri dev command.
+3. Waits for a new post-startup Auditaur session.
+4. Requires the Tauri-native drive bridge.
+5. Checks that `#output` contains `Auditaur initialized`.
+6. Writes `auditaur-drill-report.json`.
+7. Stops the spawned app process tree.
+
+Use `--json` when another tool needs machine-readable summary output:
+
+```powershell
+cargo run -p auditaur-cli -- drill run --app auditaur-dogfood --require-drive-bridge --selector "#output" --expect-text "Auditaur initialized" --json -- npm --prefix examples\dogfood run tauri dev
+```
+
+## Choose checks
+
+Start with readiness gates:
+
+```powershell
+auditaur drill run --app my-app --require-frontend --require-drive-bridge -- npm run tauri dev
+```
+
+Add one visible UI assertion when the smoke should prove the app reached a useful state:
+
+```powershell
+auditaur drill run --app my-app --require-drive-bridge --selector "#ready" --expect-text "Ready" -- npm run tauri dev
+```
+
+Before selector checks, `drill run` sends a selector-independent drive bridge ping. That separates "the bridge is missing or stale" from "the bridge is alive but this selector failed." Older frontend bridge clients that report `unsupported drive bridge action: ping` still count as a compatibility pass because the response proves the bridge action loop is alive.
+
+## Add setup and teardown hooks
+
+Pass `--script <path>` when the app needs repeatable setup or cleanup around the run. Script files are JSON and currently support command hooks only. Commands are executed directly, not through a shell, and `cwd` must stay inside the current workspace or repository root.
+
+```json
+{
+  "setup": [
+    {
+      "name": "Seed data",
+      "run": "npm",
+      "args": ["run", "seed"],
+      "timeoutMs": 30000,
+      "cwd": "."
+    }
+  ],
+  "teardown": [
+    {
+      "name": "Clean data",
+      "run": "npm",
+      "args": ["run", "cleanup"],
+      "timeoutMs": 30000,
+      "cwd": ".",
+      "always": true
+    }
+  ]
+}
+```
+
+Setup hooks run before the app starts. Teardown hooks run after built-in drill phases and app process cleanup, including failure paths. Hook stdout, stderr, exit code, duration, timeout status, cwd, command, and args are included in the redacted report.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Drill passed. |
+| `1` | A readiness, hook, telemetry, drive, selector, or text check failed. |
+| `2` | Runner or configuration error, such as malformed script JSON. |
+| `3` | The app exited before readiness. |
+| `4` | The run or a hook timed out. |
+| `5` | Cleanup failed after an otherwise passing run. |
+
+If a teardown hook fails after an earlier app/readiness/check failure, the original exit code is preserved and the teardown failure is still recorded in the report.
+
+## Read the report
+
+The default report path is `auditaur-drill-report.json`; override it with `--report <path>`.
+
+The report is redacted for local handoff by default, but still review it before sharing because selector text, hook output, paths, and telemetry context can reveal application details.
