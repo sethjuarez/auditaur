@@ -13,6 +13,7 @@ class FakeElement {
   isContentEditable = false;
   clicked = false;
   dispatched: string[] = [];
+  scrolledIntoView = false;
   value = '';
   selectionStart: number | null = null;
   selectionEnd: number | null = null;
@@ -34,7 +35,9 @@ class FakeElement {
     return { x: 0, y: 0, left: 0, top: 0, width: 10, height: 10 };
   }
 
-  scrollIntoView(): void {}
+  scrollIntoView(): void {
+    this.scrolledIntoView = true;
+  }
 
   click(): void {
     this.clicked = true;
@@ -327,6 +330,7 @@ describe('drive bridge selector operations', () => {
       windowLabel: 'main',
     });
 
+    expect(target.scrolledIntoView).toBe(true);
     expect(invokedWindowLabel).toBe('main');
     expect(screenshot).toMatchObject({
       format: 'png',
@@ -349,6 +353,51 @@ describe('drive bridge selector operations', () => {
     expect(screenshot.snapshot).toMatchObject({
       title: 'Dogfood',
       selected: { selector: '#target' },
+    });
+  });
+
+  it('scrolls selector targets into view before native screenshots', async () => {
+    const target = new FakeElement('#target');
+    let visible = false;
+    target.getBoundingClientRect = () => visible
+      ? { x: 10, y: 20, left: 10, top: 20, width: 30, height: 40 }
+      : { x: 10, y: -80, left: 10, top: -80, width: 30, height: 40 };
+    target.scrollIntoView = () => {
+      target.scrolledIntoView = true;
+      visible = true;
+    };
+    installDom([target]);
+    setDriveBridgeNativeScreenshotInvokerForTests(async ({ targetRect }) => {
+      expect(targetRect).toEqual({
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+        viewportWidth: 800,
+        viewportHeight: 600,
+        devicePixelRatio: 1,
+      });
+      return {
+        format: 'png',
+        pngBase64: 'bmF0aXZlLXBuZw==',
+        width: 60,
+        height: 80,
+        screenshotBackend: 'tauri_native_webview_snapshot',
+        screenshotScope: 'selector',
+      };
+    });
+
+    const screenshot = await executeDriveBridgeRequest(request('screenshot', '#target'));
+
+    expect(target.scrolledIntoView).toBe(true);
+    expect(screenshot).toMatchObject({
+      screenshotBackend: 'tauri_native_webview_snapshot',
+      selectorRect: {
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+      },
     });
   });
 

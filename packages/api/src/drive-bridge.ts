@@ -510,6 +510,9 @@ async function captureScreenshot(
   if (!target) {
     throw new Error('selector not found');
   }
+  if (selector) {
+    await scrollTargetIntoViewForScreenshot(target);
+  }
   const snapshot = captureSnapshot(selector);
   const targetRect = selector ? screenshotTargetRect(target) : undefined;
   try {
@@ -527,6 +530,26 @@ async function captureScreenshot(
       nativeScreenshotError: errorMessage(error),
     };
   }
+}
+
+async function scrollTargetIntoViewForScreenshot(target: Element): Promise<void> {
+  target.scrollIntoView({
+    behavior: 'auto',
+    block: 'center',
+    inline: 'center',
+  });
+  await waitForScrollSettle();
+}
+
+function waitForScrollSettle(): Promise<void> {
+  if (typeof requestAnimationFrame !== 'function') {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 function screenshotTargetRect(target: Element): ScreenshotTargetRect {
