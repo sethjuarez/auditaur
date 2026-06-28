@@ -93,6 +93,27 @@ pub fn explain(
     read::print_json_or_table(json, &report, || print_explain(&report))
 }
 
+pub(crate) fn explain_json_value(
+    db: &Option<PathBuf>,
+    session_id: Option<String>,
+    trace_id: Option<String>,
+    since: Option<String>,
+    limit: usize,
+) -> Result<Value> {
+    let db = discovery::resolve_db(db.clone())?;
+    let related = load_related(
+        &db,
+        session_id,
+        trace_id.clone(),
+        None,
+        since.as_deref(),
+        limit,
+    )?;
+    let entries = timeline_entries(related.clone(), limit);
+    let report = ExplainReport::from_related(trace_id, &related, &entries);
+    serde_json::to_value(report).map_err(Into::into)
+}
+
 pub fn bundle(
     db: &Option<PathBuf>,
     session_id: Option<String>,

@@ -48,6 +48,106 @@ pub fn inspect(selector: DriveAppSelector, _cdp_port: Option<u16>, json: bool) -
     read::print_json_or_table(json, &attach, || print_attach_info(&attach, true))
 }
 
+pub(crate) fn inspect_json_value(selector: DriveAppSelector) -> Result<Value> {
+    let target = resolve_target(&selector)?;
+    let attach = DriveAttachInfo::discover(target)?;
+    serde_json::to_value(attach).map_err(Into::into)
+}
+
+pub(crate) fn ping_json_value(selector: DriveAppSelector) -> Result<Value> {
+    let target = resolve_target(&selector)?;
+    let attach = DriveAttachInfo::discover(target)?;
+    let heartbeat_age_ms = attach
+        .bridge
+        .last_heartbeat_unix_nanos
+        .map(|last| now_unix_nanos().saturating_sub(last) / 1_000_000);
+    let bridge_dir = bridge_dir_for_attach(&attach);
+    let mut base = json!({
+        "ok": false,
+        "action": "ping",
+        "serviceName": attach.service_name,
+        "sessionId": attach.session_id,
+        "instanceId": attach.instance_id,
+        "appPid": attach.pid,
+        "windowLabel": attach.bridge.window_label,
+        "bridgeStatus": attach.bridge.status,
+        "bridgeReason": attach.bridge.reason,
+        "bridgeHeartbeatAgeMs": heartbeat_age_ms,
+        "requestDir": attach.bridge.request_dir,
+        "responseDir": attach.bridge.response_dir,
+    });
+    if !attach.bridge.active {
+        base["status"] = json!("no_bridge_advertised");
+        return Ok(base);
+    }
+    if attach.bridge.status != "active" {
+        base["status"] = json!("stale_bridge_heartbeat");
+        return Ok(base);
+    }
+
+    let mut request = bridge_request(
+        "ping",
+        None,
+        None,
+        false,
+        Some("auditaur-drill".to_string()),
+        Some("bridge-responsive".to_string()),
+    );
+    request.window_label = attach.bridge.window_label.clone();
+    let request_path =
+        PathBuf::from(&attach.bridge.request_dir).join(format!("{}.json", request.request_id));
+    let response_path =
+        PathBuf::from(&attach.bridge.response_dir).join(format!("{}.json", request.request_id));
+    let in_flight_path = bridge_dir
+        .join(DRIVE_BRIDGE_IN_FLIGHT_DIR)
+        .join(format!("{}.json", request.request_id));
+    let request_id = request.request_id.clone();
+    let started = Instant::now();
+    match execute_bridge_request(&attach, &request, DRIVE_BRIDGE_ACTION_TIMEOUT) {
+        Ok(response) => {
+            let ping_unsupported =
+                is_unsupported_ping_response(&response.payload, response.error.as_deref());
+            base["ok"] = json!(response.ok || ping_unsupported);
+            base["status"] = if response.ok {
+                json!("responsive")
+            } else if ping_unsupported {
+                json!("ping_unsupported_but_bridge_responsive")
+            } else {
+                json!("responded_error")
+            };
+            base["requestId"] = json!(request_id);
+            base["responseLatencyMs"] = json!(started.elapsed().as_millis());
+            base["payload"] = response.payload;
+            if let Some(error) = response.error {
+                base["error"] = json!(error);
+            }
+            if ping_unsupported {
+                base["compatibilityWarning"] = json!("The frontend drive bridge responded but does not support ping yet; update @auditaur/api to get selector-independent bridge health.");
+            }
+            Ok(base)
+        }
+        Err(error) => {
+            base["status"] = json!("advertised_active_no_response");
+            base["requestId"] = json!(request_id);
+            base["requestPath"] = json!(request_path.to_string_lossy().to_string());
+            base["responsePath"] = json!(response_path.to_string_lossy().to_string());
+            base["inFlightPath"] = json!(in_flight_path.to_string_lossy().to_string());
+            base["timeoutMs"] = json!(DRIVE_BRIDGE_ACTION_TIMEOUT.as_millis());
+            base["error"] = json!(error.to_string());
+            Ok(base)
+        }
+    }
+}
+
+fn is_unsupported_ping_response(payload: &Value, error: Option<&str>) -> bool {
+    error
+        .or_else(|| payload.get("error").and_then(Value::as_str))
+        .is_some_and(|message| {
+            message.contains("unsupported drive bridge action")
+                && message.to_ascii_lowercase().contains("ping")
+        })
+}
+
 pub fn wait(
     selector: DriveAppSelector,
     _cdp_port: Option<u16>,
@@ -70,6 +170,14 @@ pub fn text(
     options: SelectorActionOptions,
 ) -> Result<()> {
     bridge_selector_action(selector, options, "text", None, false)
+}
+
+pub(crate) fn text_json_value(
+    selector: DriveAppSelector,
+    options: SelectorActionOptions,
+) -> Result<Value> {
+    let result = bridge_selector_action_result(selector, options, "text", None, false)?;
+    serde_json::to_value(result).map_err(Into::into)
 }
 
 pub fn click(
@@ -1395,6 +1503,12 @@ fn launch_hint(cdp_port: Option<u16>) -> String {
 fn future_actions() -> Vec<DriverActionSpec> {
     vec![
         DriverActionSpec {
+            name: "ping",
+            selector_required: false,
+            mutates_app: false,
+            description: "check that the Tauri-native in-app driver responds to action requests",
+        },
+        DriverActionSpec {
             name: "exists",
             selector_required: true,
             mutates_app: false,
@@ -1621,5 +1735,15 @@ mod tests {
             assert_eq!(backend.status, "supported_with_drive_bridge");
             assert_eq!(backend.selector_actions_supported, true);
         }
+    }
+
+    #[test]
+    fn ping_unsupported_response_still_proves_bridge_responsiveness() {
+        let payload = serde_json::json!({
+            "ok": false,
+            "error": "unsupported drive bridge action: ping"
+        });
+
+        assert!(super::is_unsupported_ping_response(&payload, None));
     }
 }

@@ -205,6 +205,14 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
   }
 
   switch (request.action) {
+    case 'ping':
+      return {
+        ok: true,
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: request.requestId,
+        windowLabel: request.windowLabel,
+        title: document.title,
+      };
     case 'exists': {
       const exists = Boolean(resolveSelector(request.selector, request.visibleOnly));
       return exists

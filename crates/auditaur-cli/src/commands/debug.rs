@@ -253,7 +253,7 @@ pub fn run(
     Ok(())
 }
 
-fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
+pub(crate) fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
     let mut stages = Vec::new();
     let mut hints = Vec::new();
     let app = if selector.db.is_some() {

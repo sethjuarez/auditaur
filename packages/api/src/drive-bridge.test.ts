@@ -258,6 +258,24 @@ describe('drive bridge selector operations', () => {
     });
   });
 
+  it('responds to selector-independent ping requests', async () => {
+    installDom([]);
+
+    const response = await executeDriveBridgeRequest({
+      ...request('ping'),
+      requestId: 'ping-1',
+      windowLabel: 'main',
+    });
+
+    expect(response).toEqual({
+      ok: true,
+      protocolVersion: 1,
+      requestId: 'ping-1',
+      windowLabel: 'main',
+      title: 'Dogfood',
+    });
+  });
+
   it('captures a bounded DOM snapshot', async () => {
     const target = new FakeElement('#target');
     target.innerText = 'Selected text';

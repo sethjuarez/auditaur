@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod debug;
 pub mod doctor;
+pub mod drill;
 pub mod drive;
 pub mod exceptions;
 pub mod health;

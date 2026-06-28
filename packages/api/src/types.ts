@@ -58,6 +58,7 @@ export interface DriveBridgeRequest {
   protocolVersion: number;
   requestId: string;
   action:
+    | 'ping'
     | 'exists'
     | 'text'
     | 'click'
