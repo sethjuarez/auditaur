@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.3.2...auditaur-cli-v0.4.0) - 2026-06-28
+
+### Added
+
+- add drill script hooks
+- add auditaur drill run
+- add targeted native webview screenshots
+
+### Fixed
+
+- clean up drill process groups on macOS
+
 ## [0.3.2](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.3.1...auditaur-cli-v0.3.2) - 2026-06-26
 
 ### Fixed
