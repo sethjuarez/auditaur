@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.3.2...tauri-plugin-auditaur-v0.4.0) - 2026-06-28
+
+### Added
+
+- add targeted native webview screenshots
+
 ## [0.3.0](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.2.5...tauri-plugin-auditaur-v0.3.0) - 2026-06-25
 
 ### Added
