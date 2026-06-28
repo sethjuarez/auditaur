@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- drive Tauri bridge without CDP
+- drive through the Tauri-native bridge
 
 ## [0.3.1](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.3.0...auditaur-cli-v0.3.1) - 2026-06-26
 

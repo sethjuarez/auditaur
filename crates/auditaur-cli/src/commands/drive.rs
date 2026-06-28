@@ -342,7 +342,8 @@ impl DriveAttachInfo {
     fn discover(app: DiscoveredApp) -> Result<Self> {
         let cdp = unavailable_cdp(
             None,
-            "CDP probing is not used by Auditaur drive; selector actions run through the Tauri-native in-app driver.".to_string(),
+            "Auditaur drive selector actions run through the Tauri-native in-app driver."
+                .to_string(),
         );
         let bridge = BridgeAttachInfo::discover(&app);
         Ok(Self {
@@ -365,7 +366,7 @@ impl DriveAttachInfo {
             platform_backend: PlatformDriveBackend::current(),
             future_actions: future_actions(),
             required_action_telemetry: required_action_telemetry(),
-            note: "Drive is an optional app-driver layer; it observes Auditaur discovery metadata and sends bounded requests through the Tauri-native in-app driver instead of CDP.".to_string(),
+            note: "Drive is an optional app-driver layer; it observes Auditaur discovery metadata and sends bounded requests through the Tauri-native in-app driver.".to_string(),
         })
     }
 }
@@ -491,7 +492,7 @@ impl PlatformDriveBackend {
                 selector_backend: "tauri_in_app_driver",
                 status: "supported_with_drive_bridge",
                 selector_actions_supported: true,
-                guidance: "macOS Tauri apps use WKWebView, so Auditaur drive uses the explicit Tauri-native in-app driver instead of CDP.".to_string(),
+                guidance: "macOS Tauri apps use WKWebView; Auditaur drive uses the explicit Tauri-native in-app driver.".to_string(),
                 fallback: "none",
             },
             "windows" => Self {
@@ -544,10 +545,11 @@ fn unavailable_cdp(cdp_port: Option<u16>, reason: String) -> CdpAttachInfo {
         reason: Some(reason),
         launch_hint: launch_hint(cdp_port),
         target_binding_status: "unavailable".to_string(),
-        target_binding_note: "No CDP endpoint was available to bind to the observed app."
-            .to_string(),
+        target_binding_note:
+            "Drive requests bind to the observed app through the Tauri-native bridge.".to_string(),
         target_ownership_status: "unavailable".to_string(),
-        target_ownership_note: "No CDP endpoint was available to prove ownership.".to_string(),
+        target_ownership_note:
+            "Drive ownership is proven through the Auditaur session bridge when active.".to_string(),
         target_discovery_error: None,
         targets: Vec::new(),
     }
@@ -1383,7 +1385,7 @@ fn action_result(
 fn launch_hint(cdp_port: Option<u16>) -> String {
     if let Some(port) = cdp_port {
         format!(
-            "--cdp-port {port} is ignored by `auditaur drive`; enable driveBridge in the frontend and rerun without a browser debugging endpoint."
+            "Legacy flag --cdp-port {port} was accepted for compatibility. Enable driveBridge in the frontend and use the Tauri-native drive bridge."
         )
     } else {
         "Auditaur drive uses the Tauri-native in-app driver; enable initAuditaur({ driveBridge: true }) in a debug/test WebView.".to_string()
@@ -1414,7 +1416,7 @@ fn future_actions() -> Vec<DriverActionSpec> {
             name: "screenshot",
             selector_required: false,
             mutates_app: false,
-            description: "capture a PNG screenshot through native window capture, falling back to a DOM text summary PNG",
+            description: "capture a PNG screenshot through native WebView capture, falling back to native window or DOM summary capture",
         },
         DriverActionSpec {
             name: "hover",
@@ -1611,9 +1613,8 @@ mod tests {
             assert_eq!(backend.webview_engine, "WKWebView");
             assert_eq!(backend.status, "supported_with_drive_bridge");
             assert_eq!(backend.selector_actions_supported, true);
-            assert!(backend
-                .guidance
-                .contains("Tauri-native in-app driver instead of CDP"));
+            assert!(backend.guidance.contains("Tauri-native in-app driver"));
+            assert!(!backend.guidance.contains("CDP"));
             assert_eq!(backend.fallback, "none");
         } else {
             assert_eq!(backend.selector_backend, "tauri_in_app_driver");

@@ -225,7 +225,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "auditaur-collector"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "auditaur-core",
  "rusqlite",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "auditaur-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "directories",
  "serde",
@@ -4143,12 +4143,18 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-auditaur"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "auditaur-collector",
  "auditaur-core",
  "base64 0.22.1",
+ "block2",
  "directories",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",
@@ -4158,12 +4164,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webview2-com",
+ "windows 0.61.3",
  "xcap",
 ]
 
 [[package]]
 name = "tauri-plugin-auditaur-macros"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",

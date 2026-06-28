@@ -24,6 +24,16 @@ Click each button in the app. The failing-command button is intentionally useful
 
 The dogfood commands also opt into Auditaur's Tauri IPC trace context bridge. The frontend invoke wrapper sends W3C `traceparent` through Tauri invoke request headers plus the reserved `auditaurTraceContext` compatibility argument, and the Rust commands use `#[tauri_plugin_auditaur::auditaur_command]` to attach backend spans to the frontend invoke trace without command-name or timestamp heuristics.
 
+The dogfood frontend enables the Tauri-native drive bridge in its single main WebView. Agents can use it to exercise selector actions and targeted screenshots:
+
+```powershell
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json inspect
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json exists --selector "#successful-command" --visible-only
+cargo run -p auditaur-cli -- drive --app auditaur-dogfood --active --json screenshot --selector ".card .actions" --output dogfood-actions.png
+```
+
+Selector screenshots should report `screenshotBackend=tauri_native_webview_snapshot`, `screenshotScope=selector`, and `selectorRect` when native WebView capture succeeds.
+
 Manual smoke path:
 
 1. Emit console log.

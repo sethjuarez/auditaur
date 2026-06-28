@@ -30,8 +30,8 @@ class FakeElement {
     return [{ width: 1, height: 1 }];
   }
 
-  getBoundingClientRect(): { left: number; top: number; width: number; height: number } {
-    return { left: 0, top: 0, width: 10, height: 10 };
+  getBoundingClientRect(): { x: number; y: number; left: number; top: number; width: number; height: number } {
+    return { x: 0, y: 0, left: 0, top: 0, width: 10, height: 10 };
   }
 
   scrollIntoView(): void {}
@@ -131,7 +131,7 @@ function installDom(elements: FakeElement[]): void {
     configurable: true,
   });
   Object.defineProperty(globalThis, 'window', {
-    value: { innerWidth: 800, innerHeight: 600 },
+    value: { innerWidth: 800, innerHeight: 600, devicePixelRatio: 1 },
     configurable: true,
   });
 }
@@ -281,17 +281,26 @@ describe('drive bridge selector operations', () => {
     target.innerText = 'Selected text';
     installDom([target]);
     let invokedWindowLabel: string | undefined;
-    setDriveBridgeNativeScreenshotInvokerForTests(async (windowLabel) => {
+    setDriveBridgeNativeScreenshotInvokerForTests(async ({ windowLabel, targetRect }) => {
       invokedWindowLabel = windowLabel;
+      expect(targetRect).toEqual({
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        viewportWidth: 800,
+        viewportHeight: 600,
+        devicePixelRatio: 1,
+      });
       return {
         format: 'png',
         pngBase64: 'bmF0aXZlLXBuZw==',
         width: 640,
         height: 480,
-        screenshotBackend: 'tauri_native_window_xcap',
+        screenshotBackend: 'tauri_native_webview_snapshot',
+        screenshotScope: 'selector',
         windowLabel: 'main',
         windowTitle: 'Dogfood',
-        nativeWindowId: 42,
       };
     });
 
@@ -307,9 +316,17 @@ describe('drive bridge selector operations', () => {
       width: 640,
       height: 480,
       selector: '#target',
-      screenshotBackend: 'tauri_native_window_xcap',
-      screenshotScope: 'window',
-      nativeWindowId: 42,
+      screenshotBackend: 'tauri_native_webview_snapshot',
+      screenshotScope: 'selector',
+      selectorRect: {
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        viewportWidth: 800,
+        viewportHeight: 600,
+        devicePixelRatio: 1,
+      },
     });
     expect(screenshot.snapshot).toMatchObject({
       title: 'Dogfood',
