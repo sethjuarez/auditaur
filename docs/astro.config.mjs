@@ -4,6 +4,9 @@ import starlight from "@astrojs/starlight";
 
 export default defineConfig({
   site: "https://auditaur.dev",
+  markdown: {
+    gfm: true,
+  },
   integrations: [
     starlight({
       title: "Auditaur",
