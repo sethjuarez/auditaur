@@ -8,7 +8,7 @@ sidebar:
 import { Aside, Badge } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="MVP in progress">
-  Auditaur is early-stage software. The storage layer, CLI read path, discovery, Tauri plugin, frontend package, Rust tracing layer, OpenTelemetry JS span exporter, MCP server, retention pruning, redaction, startup and runtime window lifecycle capture, and dogfood example are implemented and published. OTLP receiver/sidecar, metrics, screenshots/devtools actions, OpenTelemetry logs SDK support, and automatic OpenTelemetry JS instrumentation setup are still pending.
+  Auditaur is early-stage software. The storage layer, CLI read path, discovery, Tauri plugin, frontend package, Rust tracing layer, OpenTelemetry JS span exporter, MCP server, retention pruning, redaction, startup and runtime window lifecycle capture, Tauri-native drive bridge, screenshots/snapshots, and dogfood example are implemented and published. OTLP receiver/sidecar, metrics, browser devtools actions, OpenTelemetry logs SDK support, and automatic OpenTelemetry JS instrumentation setup are still pending.
 </Aside>
 
 ## What is Auditaur?
@@ -31,9 +31,20 @@ The goal is to make Tauri debugging easy for both humans and coding agents: inst
 | IPC and event views | <Badge text="Implemented" variant="success" /> |
 | Timeline, explain, tail, and bundle CLI workflows | <Badge text="Implemented" variant="success" /> |
 | Window state views | <Badge text="Startup + lifecycle" variant="success" /> |
+| Tauri-native drive bridge and screenshots | <Badge text="Implemented" variant="success" /> |
 | Rust panic diagnostics | <Badge text="Implemented" variant="success" /> |
 | Retention and redaction | <Badge text="Implemented" variant="success" /> |
-| OTLP receiver, metrics, screenshots, devtools actions, OTEL logs SDK | <Badge text="Planned" variant="default" /> |
+| OTLP receiver, metrics, browser devtools actions, OTEL logs SDK | <Badge text="Planned" variant="default" /> |
+
+## Where to start
+
+| Goal | Start here |
+| --- | --- |
+| Try Auditaur in the bundled app | [Quick Start](/getting-started/quick-start/) |
+| Add Auditaur to an existing Tauri app | [Integration Happy Path](/getting-started/integration-happy-path/) |
+| Understand the moving parts | [Architecture](/concepts/architecture/) |
+| Debug a broken setup | [Troubleshooting](/reference/troubleshooting/) |
+| Run common command sequences | [CLI Recipes](/reference/cli-recipes/) |
 
 ## Security posture
 

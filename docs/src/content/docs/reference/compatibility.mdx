@@ -1,0 +1,77 @@
+---
+title: Compatibility
+description: Current package versions and how to keep Auditaur components aligned.
+---
+
+Auditaur has Rust crates, an npm frontend package, a CLI binary, and app-side runtime code. Keep them from the same release line when possible.
+
+## Current versions
+
+| Component | Install name | Current documented version |
+| --- | --- | --- |
+| CLI binary | `cargo install auditaur-cli` | `0.4.0` |
+| Tauri plugin | `tauri-plugin-auditaur` | `0.4.0` |
+| Frontend SDK | `@auditaur/api` | `0.5.1` |
+| Core/collector crates | `auditaur-core`, `auditaur-collector` | `0.4.0` |
+| Macro crate | `tauri-plugin-auditaur-macros` | `0.4.0` |
+
+## Recommended app pins
+
+```toml
+[dependencies]
+tauri-plugin-auditaur = "0.4.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+```powershell
+npm install @auditaur/api@0.5.1
+```
+
+## What should match?
+
+| Pair | Why it matters |
+| --- | --- |
+| CLI and Rust plugin | They share SQLite schema expectations, discovery metadata, health checks, and drive bridge status interpretation. |
+| Rust plugin and frontend SDK | They share the frontend export command, record envelopes, trace propagation carriers, and drive bridge protocol. |
+| Plugin and macro crate | `tauri-plugin-auditaur` re-exports macros; release automation keeps the macro crate and plugin crate aligned. |
+
+## Signs of version skew
+
+Run:
+
+```powershell
+auditaur health --json
+auditaur doctor --db "<databasePath>" --json
+```
+
+Version skew commonly appears as schema validation failures, capability warnings, frontend export failures, missing drive bridge fields, or unsupported bridge action compatibility messages.
+
+## Source checkout development
+
+Inside the Auditaur repository, use source commands when testing local changes:
+
+```powershell
+cargo run -p auditaur-cli -- doctor
+cargo run -p auditaur-cli -- apps --json
+
+cd packages\api
+npm run build
+```
+
+For the dogfood app, build the local frontend package before starting Tauri:
+
+```powershell
+cd examples\dogfood
+npm install
+npm run build:api
+npm run tauri dev
+```
+
+## Updating an app
+
+1. Update the Rust plugin version in `src-tauri\Cargo.toml`.
+2. Update `@auditaur/api` in the frontend package manager lockfile.
+3. Restart the Tauri dev process so a fresh session is created.
+4. Run `auditaur doctor tauri --path src-tauri --json`.
+5. Run `auditaur apps --json` and confirm the active session is readable and schema-valid.

@@ -24,7 +24,7 @@ In your Tauri app's Rust crate:
 
 ```toml
 [dependencies]
-tauri-plugin-auditaur = "0.2.5"
+tauri-plugin-auditaur = "0.4.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -34,7 +34,7 @@ For the complete app setup, including capabilities, Rust registration, frontend 
 ## Add the frontend package
 
 ```powershell
-npm install @auditaur/api@0.4.0
+npm install @auditaur/api@0.5.1
 ```
 
 ## Source checkout development
@@ -89,7 +89,7 @@ Without installing the CLI from crates.io, point the MCP client at Cargo:
     "auditaur": {
       "command": "cargo",
       "args": ["run", "-p", "auditaur-cli", "--", "mcp"],
-      "cwd": "D:\\projects\\auditaur"
+      "cwd": "C:\\path\\to\\auditaur"
     }
   }
 }

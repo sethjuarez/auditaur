@@ -1,0 +1,102 @@
+---
+title: Troubleshooting
+description: Symptom-driven fixes for common Auditaur setup and runtime problems.
+---
+
+Start with the narrowest command that describes the failure, then move outward.
+
+| Symptom | Check | Likely cause | Fix |
+| --- | --- | --- | --- |
+| `auditaur apps --json` returns no apps | Run the Tauri app in development mode | The plugin is not registered, the app has not started, or `AUDITAUR_DATA_DIR` points somewhere else | Register the plugin, restart the app, and remove test-only `AUDITAUR_DATA_DIR` overrides unless intentional |
+| App appears but `status` is `stale` | Inspect `lastHeartbeatUnixNanos` and `databasePath` | The app exited, rebuilt, crashed, or a Tauri watcher restarted it | Restart the app, then use the newest active session or pass `--active` |
+| `databaseReadable` is false | Run `auditaur doctor --db "<databasePath>"` | The database path is missing, locked by another process, or not readable | Restart the app and check filesystem permissions for the local Auditaur data directory |
+| `schemaValid` is false | Run `auditaur doctor --db "<databasePath>" --json` | CLI and plugin versions disagree about the SQLite schema | Update the CLI and app packages together, then start a fresh session |
+| `auditaur health --json` reports capability skew | Compare installed package versions | The frontend package, Rust plugin, or CLI came from different release lines | Use [Compatibility](/reference/compatibility/) and align versions |
+| Frontend logs or errors are missing | Run `auditaur logs --json` and `auditaur errors --json` after a UI action | Frontend initialization did not run, capability permission is missing, or export failed | Initialize `@auditaur/api` once, add `auditaur:default`, and surface `onExportError` during development |
+| Invoke rows are missing | Search for direct `@tauri-apps/api/core` imports | Calls bypass Auditaur's `invoke` wrapper | Export `auditaur.invoke` from a local wrapper and migrate imports gradually |
+| Backend spans are not children of frontend invoke spans | Run `auditaur explain --trace <traceId> --json` | Backend command did not opt into IPC trace continuation | Prefer `#[tauri_plugin_auditaur::auditaur_command]` on app-owned commands |
+| `drive inspect` reports no active bridge | Run `auditaur debug --require-drive-bridge --json watch --until-ready` | `driveBridge` is disabled, enabled in the wrong window, or stale | Enable `driveBridge` in exactly one dev/test WebView and restart the app |
+| Selector drive actions fail but bridge is active | Run `drive snapshot` or `drive text` against a broad selector | Selector is wrong, hidden, duplicated, or not visible yet | Use `wait --selector`, add `--visible-only`, or target a stable test id |
+| Multiple sessions are found | Run `auditaur apps --json` | Old dev sessions are still discoverable | Pass `--active`, `--latest`, `--session-id`, `--instance-id`, `--pid`, or `--db` explicitly |
+| Reports contain too much data | Check command `--limit` and payload options | Full payload capture or broad queries can include more context than needed | Keep `captureFullPayloads: false`, use `--limit`, and review bundles before sharing |
+
+## First command sequence
+
+Use this sequence when you do not yet know where the failure is:
+
+```powershell
+auditaur doctor
+auditaur apps --json
+auditaur health --json
+auditaur errors --json
+auditaur exceptions --json
+auditaur traces --failed --json
+auditaur ipc --failed --json
+```
+
+If the app is missing, focus on plugin registration and startup. If the app is active but telemetry is missing, focus on frontend initialization and capability permissions. If telemetry exists but causality is unclear, inspect traces and backend command instrumentation.
+
+## Discovery problems
+
+Discovery files live under the local Auditaur data directory:
+
+| Platform | Discovery directory |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\auditaur\apps` |
+| macOS | `~/Library/Application Support/auditaur/apps` |
+| Linux | `~/.local/share/auditaur/apps` |
+
+Each discovery file points to a SQLite session database. Test scripts may set `AUDITAUR_DATA_DIR` to isolate a run; unset it when returning to normal local debugging.
+
+## Frontend export problems
+
+The frontend package exports batches by calling the Tauri plugin command allowed by `auditaur:default`. Add an `onExportError` callback while integrating:
+
+```ts
+await initAuditaur({
+  serviceName: 'my-tauri-app',
+  onExportError(failure) {
+    console.warn('Auditaur export failed', failure.error);
+  },
+});
+```
+
+If this callback fires, fix the underlying Tauri capability, plugin registration, or app startup issue instead of ignoring the failure.
+
+## Trace stitching problems
+
+A healthy wrapped invoke has:
+
+| Row | Expected shape |
+| --- | --- |
+| Frontend span | `name = "tauri.invoke load_user"` with a generated `trace_id` and `span_id`. |
+| IPC row | `command = "load_user"` with the same trace/span ids as the frontend span. |
+| Backend span | Same `trace_id`, `parent_span_id` equal to the frontend span id. |
+
+Use:
+
+```powershell
+auditaur trace <traceId> --json
+auditaur timeline --trace <traceId> --json
+auditaur explain --trace <traceId> --json
+```
+
+If the frontend span exists without a backend child, use `auditaur_command` or the lower-level `instrument_ipc` helper.
+
+## Drive bridge problems
+
+Drive actions use the Tauri-native in-app bridge. They do not require browser debugging.
+
+```powershell
+auditaur debug --app my-tauri-app --active --require-drive-bridge --json watch --until-ready
+auditaur drive --app my-tauri-app --active --json inspect
+```
+
+`drive inspect` should report `selectorBackend=tauri_in_app_driver` and a bridge target such as `targetId=auditaur-bridge`. If the bridge is active but a selector fails, try a read-only diagnostic first:
+
+```powershell
+auditaur drive --app my-tauri-app --active --json snapshot --selector body --output page.json
+auditaur drive --app my-tauri-app --active --json text --selector "body" --visible-only
+```
+
+Review snapshots before sharing because they can include local DOM text and URLs.

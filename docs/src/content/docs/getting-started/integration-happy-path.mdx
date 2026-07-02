@@ -1,0 +1,198 @@
+---
+title: Integration Happy Path
+description: A single end-to-end path from install to verified Auditaur telemetry in a Tauri app.
+sidebar:
+  order: 2
+---
+
+Use this path when you want the shortest reliable route from an existing Tauri v2 app to useful Auditaur data.
+
+## 1. Install the CLI
+
+```powershell
+cargo install auditaur-cli
+auditaur doctor
+```
+
+`auditaur doctor` should complete without requiring an app to be running. It checks the local Auditaur data directory and any readable discovered databases.
+
+## 2. Add the Rust plugin
+
+In `src-tauri\Cargo.toml`:
+
+```toml
+[dependencies]
+tauri-plugin-auditaur = "0.4.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+Register the tracing layer and plugin before running Tauri:
+
+```rust
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+fn main() {
+    tracing_subscriber::registry()
+        .with(tauri_plugin_auditaur::tracing_layer())
+        .init();
+
+    tauri::Builder::default()
+        .plugin(
+            tauri_plugin_auditaur::Builder::new()
+                .service_name("my-tauri-app")
+                .session_name("dev")
+                .redact_defaults(true)
+                .max_session_bytes(256 * 1024 * 1024)
+                .build(),
+        )
+        .run(tauri::generate_context!())
+        .expect("failed to run app");
+}
+```
+
+Release builds are blocked by default. Only opt into release collection after reviewing privacy, consent, retention, and export behavior.
+
+## 3. Allow the frontend command
+
+Add `auditaur:default` to the app capability used by your WebView:
+
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": ["core:default", "auditaur:default"]
+}
+```
+
+Without this permission, the frontend package cannot export telemetry batches to the plugin.
+
+## 4. Add the frontend package
+
+```powershell
+npm install @auditaur/api@0.5.1
+```
+
+Initialize Auditaur once near app startup:
+
+```ts
+import { initAuditaur } from '@auditaur/api';
+
+export const auditaur = await initAuditaur({
+  serviceName: 'my-tauri-app',
+  instrumentConsole: true,
+  instrumentErrors: true,
+  instrumentTauriInvoke: true,
+  propagateTauriInvokeTraceContext: true,
+  instrumentTauriEvents: true,
+  captureFullPayloads: false,
+});
+```
+
+Console and error capture are enabled by default. Full payload capture is disabled by default.
+
+## 5. Route Tauri calls through Auditaur
+
+Auditaur does not monkey-patch `@tauri-apps/api/core`. Use a local wrapper and migrate imports gradually:
+
+```ts
+// src\services\tauri.ts
+import { initAuditaur } from '@auditaur/api';
+
+const auditaur = await initAuditaur({ serviceName: 'my-tauri-app' });
+
+export const invoke = auditaur.invoke;
+export const emit = auditaur.emit;
+export const emitTo = auditaur.emitTo;
+export const listen = auditaur.listen;
+export const flushAuditaur = () => auditaur.flush();
+```
+
+```diff
+- import { invoke } from '@tauri-apps/api/core';
++ import { invoke } from './services/tauri';
+```
+
+Direct Tauri imports still work, but Auditaur cannot record invoke spans or propagate trace context until calls go through the wrapper.
+
+## 6. Stitch high-value backend commands
+
+Use `auditaur_command` for commands where frontend-to-backend causality matters:
+
+```rust
+#[tauri_plugin_auditaur::auditaur_command]
+fn load_user(id: String) -> Result<String, String> {
+    tracing::info!(user.id = %id, "loading user");
+    Ok(id)
+}
+```
+
+If a command must keep an explicit `#[tauri::command]`, use `#[tauri_plugin_auditaur::instrument_ipc]` with an optional `auditaur_trace_context: Option<IpcTraceContext>` parameter.
+
+## 7. Run and verify
+
+Start the app with its normal command:
+
+```powershell
+npm run tauri dev
+```
+
+Exercise the UI, then run:
+
+```powershell
+auditaur doctor tauri --path src-tauri --json
+auditaur apps --json
+auditaur health --json
+auditaur logs --json
+auditaur errors --json
+auditaur traces --json
+auditaur ipc --json
+auditaur events --json
+```
+
+Healthy discovery has this shape:
+
+```json
+[
+  {
+    "serviceName": "my-tauri-app",
+    "status": "active",
+    "databaseReadable": true,
+    "schemaValid": true,
+    "databasePath": "..."
+  }
+]
+```
+
+If more than one active session exists, copy `databasePath` from `auditaur apps --json` and pass it explicitly:
+
+```powershell
+auditaur logs --db "<databasePath>" --json
+auditaur traces --db "<databasePath>" --json
+auditaur explain --db "<databasePath>" --json
+```
+
+## 8. Optional: enable drive checks
+
+Enable the Tauri-native drive bridge only in development or test builds:
+
+```ts
+await initAuditaur({
+  serviceName: 'my-tauri-app',
+  driveBridge: {
+    windowLabel: 'main',
+    pollIntervalMs: 100,
+  },
+});
+```
+
+Then verify bridge readiness and selector behavior:
+
+```powershell
+auditaur debug --app my-tauri-app --active --require-drive-bridge --json watch --until-ready
+auditaur drive --app my-tauri-app --active --json inspect
+auditaur drive --app my-tauri-app --active --json exists --selector "#ready" --visible-only
+```
+
+If a step fails, use [Troubleshooting](/reference/troubleshooting/).

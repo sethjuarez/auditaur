@@ -2,7 +2,7 @@
 title: Add Auditaur to a Tauri App
 description: Install Auditaur in an existing Tauri v2 app.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 Use this guide when you already have a Tauri v2 app and want Auditaur telemetry available to humans and coding agents.
@@ -11,8 +11,8 @@ Current published packages:
 
 | Package | Version |
 | --- | --- |
-| `tauri-plugin-auditaur` | `0.2.5` |
-| `@auditaur/api` | `0.4.0` |
+| `tauri-plugin-auditaur` | `0.4.0` |
+| `@auditaur/api` | `0.5.1` |
 
 ## 1. Install the CLI
 
@@ -27,7 +27,7 @@ In `src-tauri\Cargo.toml`:
 
 ```toml
 [dependencies]
-tauri-plugin-auditaur = "0.2.5"
+tauri-plugin-auditaur = "0.4.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -74,7 +74,7 @@ In `src-tauri\capabilities\default.json`, include `auditaur:default`:
 ## 4. Add the frontend package
 
 ```powershell
-npm install @auditaur/api@0.4.0
+npm install @auditaur/api@0.5.1
 ```
 
 Initialize Auditaur once near app startup:

@@ -1,0 +1,99 @@
+---
+title: CLI Recipes
+description: Common Auditaur command sequences for day-to-day debugging.
+---
+
+These recipes assume exactly one active readable Auditaur session. If commands report ambiguity, copy `databasePath` from `auditaur apps --json` and add `--db "<databasePath>"`.
+
+## Inspect the latest active app
+
+```powershell
+auditaur apps --json
+auditaur health --json
+auditaur sessions --json
+```
+
+Use this before deeper debugging. `apps` tells you what Auditaur discovered; `health` summarizes database readability, schema validity, heartbeat state, churn, and capability skew.
+
+## Triage a fresh failure
+
+```powershell
+auditaur errors --json
+auditaur exceptions --json
+auditaur traces --failed --json
+auditaur ipc --failed --json
+auditaur events --json
+```
+
+Start with grouped exceptions and failed IPC. Move to traces when you need causality.
+
+## Explain one failing trace
+
+```powershell
+auditaur trace <traceId> --json
+auditaur timeline --trace <traceId> --json
+auditaur explain --trace <traceId>
+```
+
+Use `trace` for structured detail, `timeline` for chronological context, and `explain` for obvious failure findings.
+
+## Watch readiness while a developer starts the app
+
+```powershell
+npm run tauri dev
+auditaur debug --app my-tauri-app --active --require-frontend --json watch --until-ready
+```
+
+Use attach mode when the developer owns the app process. Add `--require-drive-bridge` when selector actions must be available before the run is considered ready.
+
+## Start the app under observation
+
+```powershell
+auditaur debug --app my-tauri-app --active --require-frontend --json run --timeout-seconds 180 -- npm run tauri dev
+```
+
+Use wrapper mode when an agent or script owns startup but should leave the app running after readiness for inspection.
+
+## Run a pass/fail confidence drill
+
+```powershell
+auditaur drill run --app my-tauri-app --require-drive-bridge --selector "#ready" --expect-text "Ready" -- npm run tauri dev
+```
+
+Use drill mode when Auditaur should start the app, wait for a fresh session, check readiness, optionally drive one selector/text assertion, write a report, and clean up the app process tree.
+
+## Verify the Tauri-native drive bridge
+
+```powershell
+auditaur debug --app my-tauri-app --active --require-drive-bridge --json watch --until-ready
+auditaur drive --app my-tauri-app --active --json inspect
+auditaur drive --app my-tauri-app --active --json exists --selector "#ready" --visible-only
+auditaur drive --app my-tauri-app --active --json screenshot --selector "#ready" --output ready.png
+```
+
+Use read-style actions before mutating the UI. Selector screenshots first try native WebView capture and crop the selected element when possible.
+
+## Produce a GitHub issue draft
+
+```powershell
+auditaur exceptions --json
+auditaur exceptions --fingerprint <id> --markdown --output issue.md
+```
+
+Review and redact the generated Markdown before posting it outside the machine.
+
+## Produce a bounded handoff bundle
+
+```powershell
+auditaur bundle --redacted --output auditaur-bundle.json
+```
+
+Bundles are intended for bug reports and agent handoffs. They are bounded and redacted, but you should still review local telemetry before sharing.
+
+## Query through MCP
+
+```powershell
+auditaur mcp
+```
+
+Use MCP when an agent can call tools directly. Use the CLI for quick local checks, scripts, and shell-friendly JSON.

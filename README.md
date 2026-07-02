@@ -11,18 +11,19 @@ Docs are configured for GitHub Pages at `auditaur.dev`; the domain resolves once
 Build the CLI and run the dogfood app:
 
 ```powershell
-cd D:\projects\auditaur
+cd C:\path\to\auditaur
 cargo build -p auditaur-cli
 
 cd examples\dogfood
 npm install
+npm run build:api
 npm run tauri dev
 ```
 
 Click every dogfood button, then inspect telemetry from another shell:
 
 ```powershell
-cd D:\projects\auditaur
+cd C:\path\to\auditaur
 $env:AUDITAUR_DATA_DIR = "$env:LOCALAPPDATA\auditaur"
 cargo run -p auditaur-cli -- apps --json
 cargo run -p auditaur-cli -- logs --json
@@ -63,7 +64,7 @@ MCP clients should point at the built binary or the cargo command above. The too
 - OpenTelemetry JS span exporter shim for existing tracer providers.
 - Recursive redaction and best-effort retention.
 
-Planned: OTLP receiver/sidecar, screenshots/devtools actions, metrics ingestion, OpenTelemetry logs SDK support, and a lightweight local dashboard.
+Planned: OTLP receiver/sidecar, browser devtools actions, metrics ingestion, OpenTelemetry logs SDK support, and a lightweight local dashboard.
 
 ## Package status
 

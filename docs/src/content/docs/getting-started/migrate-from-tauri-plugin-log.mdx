@@ -2,7 +2,7 @@
 title: Migrate from tauri-plugin-log
 description: Replace file-oriented logging with local Auditaur telemetry.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Use this guide when an existing Tauri app already uses `tauri-plugin-log`, frontend console capture, JSONL traces, or manually collected logs.
@@ -46,7 +46,7 @@ Add Auditaur in `src-tauri\Cargo.toml`:
 
 ```toml
 [dependencies]
-tauri-plugin-auditaur = "0.2.5"
+tauri-plugin-auditaur = "0.4.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -84,7 +84,7 @@ Add `auditaur:default` to `src-tauri\capabilities\default.json`:
 Install the frontend package:
 
 ```powershell
-npm install @auditaur/api@0.4.0
+npm install @auditaur/api@0.5.1
 ```
 
 Create a local wrapper such as `src\services\tauri.ts`:
