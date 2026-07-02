@@ -5,7 +5,7 @@ This is a small Tauri v2 app for manually generating telemetry through the Audit
 ## Run it
 
 ```powershell
-cd D:\projects\auditaur\examples\dogfood
+cd C:\path\to\auditaur\examples\dogfood
 npm install
 npm run build:api
 npm run tauri dev

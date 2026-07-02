@@ -5,7 +5,7 @@ description: Run the dogfood Tauri app and inspect its local telemetry.
 
 The fastest way to try Auditaur is the dogfood app in `examples\dogfood`.
 
-To add Auditaur to an existing app instead, start with [Add Auditaur to a Tauri App](/getting-started/add-to-tauri-app/). If you are replacing `tauri-plugin-log`, use [Migrate from tauri-plugin-log](/getting-started/migrate-from-tauri-plugin-log/).
+To add Auditaur to an existing app instead, start with [Integration Happy Path](/getting-started/integration-happy-path/). If you need the detailed app integration checklist, use [Add Auditaur to a Tauri App](/getting-started/add-to-tauri-app/). If you are replacing `tauri-plugin-log`, use [Migrate from tauri-plugin-log](/getting-started/migrate-from-tauri-plugin-log/).
 
 ```powershell
 cd examples\dogfood
@@ -47,3 +47,5 @@ cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
 Use `cargo run -p auditaur-cli -- mcp` to expose the same database-backed tools to an MCP client.
 
 For repeatable smoke checks that start the app, wait for readiness, verify a selector, write a report, and clean up the app automatically, use [Drill Confidence Runs](/getting-started/drill-confidence-runs/).
+
+If a command does not show what you expect, use [Troubleshooting](/reference/troubleshooting/) or jump to [CLI Recipes](/reference/cli-recipes/) for common command sequences.
