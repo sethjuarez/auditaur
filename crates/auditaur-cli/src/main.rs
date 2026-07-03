@@ -37,6 +37,16 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Start {
+        #[arg(long, default_value_os_t = commands::workflow::default_config_path())]
+        config: PathBuf,
+        #[arg(long, default_value_os_t = commands::workflow::default_session_path())]
+        write_session: PathBuf,
+        #[arg(long)]
+        json: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     Debug {
         #[command(flatten)]
         args: DebugArgs,
@@ -51,7 +61,29 @@ enum Command {
     },
     Drill {
         #[command(subcommand)]
-        command: DrillCommand,
+        command: Option<DrillCommand>,
+        #[arg()]
+        name: Option<String>,
+        #[arg(long, default_value_os_t = commands::workflow::default_config_path())]
+        config: PathBuf,
+        #[arg(long, default_value_os_t = commands::workflow::default_session_path())]
+        session_file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Inspect {
+        #[arg(long, default_value_os_t = commands::workflow::default_session_path())]
+        session_file: PathBuf,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
+    Stop {
+        #[arg(long, default_value_os_t = commands::workflow::default_session_path())]
+        session_file: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     Sessions {
         #[arg(long)]
@@ -347,6 +379,8 @@ enum DebugCommand {
         interval_ms: u64,
         #[arg(long)]
         timeout_seconds: Option<u64>,
+        #[arg(long)]
+        write_session: Option<PathBuf>,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
@@ -631,6 +665,17 @@ fn inner_main() -> Result<()> {
         },
         Command::Apps { json } => commands::read::apps(json),
         Command::Health { json } => commands::health::run(json),
+        Command::Start {
+            config,
+            write_session,
+            json,
+            command,
+        } => commands::workflow::start(commands::workflow::StartOptions {
+            config,
+            write_session,
+            json,
+            command,
+        }),
         Command::Debug { args, command } => match command.unwrap_or(DebugCommand::Status) {
             DebugCommand::Status => commands::debug::status(args.selector(), args.json),
             DebugCommand::Watch {
@@ -647,17 +692,29 @@ fn inner_main() -> Result<()> {
             DebugCommand::Run {
                 interval_ms,
                 timeout_seconds,
+                write_session,
                 command,
-            } => commands::debug::run(
-                args.selector(),
-                interval_ms,
-                timeout_seconds,
-                args.json,
-                command,
-            ),
+            } => {
+                commands::debug::run(
+                    args.selector(),
+                    interval_ms,
+                    timeout_seconds,
+                    args.json,
+                    write_session,
+                    Vec::new(),
+                    command,
+                )?;
+                Ok(())
+            }
         },
-        Command::Drill { command } => match command {
-            DrillCommand::Run {
+        Command::Drill {
+            command,
+            name,
+            config,
+            session_file,
+            json,
+        } => match command {
+            Some(DrillCommand::Run {
                 app,
                 require_frontend,
                 require_drive_bridge,
@@ -669,7 +726,7 @@ fn inner_main() -> Result<()> {
                 script,
                 json,
                 command,
-            } => {
+            }) => {
                 let exit_code = commands::drill::run(commands::drill::DrillRunOptions {
                     app,
                     require_frontend,
@@ -681,6 +738,7 @@ fn inner_main() -> Result<()> {
                     expect_text,
                     script,
                     json,
+                    environment: Vec::new(),
                     command,
                 })?;
                 if exit_code != 0 {
@@ -688,7 +746,25 @@ fn inner_main() -> Result<()> {
                 }
                 Ok(())
             }
+            None => commands::workflow::drill(commands::workflow::DrillOptions {
+                config,
+                session_file,
+                name,
+                json,
+            }),
         },
+        Command::Inspect {
+            session_file,
+            json,
+            limit,
+        } => commands::workflow::inspect(commands::workflow::InspectOptions {
+            session_file,
+            json,
+            limit,
+        }),
+        Command::Stop { session_file, json } => {
+            commands::workflow::stop(commands::workflow::StopOptions { session_file, json })
+        }
         Command::Drive { args, command } => match command {
             None => {
                 let selector = args.selector();

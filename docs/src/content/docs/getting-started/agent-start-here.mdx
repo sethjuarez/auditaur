@@ -7,16 +7,16 @@ Use Auditaur data before asking a developer to paste logs, screenshots, browser 
 
 ## Agent mental model
 
-Auditaur observes the app. It does not replace the app's normal dev command, and agents should not invent commands such as `auditaur start`.
+Auditaur observes the app. It does not replace the app's normal dev command. For agent-owned workflows, use the repo's `.auditaur/config.json` plus the simple command contract: `auditaur start`, `auditaur drill`, `auditaur inspect`, and `auditaur stop`.
 
 | User phrase | Do this |
 | --- | --- |
 | "observe the app" | Attach to the already-running app and watch readiness. |
-| "start with Auditaur" | Start the normal app command under Auditaur observation with `debug run -- <normal command>`. |
-| "Auditaur start the app" | Treat this as "start the app under observation"; preserve the normal startup command. |
+| "start with Auditaur" | Run `auditaur start`, or use `debug run -- <normal command>` when no config exists yet. |
+| "Auditaur start the app" | Treat this as "start the app under observation"; preserve the normal startup command from config. |
 | "debug with Auditaur" | Check readiness first, then inspect logs, errors, timeline, traces, IPC, and events. |
 | "drive the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
-| "run a confidence drill" | Use `auditaur drill run -- <normal command>` so Auditaur owns startup, checks, report writing, and cleanup. |
+| "run a confidence drill" | Run `auditaur drill` for the configured default drill, or `auditaur drill <name>` for a named drill. |
 
 ## Install the agent skill
 
@@ -51,6 +51,47 @@ gh skill publish .github --dry-run
 ```
 
 `gh skill preview` reads from GitHub, so previewing `sethjuarez/auditaur` will only find `auditaur-debug` after the branch containing `.github/skills/auditaur-debug/SKILL.md` is pushed/merged.
+
+## Simplest agent workflow
+
+For first-run agent UX, keep startup and drills in one repo-local config:
+
+```json
+{
+  "app": "my-tauri-app",
+  "start": "npm run tauri dev",
+  "readiness": {
+    "frontend": true,
+    "driveBridge": true,
+    "timeoutSeconds": 180
+  },
+  "ports": {
+    "web": {
+      "env": "AUDITAUR_WEB_PORT"
+    }
+  },
+  "defaultDrill": "smoke",
+  "drills": {
+    "smoke": {
+      "selector": "#ready",
+      "expectText": "Ready"
+    }
+  }
+}
+```
+
+Then agents only need:
+
+```powershell
+auditaur start
+auditaur drill
+auditaur inspect
+auditaur stop
+```
+
+`start` writes `.auditaur/session.json` with exact session, instance, pid, database, and selector information. `drill` uses that session file when present; if no session file exists, it can run an owned drill using the configured start command and clean up like `drill run`.
+
+When the app supports configurable dev ports, declare named ports and reference them in `start` with `{{port:name}}`. `auditaur start` reserves a random local port for each name, sets the configured environment variable, expands the placeholders in the start command, and records the chosen ports in `.auditaur/session.json`. This keeps concurrent agent sessions from fighting over one fixed Vite/Tauri dev port.
 
 ## Startup mode choice
 

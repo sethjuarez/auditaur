@@ -5,6 +5,19 @@ description: Common Auditaur command sequences for day-to-day debugging.
 
 These recipes assume exactly one active readable Auditaur session. If commands report ambiguity, copy `databasePath` from `auditaur apps --json` and add `--db "<databasePath>"`.
 
+## Simplest agent loop
+
+With `.auditaur\config.json` checked into the app repo, agents can use one session file and four commands:
+
+```powershell
+auditaur start
+auditaur drill
+auditaur inspect
+auditaur stop
+```
+
+Use `auditaur drill <name>` when the config defines multiple drills. `start` writes `.auditaur\session.json`; `drill`, `inspect`, and `stop` read it so agents do not need custom wrappers for readiness polling, session IDs, database paths, or process cleanup.
+
 ## Inspect the latest active app
 
 ```powershell
@@ -49,10 +62,10 @@ Use attach mode when the developer owns the app process. Add `--require-drive-br
 ## Start the app under observation
 
 ```powershell
-auditaur debug --app my-tauri-app --active --require-frontend --json run --timeout-seconds 180 -- npm run tauri dev
+auditaur debug --app my-tauri-app --require-frontend --require-drive-bridge --json run --timeout-seconds 180 --write-session .auditaur\session.json -- npm run tauri dev
 ```
 
-Use wrapper mode when an agent or script owns startup but should leave the app running after readiness for inspection.
+Use wrapper mode when an agent or script owns startup but should leave the app running after readiness for inspection. With `--app`, `debug run` ignores matching sessions that existed before spawn, waits for the newly started Auditaur session, and writes `.auditaur\session.json` with exact `sessionId`, `instanceId`, `pid`, `databasePath`, and selector arguments for follow-up commands. Prefer those exact selectors over `--active` or `--latest` in later automation.
 
 ## Run a pass/fail confidence drill
 
