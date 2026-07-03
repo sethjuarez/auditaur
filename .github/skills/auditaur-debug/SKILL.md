@@ -19,6 +19,7 @@ Translate common user phrases to the appropriate Auditaur workflow:
 | "debug the app with Auditaur" | Check readiness first, then inspect logs/timeline/traces/IPC. |
 | "drive the app" / "click in the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
 | "run a drill" / "smoke test the app" | Run `auditaur drill` for the configured default drill, or `auditaur drill <name>` for a named drill. |
+| "manual approval" / "human gate" / "OAuth consent" | Use a drill script gate so the app session stays pinned while the human action completes. |
 
 Preserve the app's normal startup command. Prefer the simple repo-configured flow when available:
 
@@ -161,12 +162,48 @@ auditaur explain --json
 
 Prefer `--session <id>`, `--db <path>`, `--active`, `--latest`, `--pid`, or `--instance-id` when there are stale or multiple sessions.
 
+## Human gates in drills
+
+Use drill human gates for workflows that require real human action while preserving the same pinned app session: OAuth/device-code approval, OS permission prompts, installer elevation, external browser handoffs, camera/mic permissions, hardware security keys, or any flow where an agent should pause instead of simulating trust-sensitive input.
+
+Add gates in a drill script and run the drill with `--script <path>`:
+
+```json
+{
+  "gates": [
+    {
+      "name": "Approve GitHub sign-in",
+      "instructions": "Complete the GitHub device-code approval in the app or browser, then return here.",
+      "selector": "#status-card",
+      "expectText": "Signed in",
+      "manualContinue": true,
+      "timeoutMs": 300000,
+      "choices": [
+        { "id": "done", "label": "Done", "outcome": "continue" },
+        { "id": "blocked", "label": "Blocked", "outcome": "fail" }
+      ]
+    }
+  ]
+}
+```
+
+Human gates run after Auditaur has spawned and pinned the new app session and reached readiness, but before selector/text/error/IPC/explain evidence collection. Do not restart the app or switch to a different session during the gate; the point is to keep pre-gate and post-gate evidence attached to the same session/database/pid. Gates can be selector-only monitored waits, manual continues, choices with `continue`/`retry`/`skip`/`fail`/`abort` outcomes, inputs, and clipboard hints. Sensitive inputs and clipboard values are redacted in drill reports by default, but local temporary gate response JSON can briefly contain raw input values until the drill consumes and removes it.
+
+When a gate requires a manual response, Auditaur also publishes a session-local request beside the pinned session database. Agents can list and answer these through MCP:
+
+```bash
+auditaur mcp
+```
+
+Use `list_pending_human_gates` to find pending gates and `respond_human_gate` with the `requestId`, optional `choiceId`, optional `inputs`, and a clear `responder` value. Run the MCP server with the same Auditaur data directory as the drill so it can see the session-local request files. If the Copilot canvas extension is installed with `auditaur init extension`, open the `auditaur-human-gate` canvas for the pending gate so the user gets an action card and can click a response. Terminal ENTER/choice input remains the fallback when no MCP or canvas client is available.
+
 ## Common failure patterns
 
 - No discovery file: app is still compiling, has not launched, or the Auditaur plugin is not registered.
 - Database not readable/schema invalid: app initialized partially or data directory is wrong.
 - No frontend telemetry: frontend API did not initialize, no frontend action has fired, or export failed in the UI.
 - Drive bridge inactive: enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView, otherwise use telemetry plus Accessibility fallback.
+- Pending human gate: do not bypass it with synthetic app state. Surface the gate instructions to the user, respond through the canvas/MCP/terminal path, then continue evidence collection on the same pinned session.
 - Target ambiguity: use `--target auditaur-bridge`; if multiple sessions match, disambiguate with `--session-id`, `--instance-id`, `--pid`, `--latest`, or `--active`.
 - JSON output contamination: use `debug run --json` from a current Auditaur CLI; child startup output should not appear in JSON lines.
 
@@ -176,7 +213,8 @@ For high-confidence changes:
 
 1. Run the relevant tests/builds.
 2. Launch or attach with `auditaur debug`.
-3. Drive a representative UI path through the Tauri-native bridge when UI coverage is needed.
-4. Re-check `debug status --require-frontend` when frontend telemetry matters.
-5. Inspect `timeline` and `explain`.
-6. Clean up spawned app processes and temporary telemetry directories.
+3. Run the configured `auditaur drill`; if it publishes a human gate, surface it through the canvas/MCP/terminal response path instead of replacing the manual action.
+4. Drive a representative UI path through the Tauri-native bridge when UI coverage is needed.
+5. Re-check `debug status --require-frontend` when frontend telemetry matters.
+6. Inspect `timeline` and `explain`.
+7. Clean up spawned app processes and temporary telemetry directories.

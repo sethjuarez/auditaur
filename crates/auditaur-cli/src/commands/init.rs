@@ -9,8 +9,12 @@ use serde::Serialize;
 use crate::commands::read;
 
 pub(crate) const AUDITAUR_DEBUG_SKILL: &str = include_str!("../../assets/auditaur-debug-skill.md");
+pub(crate) const AUDITAUR_GATE_EXTENSION: &str =
+    include_str!("../../assets/auditaur-gate-extension.mjs");
 const GITHUB_SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-debug", "SKILL.md"];
 const AGENTS_SKILL_RELATIVE_PATH: [&str; 4] = [".agents", "skills", "auditaur-debug", "SKILL.md"];
+const GITHUB_EXTENSION_RELATIVE_PATH: [&str; 4] =
+    [".github", "extensions", "auditaur-gate", "extension.mjs"];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +43,7 @@ pub fn skill(path: Option<&Path>, force: bool, agents_path: bool, json: bool) ->
             output.display()
         ));
     }
+
     let parent = output
         .parent()
         .ok_or_else(|| anyhow!("invalid skill output path: {}", output.display()))?;
@@ -60,6 +65,44 @@ pub fn skill(path: Option<&Path>, force: bool, agents_path: bool, json: bool) ->
     })
 }
 
+pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
+    let root = path
+        .map(PathBuf::from)
+        .unwrap_or(std::env::current_dir().context("failed to resolve current directory")?);
+    let output = GITHUB_EXTENSION_RELATIVE_PATH
+        .iter()
+        .fold(root, |path, segment| path.join(segment));
+    let existed = output.exists();
+    if existed && !force {
+        return Err(anyhow!(
+            "Auditaur gate canvas extension already exists at {}. Pass --force to overwrite it.",
+            output.display()
+        ));
+    }
+    let parent = output
+        .parent()
+        .ok_or_else(|| anyhow!("invalid extension output path: {}", output.display()))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create extension directory {}", parent.display()))?;
+    fs::write(&output, AUDITAUR_GATE_EXTENSION)
+        .with_context(|| format!("failed to write extension file {}", output.display()))?;
+    let result = InitSkillResult {
+        ok: true,
+        path: output.to_string_lossy().to_string(),
+        overwritten: existed,
+    };
+    read::print_json_or_table(json, &result, || {
+        println!(
+            "Installed Auditaur gate canvas extension at {}",
+            output.display()
+        );
+        if existed {
+            println!("Existing extension was overwritten.");
+        }
+        Ok(())
+    })
+}
+
 pub fn run(args: &[String]) -> Result<()> {
     let Some(command) = args.first() else {
         print_help();
@@ -69,9 +112,9 @@ pub fn run(args: &[String]) -> Result<()> {
         print_help();
         return Ok(());
     }
-    if command != "skill" {
+    if command != "skill" && command != "extension" {
         return Err(anyhow!(
-            "unknown init command '{}'. Expected 'skill'.",
+            "unknown init command '{}'. Expected 'skill' or 'extension'.",
             command
         ));
     }
@@ -94,14 +137,27 @@ pub fn run(args: &[String]) -> Result<()> {
             "--agents-path" => agents_path = true,
             "--json" => json = true,
             "--help" | "-h" => {
-                print_skill_help();
+                if command == "skill" {
+                    print_skill_help();
+                } else {
+                    print_extension_help();
+                }
                 return Ok(());
             }
-            unknown => return Err(anyhow!("unknown init skill option '{}'", unknown)),
+            unknown => return Err(anyhow!("unknown init {} option '{}'", command, unknown)),
         }
         index += 1;
     }
-    skill(path.as_deref(), force, agents_path, json)
+    match command.as_str() {
+        "skill" => skill(path.as_deref(), force, agents_path, json),
+        "extension" => {
+            if agents_path {
+                return Err(anyhow!("--agents-path is only supported by init skill"));
+            }
+            extension(path.as_deref(), force, json)
+        }
+        _ => unreachable!("validated init command"),
+    }
 }
 
 fn print_help() {
@@ -109,8 +165,13 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  skill  Install the Auditaur debug agent skill into a repository");
+    println!("  extension  Install the Auditaur gate canvas extension into a repository");
 }
 
 fn print_skill_help() {
     println!("Usage: auditaur init skill [--path <repo-root>] [--agents-path] [--force] [--json]");
+}
+
+fn print_extension_help() {
+    println!("Usage: auditaur init extension [--path <repo-root>] [--force] [--json]");
 }
