@@ -47,9 +47,9 @@ auditaur drill run --app my-app --require-drive-bridge --selector "#ready" --exp
 
 Before selector checks, `drill run` sends a selector-independent drive bridge ping. That separates "the bridge is missing or stale" from "the bridge is alive but this selector failed." Older frontend bridge clients that report `unsupported drive bridge action: ping` still count as a compatibility pass because the response proves the bridge action loop is alive.
 
-## Add setup and teardown hooks
+## Add setup, human gates, and teardown hooks
 
-Pass `--script <path>` when the app needs repeatable setup or cleanup around the run. Script files are JSON and currently support command hooks only. Commands are executed directly, not through a shell, and `cwd` must stay inside the current workspace or repository root.
+Pass `--script <path>` when the app needs repeatable setup, a manual human step, or cleanup around the run. Script files are JSON. Commands are executed directly, not through a shell, and `cwd` must stay inside the current workspace or repository root.
 
 ```json
 {
@@ -60,6 +60,20 @@ Pass `--script <path>` when the app needs repeatable setup or cleanup around the
       "args": ["run", "seed"],
       "timeoutMs": 30000,
       "cwd": "."
+    }
+  ],
+  "gates": [
+    {
+      "name": "Approve GitHub sign-in",
+      "instructions": "Complete the GitHub device-code approval in the app or browser, then return here.",
+      "selector": "#status-card",
+      "expectText": "Signed in",
+      "manualContinue": true,
+      "timeoutMs": 300000,
+      "choices": [
+        { "id": "done", "label": "Done", "outcome": "continue" },
+        { "id": "blocked", "label": "Blocked", "outcome": "fail" }
+      ]
     }
   ],
   "teardown": [
@@ -75,7 +89,9 @@ Pass `--script <path>` when the app needs repeatable setup or cleanup around the
 }
 ```
 
-Setup hooks run before the app starts. Teardown hooks run after built-in drill phases and app process cleanup, including failure paths. Hook stdout, stderr, exit code, duration, timeout status, cwd, command, and args are included in the redacted report.
+Setup hooks run before the app starts. Human gates run after Auditaur has pinned the new app session and reached readiness, but before evidence collection. Teardown hooks run after built-in drill phases and app process cleanup, including failure paths; later teardown hooks marked `"always": true` still run after an earlier teardown failure. Hook stdout, stderr, exit code, duration, timeout status, cwd, command, and args are included in the redacted report.
+
+For manual approval flows, use [Human-in-the-Loop Drills](/getting-started/human-in-the-loop-drills/) for fuller examples and the terminal, MCP, and canvas response options.
 
 ## Exit codes
 

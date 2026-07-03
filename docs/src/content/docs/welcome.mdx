@@ -8,7 +8,7 @@ sidebar:
 import { Aside, Badge } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="MVP in progress">
-  Auditaur is early-stage software. The storage layer, CLI read path, discovery, Tauri plugin, frontend package, Rust tracing layer, OpenTelemetry JS span exporter, MCP server, retention pruning, redaction, startup and runtime window lifecycle capture, Tauri-native drive bridge, screenshots/snapshots, and dogfood example are implemented and published. OTLP receiver/sidecar, metrics, browser devtools actions, OpenTelemetry logs SDK support, and automatic OpenTelemetry JS instrumentation setup are still pending.
+  Auditaur is early-stage software. The storage layer, CLI read path, discovery, Tauri plugin, frontend package, Rust tracing layer, OpenTelemetry JS span exporter, MCP server, retention pruning, redaction, startup and runtime window lifecycle capture, Tauri-native drive bridge, screenshots/snapshots, agent helper commands, human-in-the-loop drills, and dogfood example are implemented and published. OTLP receiver/sidecar, metrics, browser devtools actions, OpenTelemetry logs SDK support, and automatic OpenTelemetry JS instrumentation setup are still pending.
 </Aside>
 
 ## What is Auditaur?
@@ -30,6 +30,8 @@ The goal is to make Tauri debugging easy for both humans and coding agents: inst
 | App discovery | <Badge text="Implemented" variant="success" /> |
 | IPC and event views | <Badge text="Implemented" variant="success" /> |
 | Timeline, explain, tail, and bundle CLI workflows | <Badge text="Implemented" variant="success" /> |
+| Agent helper commands (`start`, `drill`, `inspect`, `stop`) | <Badge text="Implemented" variant="success" /> |
+| Human-in-the-loop drill gates | <Badge text="Implemented" variant="success" /> |
 | Window state views | <Badge text="Startup + lifecycle" variant="success" /> |
 | Tauri-native drive bridge and screenshots | <Badge text="Implemented" variant="success" /> |
 | Rust panic diagnostics | <Badge text="Implemented" variant="success" /> |
@@ -42,6 +44,8 @@ The goal is to make Tauri debugging easy for both humans and coding agents: inst
 | --- | --- |
 | Try Auditaur in the bundled app | [Quick Start](/getting-started/quick-start/) |
 | Add Auditaur to an existing Tauri app | [Integration Happy Path](/getting-started/integration-happy-path/) |
+| Give agents a simple startup and drill loop | [Agent Start Here](/getting-started/agent-start-here/) |
+| Validate OAuth, OS prompts, and other manual steps | [Human-in-the-Loop Drills](/getting-started/human-in-the-loop-drills/) |
 | Understand the moving parts | [Architecture](/concepts/architecture/) |
 | Debug a broken setup | [Troubleshooting](/reference/troubleshooting/) |
 | Run common command sequences | [CLI Recipes](/reference/cli-recipes/) |

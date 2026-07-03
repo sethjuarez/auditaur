@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(not(windows))]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
