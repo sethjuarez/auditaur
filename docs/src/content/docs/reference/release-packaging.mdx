@@ -52,7 +52,7 @@ Rust crates use release-plz:
 3. `release-plz.toml` sets `release_always = false`, so normal pushes only prepare release PRs and publishing happens from release PR merges.
 4. Merging the release PR runs release-plz publish for changed Rust crates.
 5. The release workflow verifies that `tauri-plugin-auditaur` depends on `tauri-plugin-auditaur-macros` at the same version before release-plz runs. Cargo and release-plz then use the workspace dependency graph, so the macro crate must be available before the plugin crate can publish.
-6. CI and release workflows run `python scripts/check-skill-drift.py` so `.github/skills/auditaur-debug/SKILL.md` and the packaged CLI asset at `crates/auditaur-cli/assets/auditaur-debug-skill.md` cannot drift.
+6. CI and release workflows run `python scripts/check-skill-drift.py` so the repo-shipped Auditaur skill/extension files and their packaged CLI assets cannot drift.
 7. Publishing requires a `CARGO_REGISTRY_TOKEN` repository secret until crates.io trusted publishing is configured for existing crates.
 8. The CLI is distributed through the `auditaur-cli` crate. Auditaur does not publish prebuilt GitHub release binaries because Tauri developers already need Rust and Cargo for normal app development.
 
@@ -82,7 +82,7 @@ For a single local preflight before a release, run:
 .\scripts\preflight-release.ps1
 ```
 
-This runs the skill drift check, Rust formatting and targeted tests, API tests/build, docs build, Rust workspace package verification, and `gh skill publish .github --dry-run` when GitHub CLI is available. Add `-IncludeDogfoodSmoke` to include the live Windows dogfood app pass, `-AllowDirtyPackage` while validating uncommitted local changes, or `-SkipGhSkillDryRun` when GitHub CLI is unavailable.
+This runs the packaged skill/extension drift check, Rust formatting and targeted tests, API tests/build, docs build, Rust workspace package verification, and `gh skill publish .github --dry-run` when GitHub CLI is available. Add `-IncludeDogfoodSmoke` to include the live Windows dogfood app pass, `-AllowDirtyPackage` while validating uncommitted local changes, or `-SkipGhSkillDryRun` when GitHub CLI is unavailable.
 
 The live dogfood app smoke is also available as a manual GitHub Actions workflow named **Dogfood Smoke**. It is intentionally `workflow_dispatch` only because it launches the Windows Tauri/WebView app and is heavier than normal PR validation.
 
@@ -96,7 +96,7 @@ The live dogfood app smoke is also available as a manual GitHub Actions workflow
    - Environment: leave blank unless this workflow is later updated to use one.
 2. Keep `CARGO_REGISTRY_TOKEN` available until crates.io trusted publishing is configured for all Rust crates.
 3. For the first release that includes `tauri-plugin-auditaur-macros`, confirm the release-plz run lists the macro crate before `tauri-plugin-auditaur`.
-4. Run `python scripts/check-skill-drift.py` after editing the Auditaur debug skill, or copy `.github\skills\auditaur-debug\SKILL.md` to `crates\auditaur-cli\assets\auditaur-debug-skill.md`.
+4. Run `python scripts/check-skill-drift.py` after editing the Auditaur debug skill or gate canvas extension, and keep their matching files in `crates\auditaur-cli\assets` identical.
 5. Run `.\scripts\preflight-release.ps1` before publishing release PRs. Use `-IncludeDogfoodSmoke` when a live Windows dogfood pass is appropriate.
 6. Before publishing the agent skill for real, review `gh skill publish .github --dry-run` warnings. Repo-level warnings such as secret scanning, push protection, and tag rulesets are GitHub repository settings, not code changes.
 7. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.

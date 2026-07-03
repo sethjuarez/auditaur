@@ -48,6 +48,8 @@ The server speaks stdio JSON-RPC and does not write non-MCP content to stdout. T
 | --- | --- | --- |
 | `doctor` | none | Accepts optional `db`. |
 | `get_health` | none | Reads local discovery files and reports heartbeat, database/schema, and collector capability health. |
+| `list_pending_human_gates` | none | Lists pending, unexpired `drill run` human gate requests published beside pinned session databases for agent/UI approval. Run the MCP server with the same Auditaur data directory as the drill. |
+| `respond_human_gate` | `requestId` | Answers a pending gate. Optional `choiceId`, `inputs`, and `responder` are recorded; `inputs` can be an object keyed by input id. |
 | `list_sessions` | none | Optional `db`; uses discovery when omitted. |
 | `list_logs` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
 | `list_errors` | none | Optional `db`, `sessionId`, `traceId`, `limit`. Use the CLI `exceptions` command when grouped issue-ready exception reports are needed. |

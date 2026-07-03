@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fs,
-    io::Read,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     thread,
@@ -16,6 +16,7 @@ use std::os::windows::process::CommandExt;
 use anyhow::{anyhow, Context, Result};
 use auditaur_core::{
     redaction::redact_json,
+    resolve_data_dir,
     storage::{FrontendErrorQuery, TauriIpcQuery},
 };
 use serde::{Deserialize, Serialize};
@@ -120,7 +121,94 @@ struct DrillScript {
     #[serde(default)]
     setup: Vec<DrillHook>,
     #[serde(default)]
+    gates: Vec<DrillGate>,
+    #[serde(default)]
     teardown: Vec<DrillHook>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrillGate {
+    name: String,
+    instructions: String,
+    #[serde(default)]
+    selector: Option<String>,
+    #[serde(default)]
+    expect_text: Option<String>,
+    #[serde(default = "default_gate_timeout_ms")]
+    timeout_ms: u64,
+    #[serde(default = "default_manual_continue")]
+    manual_continue: bool,
+    #[serde(default)]
+    choices: Vec<DrillGateChoice>,
+    #[serde(default)]
+    inputs: Vec<DrillGateInput>,
+    #[serde(default)]
+    clipboard: Option<DrillGateClipboard>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrillGateClipboard {
+    label: String,
+    value: String,
+    #[serde(default = "default_sensitive_input")]
+    sensitive: bool,
+    #[serde(default = "default_clipboard_copy_mode")]
+    copy: DrillGateClipboardCopyMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum DrillGateClipboardCopyMode {
+    Attempt,
+    ManualOnly,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrillGateChoice {
+    id: String,
+    label: String,
+    #[serde(default = "default_gate_choice_outcome")]
+    outcome: DrillGateChoiceOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum DrillGateChoiceOutcome {
+    Continue,
+    Retry,
+    Skip,
+    Fail,
+    Abort,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrillGateInput {
+    id: String,
+    label: String,
+    #[serde(default)]
+    kind: DrillGateInputKind,
+    #[serde(default)]
+    required: bool,
+    #[serde(default = "default_sensitive_input")]
+    sensitive: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum DrillGateInputKind {
+    Text,
+    MultilineText,
+}
+
+impl Default for DrillGateInputKind {
+    fn default() -> Self {
+        Self::Text
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,7 +232,103 @@ struct DrillScriptReport {
     path: String,
     workspace_root: String,
     setup: Vec<DrillHookReport>,
+    gates: Vec<DrillGateReport>,
     teardown: Vec<DrillHookReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DrillGateReport {
+    name: String,
+    instructions: String,
+    selector: Option<String>,
+    expect_text: Option<String>,
+    timeout_ms: u64,
+    manual_continue: bool,
+    duration_ms: u128,
+    satisfied_by: DrillGateSatisfiedBy,
+    observed_text: Option<String>,
+    selected_choice: Option<DrillGateChoice>,
+    responder: Option<String>,
+    inputs: Vec<DrillGateInputReport>,
+    clipboard: Option<DrillGateClipboardReport>,
+}
+
+#[derive(Debug, Clone)]
+struct PublishedGateRequest {
+    request_id: String,
+    request_path: PathBuf,
+    response_path: PathBuf,
+    cleanup_paths: Vec<PathBuf>,
+    nonce: String,
+    run_id: String,
+    gate_id: String,
+    attempt: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GateQueueResponse {
+    schema_version: u8,
+    request_id: String,
+    run_id: String,
+    gate_id: String,
+    attempt: u32,
+    nonce: String,
+    #[serde(default)]
+    responder: Option<String>,
+    #[serde(default)]
+    choice_id: Option<String>,
+    #[serde(default)]
+    inputs: Vec<GateQueueInputValue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GateQueueInputValue {
+    id: String,
+    value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DrillGateClipboardReport {
+    label: String,
+    sensitive: bool,
+    redacted: bool,
+    value: Option<String>,
+    copy: DrillGateClipboardCopyMode,
+    status: DrillGateClipboardStatus,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DrillGateClipboardStatus {
+    Copied,
+    Failed,
+    ManualOnly,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DrillGateInputReport {
+    id: String,
+    label: String,
+    kind: DrillGateInputKind,
+    required: bool,
+    sensitive: bool,
+    redacted: bool,
+    value: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DrillGateSatisfiedBy {
+    SelectorText,
+    ManualContinue,
+    Choice,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -322,7 +506,14 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
                     "debug readiness reached for spawned session",
                     Some(serde_json::to_value(status)?),
                 ));
-                run_post_readiness_phases(&options, &app, &mut report, &mut exit_code);
+                let gates_passed = if let Some(script) = &script {
+                    run_gates(script, &app, child.as_mut(), &mut report, &mut exit_code)?
+                } else {
+                    true
+                };
+                if gates_passed {
+                    run_post_readiness_phases(&options, &app, &mut report, &mut exit_code);
+                }
             }
             WaitOutcome::AppExited(code) => {
                 exit_code = EXIT_APP_EXITED;
@@ -407,6 +598,7 @@ fn load_script(options: &DrillRunOptions) -> Result<Option<ResolvedDrillScript>>
     let script: DrillScript = serde_json::from_str(&contents)
         .with_context(|| format!("failed to parse `{}`", script_path.display()))?;
     let setup = resolve_hooks(&workspace_root, script.setup, DrillHookLifecycle::Setup)?;
+    let gates = resolve_gates(script.gates)?;
     let teardown = resolve_hooks(
         &workspace_root,
         script.teardown,
@@ -416,6 +608,7 @@ fn load_script(options: &DrillRunOptions) -> Result<Option<ResolvedDrillScript>>
         path: script_path,
         workspace_root,
         setup,
+        gates,
         teardown,
     }))
 }
@@ -425,7 +618,21 @@ struct ResolvedDrillScript {
     path: PathBuf,
     workspace_root: PathBuf,
     setup: Vec<ResolvedDrillHook>,
+    gates: Vec<ResolvedDrillGate>,
     teardown: Vec<ResolvedDrillHook>,
+}
+
+#[derive(Debug)]
+struct ResolvedDrillGate {
+    name: String,
+    instructions: String,
+    selector: Option<String>,
+    expect_text: Option<String>,
+    timeout_ms: u64,
+    manual_continue: bool,
+    choices: Vec<DrillGateChoice>,
+    inputs: Vec<DrillGateInput>,
+    clipboard: Option<DrillGateClipboard>,
 }
 
 #[derive(Debug)]
@@ -436,6 +643,110 @@ struct ResolvedDrillHook {
     timeout_ms: u64,
     cwd: PathBuf,
     always: bool,
+}
+
+fn resolve_gates(gates: Vec<DrillGate>) -> Result<Vec<ResolvedDrillGate>> {
+    gates.into_iter().map(resolve_gate).collect()
+}
+
+fn resolve_gate(gate: DrillGate) -> Result<ResolvedDrillGate> {
+    if gate.name.trim().is_empty() {
+        return Err(anyhow!("gate name must not be empty"));
+    }
+    if gate.instructions.trim().is_empty() {
+        return Err(anyhow!(
+            "gate `{}` instructions must not be empty",
+            gate.name
+        ));
+    }
+    if gate.timeout_ms == 0 {
+        return Err(anyhow!(
+            "gate `{}` timeoutMs must be greater than 0",
+            gate.name
+        ));
+    }
+    if gate.expect_text.is_some() && gate.selector.is_none() {
+        return Err(anyhow!("gate `{}` expectText requires selector", gate.name));
+    }
+    if gate.selector.is_none()
+        && !gate.manual_continue
+        && gate.choices.is_empty()
+        && gate.inputs.is_empty()
+    {
+        return Err(anyhow!(
+            "gate `{}` must enable manualContinue, define choices or inputs, or provide selector",
+            gate.name
+        ));
+    }
+    for choice in &gate.choices {
+        if choice.id.trim().is_empty() {
+            return Err(anyhow!("gate `{}` choice id must not be empty", gate.name));
+        }
+        if choice.label.trim().is_empty() {
+            return Err(anyhow!(
+                "gate `{}` choice `{}` label must not be empty",
+                gate.name,
+                choice.id
+            ));
+        }
+    }
+    let mut choice_ids = HashSet::new();
+    for choice in &gate.choices {
+        if !choice_ids.insert(choice.id.as_str()) {
+            return Err(anyhow!(
+                "gate `{}` choice id `{}` must be unique",
+                gate.name,
+                choice.id
+            ));
+        }
+    }
+    for input in &gate.inputs {
+        if input.id.trim().is_empty() {
+            return Err(anyhow!("gate `{}` input id must not be empty", gate.name));
+        }
+        if input.label.trim().is_empty() {
+            return Err(anyhow!(
+                "gate `{}` input `{}` label must not be empty",
+                gate.name,
+                input.id
+            ));
+        }
+    }
+    let mut input_ids = HashSet::new();
+    for input in &gate.inputs {
+        if !input_ids.insert(input.id.as_str()) {
+            return Err(anyhow!(
+                "gate `{}` input id `{}` must be unique",
+                gate.name,
+                input.id
+            ));
+        }
+    }
+    if let Some(clipboard) = &gate.clipboard {
+        if clipboard.label.trim().is_empty() {
+            return Err(anyhow!(
+                "gate `{}` clipboard label must not be empty",
+                gate.name
+            ));
+        }
+        if clipboard.value.is_empty() {
+            return Err(anyhow!(
+                "gate `{}` clipboard value must not be empty",
+                gate.name
+            ));
+        }
+    }
+    Ok(ResolvedDrillGate {
+        name: gate.name,
+        instructions: gate.instructions,
+        selector: gate.selector,
+        expect_text: gate.expect_text,
+        timeout_ms: gate.timeout_ms,
+        manual_continue: gate.manual_continue,
+        choices: gate.choices,
+        inputs: gate.inputs,
+        clipboard: gate.clipboard,
+    })
 }
 
 fn resolve_hooks(
@@ -527,7 +838,14 @@ fn run_hooks(
         DrillHookLifecycle::Setup => &script.setup,
         DrillHookLifecycle::Teardown => &script.teardown,
     };
+    let mut first_error = None;
     for (index, hook) in hooks.iter().enumerate() {
+        if first_error.is_some()
+            && matches!(lifecycle, DrillHookLifecycle::Teardown)
+            && !hook.always
+        {
+            continue;
+        }
         let hook_report = execute_hook(hook, lifecycle);
         let id = format!("script-{}-{}", lifecycle_name(lifecycle), index + 1);
         let result = serde_json::to_value(&hook_report)?;
@@ -557,11 +875,17 @@ fn run_hooks(
                     ),
                     Some(result),
                 ));
-                return Err(anyhow!(
+                let error = anyhow!(
                     "{} hook `{}` timed out",
                     lifecycle_name(lifecycle),
                     hook.name
-                ));
+                );
+                if matches!(lifecycle, DrillHookLifecycle::Setup) {
+                    return Err(error);
+                }
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
             }
             HookExitKind::Failed => {
                 apply_hook_exit(exit_code, lifecycle, HookExitKind::Failed);
@@ -573,19 +897,1188 @@ fn run_hooks(
                     format!("{} hook `{}` failed", lifecycle_name(lifecycle), hook.name),
                     Some(result),
                 ));
-                return Err(anyhow!(
-                    "{} hook `{}` failed",
-                    lifecycle_name(lifecycle),
-                    hook.name
-                ));
+                let error = anyhow!("{} hook `{}` failed", lifecycle_name(lifecycle), hook.name);
+                if matches!(lifecycle, DrillHookLifecycle::Setup) {
+                    return Err(error);
+                }
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
             }
         }
     }
-    Ok(())
+    if let Some(error) = first_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
 fn run_teardown_hooks(script: &ResolvedDrillScript, report: &mut DrillReport, exit_code: &mut i32) {
     let _ = run_hooks(script, DrillHookLifecycle::Teardown, report, exit_code);
+}
+
+fn run_gates(
+    script: &ResolvedDrillScript,
+    app: &DiscoveredApp,
+    child: Option<&mut Child>,
+    report: &mut DrillReport,
+    exit_code: &mut i32,
+) -> Result<bool> {
+    let gate_responses = if script.gates.iter().any(gate_accepts_terminal_response) {
+        Some(spawn_gate_response_reader())
+    } else {
+        None
+    };
+    let mut child = child;
+    for (index, gate) in script.gates.iter().enumerate() {
+        let id = format!("script-gate-{}", index + 1);
+        match execute_gate(gate, app, child.as_deref_mut(), gate_responses.as_ref())? {
+            GateOutcome::Passed(gate_report) => {
+                let result = serde_json::to_value(&gate_report)?;
+                report.push_gate(script, gate_report.clone());
+                report.push_phase(DrillPhase::passed(
+                    id,
+                    "humanGate",
+                    Instant::now(),
+                    format!(
+                        "human gate `{}` satisfied by {}",
+                        gate.name,
+                        gate_satisfied_by_name(gate_report.satisfied_by)
+                    ),
+                    Some(result),
+                ));
+            }
+            GateOutcome::Skipped(gate_report) => {
+                report.push_gate(script, gate_report);
+                report.push_phase(DrillPhase::skipped(
+                    id,
+                    "humanGate",
+                    format!("human gate `{}` skipped by selected choice", gate.name),
+                ));
+            }
+            GateOutcome::AppExited(code) => {
+                if *exit_code == EXIT_PASSED {
+                    *exit_code = EXIT_APP_EXITED;
+                }
+                report.command.exit_code = code;
+                report.push_phase(DrillPhase::failed(
+                    id,
+                    "humanGate",
+                    Instant::now(),
+                    format!("wrapped command exited during human gate `{}`", gate.name),
+                    Some(json!({ "exitCode": code })),
+                ));
+                return Ok(false);
+            }
+            GateOutcome::TimedOut(observed_text, observed_error) => {
+                if *exit_code == EXIT_PASSED {
+                    *exit_code = EXIT_TIMEOUT;
+                }
+                report.command.timed_out = true;
+                report.push_phase(DrillPhase::failed(
+                    id,
+                    "humanGate",
+                    Instant::now(),
+                    format!(
+                        "human gate `{}` timed out after {}ms",
+                        gate.name, gate.timeout_ms
+                    ),
+                    Some(json!({
+                        "selector": gate.selector.clone(),
+                        "expectText": gate.expect_text.clone(),
+                        "observedText": observed_text,
+                        "observedError": observed_error,
+                    })),
+                ));
+                return Ok(false);
+            }
+            GateOutcome::Failed(message, observed_text) => {
+                if *exit_code == EXIT_PASSED {
+                    *exit_code = EXIT_CHECK_FAILED;
+                }
+                report.push_phase(DrillPhase::failed(
+                    id,
+                    "humanGate",
+                    Instant::now(),
+                    message,
+                    Some(json!({
+                        "selector": gate.selector.clone(),
+                        "expectText": gate.expect_text.clone(),
+                        "observedText": observed_text,
+                    })),
+                ));
+                return Ok(false);
+            }
+            GateOutcome::FailedChoice(gate_report) => {
+                if *exit_code == EXIT_PASSED {
+                    *exit_code = EXIT_CHECK_FAILED;
+                }
+                let result = serde_json::to_value(&gate_report)?;
+                report.push_gate(script, gate_report);
+                report.push_phase(DrillPhase::failed(
+                    id,
+                    "humanGate",
+                    Instant::now(),
+                    format!("human gate `{}` failed by selected choice", gate.name),
+                    Some(result),
+                ));
+                return Ok(false);
+            }
+            GateOutcome::Aborted(gate_report) => {
+                if *exit_code == EXIT_PASSED {
+                    *exit_code = EXIT_CHECK_FAILED;
+                }
+                let result = serde_json::to_value(&gate_report)?;
+                report.push_gate(script, gate_report);
+                report.push_phase(DrillPhase::failed(
+                    id,
+                    "humanGate",
+                    Instant::now(),
+                    format!("human gate `{}` aborted by selected choice", gate.name),
+                    Some(result),
+                ));
+                return Ok(false);
+            }
+            GateOutcome::Retry => {}
+        }
+    }
+    Ok(true)
+}
+
+enum GateOutcome {
+    Passed(DrillGateReport),
+    Skipped(DrillGateReport),
+    AppExited(Option<i32>),
+    TimedOut(Option<String>, Option<String>),
+    Failed(String, Option<String>),
+    FailedChoice(DrillGateReport),
+    Aborted(DrillGateReport),
+    Retry,
+}
+
+fn execute_gate(
+    gate: &ResolvedDrillGate,
+    app: &DiscoveredApp,
+    child: Option<&mut Child>,
+    gate_responses: Option<&std::sync::mpsc::Receiver<String>>,
+) -> Result<GateOutcome> {
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(gate.timeout_ms);
+    let clipboard = prepare_gate_clipboard(gate)?;
+    let gate_request = publish_gate_request(gate, app, &clipboard, started, deadline)?;
+    print_gate_prompt(gate, gate_request.as_ref())?;
+    let mut child = child;
+    let mut observed_text = None;
+    let mut observed_error = None;
+    loop {
+        if let Some(request) = &gate_request {
+            if let Some(response) = read_gate_queue_response(request)? {
+                let outcome = apply_gate_queue_response(
+                    gate,
+                    response,
+                    request,
+                    started,
+                    observed_text.clone(),
+                    clipboard.clone(),
+                )?;
+                if !matches!(outcome, GateOutcome::Retry) {
+                    cleanup_gate_request(request);
+                    return Ok(outcome);
+                }
+                remove_gate_response(request);
+                print_gate_prompt(gate, gate_request.as_ref())?;
+            }
+        }
+        match poll_gate_selector(gate, app) {
+            Ok(Some(text)) => {
+                observed_error = None;
+                observed_text = Some(text.clone());
+                if gate_text_matches(gate, &text) {
+                    return Ok(GateOutcome::Passed(DrillGateReport {
+                        name: gate.name.clone(),
+                        instructions: gate.instructions.clone(),
+                        selector: gate.selector.clone(),
+                        expect_text: gate.expect_text.clone(),
+                        timeout_ms: gate.timeout_ms,
+                        manual_continue: gate.manual_continue,
+                        duration_ms: started.elapsed().as_millis(),
+                        satisfied_by: DrillGateSatisfiedBy::SelectorText,
+                        observed_text,
+                        selected_choice: None,
+                        responder: None,
+                        inputs: Vec::new(),
+                        clipboard: clipboard.clone(),
+                    }));
+                }
+            }
+            Ok(None) => {}
+            Err(error) if gate_accepts_terminal_response(gate) => {
+                observed_error = Some(error.to_string());
+            }
+            Err(error) => return Ok(GateOutcome::Failed(error.to_string(), observed_text)),
+        }
+        if gate_accepts_terminal_response(gate) {
+            let Some(receiver) = gate_responses else {
+                continue;
+            };
+            match receiver.try_recv() {
+                Ok(line) => {
+                    if let Some(outcome) = apply_gate_response(
+                        gate,
+                        line,
+                        receiver,
+                        started,
+                        deadline,
+                        child.as_deref_mut(),
+                        observed_text.clone(),
+                        clipboard.clone(),
+                    )? {
+                        if let Some(request) = &gate_request {
+                            cleanup_gate_request(request);
+                        }
+                        return Ok(outcome);
+                    }
+                    print_gate_prompt(gate, gate_request.as_ref())?;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+        if let Some(child) = child.as_deref_mut() {
+            if let Some(status) = child.try_wait()? {
+                if let Some(request) = &gate_request {
+                    cleanup_gate_request(request);
+                }
+                return Ok(GateOutcome::AppExited(status.code()));
+            }
+        }
+        if Instant::now() >= deadline {
+            if let Some(request) = &gate_request {
+                cleanup_gate_request(request);
+            }
+            return Ok(GateOutcome::TimedOut(observed_text, observed_error));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn publish_gate_request(
+    gate: &ResolvedDrillGate,
+    app: &DiscoveredApp,
+    clipboard: &Option<DrillGateClipboardReport>,
+    started: Instant,
+    deadline: Instant,
+) -> Result<Option<PublishedGateRequest>> {
+    if !gate_accepts_terminal_response(gate) {
+        return Ok(None);
+    }
+    let db_path = PathBuf::from(&app.database_path);
+    if !db_path.is_absolute() {
+        return Ok(None);
+    }
+    let Some(session_dir) = db_path.parent() else {
+        return Ok(None);
+    };
+    let request_root = session_dir.join("human-gates");
+    let requests_dir = request_root.join("requests");
+    let responses_dir = request_root.join("responses");
+    fs::create_dir_all(&requests_dir).with_context(|| {
+        format!(
+            "failed to create human gate request directory {}",
+            requests_dir.display()
+        )
+    })?;
+    fs::create_dir_all(&responses_dir).with_context(|| {
+        format!(
+            "failed to create human gate response directory {}",
+            responses_dir.display()
+        )
+    })?;
+
+    let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let run_id = format!("drill-{}-{}", std::process::id(), now);
+    let gate_id = slugify_gate_id(&gate.name);
+    let request_id = format!("{run_id}-{gate_id}-1");
+    let nonce = format!("{}-{}", request_id, now.wrapping_mul(31));
+    let request_path = requests_dir.join(format!("{request_id}.json"));
+    let response_path = responses_dir.join(format!("{request_id}.json"));
+    let request = json!({
+        "schemaVersion": 1,
+        "requestId": request_id,
+        "runId": run_id,
+        "gateId": gate_id,
+        "attempt": 1,
+        "nonce": nonce,
+        "createdAtUnixNanos": now,
+        "expiresAtUnixNanos": now + (deadline.saturating_duration_since(started).as_nanos() as i128),
+        "session": {
+            "sessionId": app.session_id,
+            "instanceId": app.instance_id,
+            "pid": app.pid,
+            "databasePath": app.database_path,
+        },
+        "prompt": {
+            "name": gate.name,
+            "instructions": gate.instructions,
+            "manualContinue": gate.manual_continue,
+            "selector": gate.selector,
+            "expectText": gate.expect_text,
+            "timeoutMs": gate.timeout_ms,
+        },
+        "choices": gate.choices,
+        "inputs": gate.inputs,
+        "clipboard": clipboard,
+    });
+    write_json_atomic(&request_path, &request)?;
+    Ok(Some(PublishedGateRequest {
+        request_id,
+        request_path: request_path.clone(),
+        response_path: response_path.clone(),
+        cleanup_paths: vec![request_path, response_path],
+        nonce,
+        run_id,
+        gate_id,
+        attempt: 1,
+    }))
+}
+
+fn read_gate_queue_response(request: &PublishedGateRequest) -> Result<Option<GateQueueResponse>> {
+    if !request.response_path.exists() {
+        return Ok(None);
+    }
+    let value = fs::read_to_string(&request.response_path).with_context(|| {
+        format!(
+            "failed to read human gate response {}",
+            request.response_path.display()
+        )
+    })?;
+    let response: GateQueueResponse = serde_json::from_str(&value).with_context(|| {
+        format!(
+            "failed to parse human gate response {}",
+            request.response_path.display()
+        )
+    })?;
+    if response.schema_version != 1 {
+        return Err(anyhow!(
+            "human gate response `{}` uses unsupported schemaVersion {}",
+            request.request_id,
+            response.schema_version
+        ));
+    }
+    if response.request_id != request.request_id
+        || response.run_id != request.run_id
+        || response.gate_id != request.gate_id
+        || response.attempt != request.attempt
+        || response.nonce != request.nonce
+    {
+        return Err(anyhow!(
+            "human gate response `{}` did not match the pending request",
+            request.request_id
+        ));
+    }
+    Ok(Some(response))
+}
+
+fn apply_gate_queue_response(
+    gate: &ResolvedDrillGate,
+    response: GateQueueResponse,
+    request: &PublishedGateRequest,
+    started: Instant,
+    observed_text: Option<String>,
+    clipboard: Option<DrillGateClipboardReport>,
+) -> Result<GateOutcome> {
+    let choice_line = response
+        .choice_id
+        .as_deref()
+        .unwrap_or(DEFAULT_MANUAL_CHOICE_ID);
+    let Some(choice) = select_gate_choice(gate, choice_line)? else {
+        return Err(anyhow!(
+            "human gate response `{}` did not select a valid choice",
+            request.request_id
+        ));
+    };
+    if choice.outcome == DrillGateChoiceOutcome::Retry {
+        return Ok(GateOutcome::Retry);
+    }
+
+    let mut inputs = Vec::new();
+    for input in &gate.inputs {
+        let value = response
+            .inputs
+            .iter()
+            .find(|candidate| candidate.id == input.id)
+            .map(|candidate| candidate.value.clone())
+            .unwrap_or_default();
+        if input.required && value.trim().is_empty() {
+            return Err(anyhow!(
+                "human gate response `{}` omitted required input `{}`",
+                request.request_id,
+                input.id
+            ));
+        }
+        inputs.push(gate_input_report(input, value));
+    }
+
+    let selected_choice = if choice.id == DEFAULT_MANUAL_CHOICE_ID {
+        None
+    } else {
+        Some(choice.clone())
+    };
+    let satisfied_by = if selected_choice.is_some() {
+        DrillGateSatisfiedBy::Choice
+    } else {
+        DrillGateSatisfiedBy::ManualContinue
+    };
+    let report = gate_report(
+        gate,
+        started,
+        satisfied_by,
+        observed_text,
+        selected_choice,
+        inputs,
+        clipboard,
+        response.responder.or_else(|| Some("gateQueue".to_string())),
+    );
+    Ok(match choice.outcome {
+        DrillGateChoiceOutcome::Continue => GateOutcome::Passed(report),
+        DrillGateChoiceOutcome::Skip => GateOutcome::Skipped(report),
+        DrillGateChoiceOutcome::Fail => GateOutcome::FailedChoice(report),
+        DrillGateChoiceOutcome::Abort => GateOutcome::Aborted(report),
+        DrillGateChoiceOutcome::Retry => unreachable!("retry is handled before reporting"),
+    })
+}
+
+fn cleanup_gate_request(request: &PublishedGateRequest) {
+    for path in &request.cleanup_paths {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn remove_gate_response(request: &PublishedGateRequest) {
+    let _ = fs::remove_file(&request.response_path);
+}
+
+fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
+    let tmp_path = path.with_extension("json.tmp");
+    let text = serde_json::to_string_pretty(value)?;
+    fs::write(&tmp_path, text)
+        .with_context(|| format!("failed to write temporary JSON {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to atomically publish JSON {}", path.display()))?;
+    Ok(())
+}
+
+fn slugify_gate_id(value: &str) -> String {
+    let mut output = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            output.push(ch.to_ascii_lowercase());
+        } else if !output.ends_with('-') {
+            output.push('-');
+        }
+    }
+    let output = output.trim_matches('-').to_string();
+    if output.is_empty() {
+        "gate".to_string()
+    } else {
+        output
+    }
+}
+
+pub(crate) fn pending_human_gate_requests() -> Result<Value> {
+    let data_dir = resolve_data_dir(None)?;
+    let sessions_dir = data_dir.join("sessions");
+    let mut pending = Vec::new();
+    if !sessions_dir.exists() {
+        return Ok(json!([]));
+    }
+    for session in fs::read_dir(&sessions_dir).with_context(|| {
+        format!(
+            "failed to read sessions directory {}",
+            sessions_dir.display()
+        )
+    })? {
+        let session = session?;
+        let requests_dir = session.path().join("human-gates").join("requests");
+        if !requests_dir.exists() {
+            continue;
+        }
+        for request_entry in fs::read_dir(&requests_dir).with_context(|| {
+            format!(
+                "failed to read human gate requests directory {}",
+                requests_dir.display()
+            )
+        })? {
+            let request_entry = request_entry?;
+            let request_path = request_entry.path();
+            if request_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(request_id) = request_path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let response_path = session
+                .path()
+                .join("human-gates")
+                .join("responses")
+                .join(format!("{request_id}.json"));
+            if response_path.exists() {
+                continue;
+            }
+            let text = fs::read_to_string(&request_path).with_context(|| {
+                format!(
+                    "failed to read human gate request {}",
+                    request_path.display()
+                )
+            })?;
+            let mut request: Value = serde_json::from_str(&text).with_context(|| {
+                format!(
+                    "failed to parse human gate request {}",
+                    request_path.display()
+                )
+            })?;
+            if human_gate_request_expired(&request) {
+                let _ = fs::remove_file(&request_path);
+                continue;
+            }
+            if let Some(object) = request.as_object_mut() {
+                object.insert(
+                    "requestPath".to_string(),
+                    Value::String(request_path.display().to_string()),
+                );
+                object.insert(
+                    "responsePath".to_string(),
+                    Value::String(response_path.display().to_string()),
+                );
+            }
+            pending.push(request);
+        }
+    }
+    pending.sort_by_key(|request| {
+        request
+            .get("createdAtUnixNanos")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+    });
+    Ok(Value::Array(pending))
+}
+
+fn human_gate_request_expired(request: &Value) -> bool {
+    let Some(expires_at) = request.get("expiresAtUnixNanos").and_then(Value::as_i64) else {
+        return false;
+    };
+    i128::from(expires_at) <= OffsetDateTime::now_utc().unix_timestamp_nanos()
+}
+
+pub(crate) fn respond_human_gate(
+    request_id: &str,
+    choice_id: Option<String>,
+    inputs: Value,
+    responder: Option<String>,
+) -> Result<Value> {
+    let request_path = find_human_gate_request(request_id)?;
+    let request_text = fs::read_to_string(&request_path).with_context(|| {
+        format!(
+            "failed to read human gate request {}",
+            request_path.display()
+        )
+    })?;
+    let request: Value = serde_json::from_str(&request_text).with_context(|| {
+        format!(
+            "failed to parse human gate request {}",
+            request_path.display()
+        )
+    })?;
+    let parent = request_path
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| anyhow!("invalid human gate request path {}", request_path.display()))?;
+    let response_path = parent.join("responses").join(format!("{request_id}.json"));
+    fs::create_dir_all(
+        response_path
+            .parent()
+            .ok_or_else(|| anyhow!("invalid response path {}", response_path.display()))?,
+    )?;
+    let response = json!({
+        "schemaVersion": 1,
+        "requestId": request_id,
+        "runId": required_json_string(&request, "runId")?,
+        "gateId": required_json_string(&request, "gateId")?,
+        "attempt": required_json_i64(&request, "attempt")?,
+        "nonce": required_json_string(&request, "nonce")?,
+        "responder": responder.unwrap_or_else(|| "mcp".to_string()),
+        "choiceId": choice_id,
+        "inputs": normalize_gate_response_inputs(inputs)?,
+    });
+    write_json_atomic(&response_path, &response)?;
+    Ok(json!({
+        "requestId": request_id,
+        "responsePath": response_path.display().to_string(),
+        "status": "responded"
+    }))
+}
+
+fn find_human_gate_request(request_id: &str) -> Result<PathBuf> {
+    if request_id.contains(['\\', '/', ':']) {
+        return Err(anyhow!(
+            "requestId must be a human gate request id, not a path"
+        ));
+    }
+    let data_dir = resolve_data_dir(None)?;
+    let sessions_dir = data_dir.join("sessions");
+    if !sessions_dir.exists() {
+        return Err(anyhow!("no Auditaur sessions directory found"));
+    }
+    for session in fs::read_dir(&sessions_dir)? {
+        let request_path = session?
+            .path()
+            .join("human-gates")
+            .join("requests")
+            .join(format!("{request_id}.json"));
+        if request_path.exists() {
+            return Ok(request_path);
+        }
+    }
+    Err(anyhow!(
+        "no pending human gate request matched `{request_id}`"
+    ))
+}
+
+fn required_json_string(value: &Value, key: &str) -> Result<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .ok_or_else(|| anyhow!("human gate request missing `{key}`"))
+}
+
+fn required_json_i64(value: &Value, key: &str) -> Result<i64> {
+    value
+        .get(key)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow!("human gate request missing `{key}`"))
+}
+
+fn normalize_gate_response_inputs(inputs: Value) -> Result<Value> {
+    match inputs {
+        Value::Null => Ok(json!([])),
+        Value::Array(values) => Ok(Value::Array(values)),
+        Value::Object(object) => {
+            let values = object
+                .into_iter()
+                .map(|(id, value)| {
+                    json!({
+                        "id": id,
+                        "value": value.as_str().map(ToString::to_string).unwrap_or_else(|| value.to_string())
+                    })
+                })
+                .collect();
+            Ok(Value::Array(values))
+        }
+        _ => Err(anyhow!("inputs must be an object, array, or null")),
+    }
+}
+
+fn spawn_gate_response_reader() -> std::sync::mpsc::Receiver<String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || loop {
+        let mut line = String::new();
+        let Ok(bytes_read) = io::stdin().read_line(&mut line) else {
+            break;
+        };
+        if bytes_read == 0 {
+            break;
+        }
+        if sender.send(line.trim_end().to_string()).is_err() {
+            break;
+        }
+    });
+    receiver
+}
+
+fn gate_accepts_terminal_response(gate: &ResolvedDrillGate) -> bool {
+    gate.manual_continue || !gate.choices.is_empty() || !gate.inputs.is_empty()
+}
+
+fn apply_gate_response(
+    gate: &ResolvedDrillGate,
+    line: String,
+    receiver: &std::sync::mpsc::Receiver<String>,
+    started: Instant,
+    deadline: Instant,
+    child: Option<&mut Child>,
+    observed_text: Option<String>,
+    clipboard: Option<DrillGateClipboardReport>,
+) -> Result<Option<GateOutcome>> {
+    let Some(choice) = select_gate_choice(gate, &line)? else {
+        return Ok(None);
+    };
+    if choice.outcome == DrillGateChoiceOutcome::Retry {
+        return Ok(None);
+    }
+    let inputs = match collect_gate_inputs(gate, receiver, deadline, child)? {
+        GateInputOutcome::Collected(inputs) => inputs,
+        GateInputOutcome::AppExited(code) => return Ok(Some(GateOutcome::AppExited(code))),
+        GateInputOutcome::TimedOut => return Ok(Some(GateOutcome::TimedOut(observed_text, None))),
+    };
+    let selected_choice = if choice.id == DEFAULT_MANUAL_CHOICE_ID {
+        None
+    } else {
+        Some(choice.clone())
+    };
+    let satisfied_by = if selected_choice.is_some() {
+        DrillGateSatisfiedBy::Choice
+    } else {
+        DrillGateSatisfiedBy::ManualContinue
+    };
+    let report = gate_report(
+        gate,
+        started,
+        satisfied_by,
+        observed_text,
+        selected_choice,
+        inputs,
+        clipboard,
+        Some("terminal".to_string()),
+    );
+    Ok(Some(match choice.outcome {
+        DrillGateChoiceOutcome::Continue => GateOutcome::Passed(report),
+        DrillGateChoiceOutcome::Skip => GateOutcome::Skipped(report),
+        DrillGateChoiceOutcome::Fail => GateOutcome::FailedChoice(report),
+        DrillGateChoiceOutcome::Abort => GateOutcome::Aborted(report),
+        DrillGateChoiceOutcome::Retry => unreachable!("retry is handled before input collection"),
+    }))
+}
+
+const DEFAULT_MANUAL_CHOICE_ID: &str = "__manual_continue";
+
+fn select_gate_choice(gate: &ResolvedDrillGate, line: &str) -> Result<Option<DrillGateChoice>> {
+    let input = line.trim();
+    if gate.choices.is_empty() {
+        if gate.manual_continue || !gate.inputs.is_empty() {
+            return Ok(Some(DrillGateChoice {
+                id: DEFAULT_MANUAL_CHOICE_ID.to_string(),
+                label: "Manual continue".to_string(),
+                outcome: DrillGateChoiceOutcome::Continue,
+            }));
+        }
+        return Ok(None);
+    }
+    if input.is_empty() && gate.manual_continue {
+        if let Some(choice) = gate
+            .choices
+            .iter()
+            .find(|choice| choice.outcome == DrillGateChoiceOutcome::Continue)
+        {
+            return Ok(Some(choice.clone()));
+        }
+    }
+    if let Ok(index) = input.parse::<usize>() {
+        if let Some(choice) = gate.choices.get(index.saturating_sub(1)) {
+            return Ok(Some(choice.clone()));
+        }
+    }
+    if let Some(choice) = gate.choices.iter().find(|choice| choice.id == input) {
+        return Ok(Some(choice.clone()));
+    }
+    eprintln!("Unrecognized gate choice `{input}`. Enter a choice number or id.");
+    Ok(None)
+}
+
+enum GateInputOutcome {
+    Collected(Vec<DrillGateInputReport>),
+    AppExited(Option<i32>),
+    TimedOut,
+}
+
+fn collect_gate_inputs(
+    gate: &ResolvedDrillGate,
+    receiver: &std::sync::mpsc::Receiver<String>,
+    deadline: Instant,
+    child: Option<&mut Child>,
+) -> Result<GateInputOutcome> {
+    let mut child = child;
+    let mut inputs = Vec::new();
+    for input in &gate.inputs {
+        loop {
+            print_gate_input_prompt(input)?;
+            match read_gate_response_line(receiver, deadline, child.as_deref_mut())? {
+                GateLineOutcome::Line(value) if input.required && value.trim().is_empty() => {
+                    eprintln!("Input `{}` is required.", input.id);
+                    continue;
+                }
+                GateLineOutcome::Line(value) => {
+                    inputs.push(gate_input_report(input, value));
+                    break;
+                }
+                GateLineOutcome::AppExited(code) => return Ok(GateInputOutcome::AppExited(code)),
+                GateLineOutcome::TimedOut => return Ok(GateInputOutcome::TimedOut),
+            }
+        }
+    }
+    Ok(GateInputOutcome::Collected(inputs))
+}
+
+enum GateLineOutcome {
+    Line(String),
+    AppExited(Option<i32>),
+    TimedOut,
+}
+
+fn read_gate_response_line(
+    receiver: &std::sync::mpsc::Receiver<String>,
+    deadline: Instant,
+    child: Option<&mut Child>,
+) -> Result<GateLineOutcome> {
+    let mut child = child;
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => return Ok(GateLineOutcome::Line(line)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Ok(GateLineOutcome::TimedOut)
+            }
+        }
+        if let Some(child) = child.as_deref_mut() {
+            if let Some(status) = child.try_wait()? {
+                return Ok(GateLineOutcome::AppExited(status.code()));
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(GateLineOutcome::TimedOut);
+        }
+    }
+}
+
+fn gate_input_report(input: &DrillGateInput, value: String) -> DrillGateInputReport {
+    DrillGateInputReport {
+        id: input.id.clone(),
+        label: input.label.clone(),
+        kind: input.kind,
+        required: input.required,
+        sensitive: input.sensitive,
+        redacted: input.sensitive,
+        value: if value.is_empty() {
+            None
+        } else if input.sensitive {
+            Some("[REDACTED]".to_string())
+        } else {
+            Some(value)
+        },
+    }
+}
+
+fn gate_report(
+    gate: &ResolvedDrillGate,
+    started: Instant,
+    satisfied_by: DrillGateSatisfiedBy,
+    observed_text: Option<String>,
+    selected_choice: Option<DrillGateChoice>,
+    inputs: Vec<DrillGateInputReport>,
+    clipboard: Option<DrillGateClipboardReport>,
+    responder: Option<String>,
+) -> DrillGateReport {
+    DrillGateReport {
+        name: gate.name.clone(),
+        instructions: gate.instructions.clone(),
+        selector: gate.selector.clone(),
+        expect_text: gate.expect_text.clone(),
+        timeout_ms: gate.timeout_ms,
+        manual_continue: gate.manual_continue,
+        duration_ms: started.elapsed().as_millis(),
+        satisfied_by,
+        observed_text,
+        selected_choice,
+        responder,
+        inputs,
+        clipboard,
+    }
+}
+
+fn prepare_gate_clipboard(gate: &ResolvedDrillGate) -> Result<Option<DrillGateClipboardReport>> {
+    let Some(clipboard) = &gate.clipboard else {
+        return Ok(None);
+    };
+    let (status, error) = match clipboard.copy {
+        DrillGateClipboardCopyMode::Attempt => match copy_to_clipboard(&clipboard.value) {
+            Ok(()) => (DrillGateClipboardStatus::Copied, None),
+            Err(error) => (DrillGateClipboardStatus::Failed, Some(error.to_string())),
+        },
+        DrillGateClipboardCopyMode::ManualOnly => (DrillGateClipboardStatus::ManualOnly, None),
+        DrillGateClipboardCopyMode::Disabled => (DrillGateClipboardStatus::Disabled, None),
+    };
+    print_clipboard_status(clipboard, status, error.as_deref())?;
+    Ok(Some(DrillGateClipboardReport {
+        label: clipboard.label.clone(),
+        sensitive: clipboard.sensitive,
+        redacted: clipboard.sensitive,
+        value: if clipboard.sensitive {
+            Some("[REDACTED]".to_string())
+        } else {
+            Some(clipboard.value.clone())
+        },
+        copy: clipboard.copy,
+        status,
+        error,
+    }))
+}
+
+fn print_clipboard_status(
+    clipboard: &DrillGateClipboard,
+    status: DrillGateClipboardStatus,
+    error: Option<&str>,
+) -> Result<()> {
+    let mut stderr = io::stderr().lock();
+    match status {
+        DrillGateClipboardStatus::Copied => {
+            writeln!(
+                stderr,
+                "{} copied to clipboard. Paste it into the external prompt.",
+                clipboard.label
+            )?;
+        }
+        DrillGateClipboardStatus::Failed => {
+            writeln!(
+                stderr,
+                "Could not copy {} to clipboard: {}",
+                clipboard.label,
+                error.unwrap_or("unknown clipboard error")
+            )?;
+            print_manual_clipboard_value(&mut stderr, clipboard)?;
+        }
+        DrillGateClipboardStatus::ManualOnly => {
+            writeln!(stderr, "{} is available for manual copy.", clipboard.label)?;
+            print_manual_clipboard_value(&mut stderr, clipboard)?;
+        }
+        DrillGateClipboardStatus::Disabled => {
+            writeln!(
+                stderr,
+                "{} clipboard copy is disabled for this gate.",
+                clipboard.label
+            )?;
+            print_manual_clipboard_value(&mut stderr, clipboard)?;
+        }
+    }
+    stderr.flush()?;
+    Ok(())
+}
+
+fn print_manual_clipboard_value(
+    stderr: &mut impl Write,
+    clipboard: &DrillGateClipboard,
+) -> Result<()> {
+    if clipboard.sensitive {
+        writeln!(
+            stderr,
+            "{} is marked sensitive, so Auditaur will not print it for manual copy.",
+            clipboard.label
+        )?;
+    } else {
+        writeln!(stderr, "{}: {}", clipboard.label, clipboard.value)?;
+    }
+    Ok(())
+}
+
+fn copy_to_clipboard(value: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        return copy_to_clipboard_command(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Set-Clipboard -Value $input",
+            ],
+            value,
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return copy_to_clipboard_command("pbcopy", &[], value);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut last_error = None;
+        for (program, args) in [
+            ("wl-copy", Vec::<&str>::new()),
+            ("xclip", vec!["-selection", "clipboard"]),
+            ("xsel", vec!["--clipboard", "--input"]),
+        ] {
+            match copy_to_clipboard_command(program, &args, value) {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        return Err(last_error.unwrap_or_else(|| anyhow!("no clipboard command was attempted")));
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = value;
+        Err(anyhow!("clipboard copy is not supported on this platform"))
+    }
+}
+
+fn copy_to_clipboard_command(program: &str, args: &[&str], value: &str) -> Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to start clipboard command `{program}`"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(value.as_bytes())
+            .context("failed to write clipboard value")?;
+    }
+    let output = child
+        .wait_with_output()
+        .context("failed waiting for clipboard command")?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "clipboard command `{program}` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+fn print_gate_prompt(
+    gate: &ResolvedDrillGate,
+    gate_request: Option<&PublishedGateRequest>,
+) -> Result<()> {
+    let mut stderr = io::stderr().lock();
+    writeln!(stderr)?;
+    writeln!(stderr, "Auditaur human gate: {}", gate.name)?;
+    writeln!(stderr, "{}", gate.instructions)?;
+    if let Some(request) = gate_request {
+        writeln!(
+            stderr,
+            "Agent gate request: {}",
+            request.request_path.display()
+        )?;
+    }
+    if let Some(selector) = &gate.selector {
+        if let Some(expected) = &gate.expect_text {
+            writeln!(
+                stderr,
+                "Waiting for selector `{selector}` to contain `{expected}`."
+            )?;
+        } else {
+            writeln!(stderr, "Waiting for selector `{selector}` to return text.")?;
+        }
+    }
+    if gate.manual_continue {
+        if gate.choices.is_empty() {
+            writeln!(stderr, "Press ENTER here to continue manually.")?;
+        } else {
+            writeln!(
+                stderr,
+                "Press ENTER to select the first continue choice, or enter a choice below."
+            )?;
+        }
+    } else if gate.choices.is_empty() && !gate.inputs.is_empty() {
+        writeln!(
+            stderr,
+            "Press ENTER here to provide gate input and continue."
+        )?;
+    }
+    if !gate.inputs.is_empty() {
+        writeln!(
+            stderr,
+            "This gate will ask for {} input value(s) before continuing from a manual response.",
+            gate.inputs.len()
+        )?;
+    }
+    if !gate.choices.is_empty() {
+        writeln!(stderr, "Choices:")?;
+        for (index, choice) in gate.choices.iter().enumerate() {
+            writeln!(
+                stderr,
+                "  {}. {} ({}, outcome: {})",
+                index + 1,
+                choice.label,
+                choice.id,
+                choice_outcome_name(choice.outcome)
+            )?;
+        }
+    }
+    stderr.flush()?;
+    Ok(())
+}
+
+fn print_gate_input_prompt(input: &DrillGateInput) -> Result<()> {
+    let mut stderr = io::stderr().lock();
+    let required = if input.required {
+        " required"
+    } else {
+        " optional"
+    };
+    let sensitivity = if input.sensitive {
+        " sensitive, redacted"
+    } else {
+        " recorded"
+    };
+    let kind = match input.kind {
+        DrillGateInputKind::Text => "text",
+        DrillGateInputKind::MultilineText => "multiline text",
+    };
+    writeln!(stderr, "{} ({kind},{required},{sensitivity}):", input.label)?;
+    stderr.flush()?;
+    Ok(())
+}
+
+fn choice_outcome_name(outcome: DrillGateChoiceOutcome) -> &'static str {
+    match outcome {
+        DrillGateChoiceOutcome::Continue => "continue",
+        DrillGateChoiceOutcome::Retry => "retry",
+        DrillGateChoiceOutcome::Skip => "skip",
+        DrillGateChoiceOutcome::Fail => "fail",
+        DrillGateChoiceOutcome::Abort => "abort",
+    }
+}
+
+fn poll_gate_selector(gate: &ResolvedDrillGate, app: &DiscoveredApp) -> Result<Option<String>> {
+    let Some(selector) = &gate.selector else {
+        return Ok(None);
+    };
+    let value = drive::text_json_value(
+        drive_selector(app),
+        drive::SelectorActionOptions {
+            selector: selector.clone(),
+            target_id: Some("auditaur-bridge".to_string()),
+            test_id: Some("auditaur-drill".to_string()),
+            step_id: Some(format!("human-gate-{}", gate.name)),
+            visible_only: true,
+            json: true,
+        },
+    )?;
+    Ok(value
+        .get("payload")
+        .and_then(|payload| payload.get("text"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string))
+}
+
+fn gate_text_matches(gate: &ResolvedDrillGate, text: &str) -> bool {
+    match &gate.expect_text {
+        Some(expected) => text.contains(expected),
+        None => !text.is_empty(),
+    }
+}
+
+fn gate_satisfied_by_name(satisfied_by: DrillGateSatisfiedBy) -> &'static str {
+    match satisfied_by {
+        DrillGateSatisfiedBy::SelectorText => "selector text",
+        DrillGateSatisfiedBy::ManualContinue => "manual continue",
+        DrillGateSatisfiedBy::Choice => "choice",
+    }
 }
 
 fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> DrillHookReport {
@@ -740,6 +2233,26 @@ fn exit_code(status: ExitStatus) -> Option<i32> {
 
 fn default_hook_timeout_ms() -> u64 {
     DEFAULT_HOOK_TIMEOUT_MS
+}
+
+fn default_gate_timeout_ms() -> u64 {
+    300_000
+}
+
+fn default_manual_continue() -> bool {
+    true
+}
+
+fn default_gate_choice_outcome() -> DrillGateChoiceOutcome {
+    DrillGateChoiceOutcome::Continue
+}
+
+fn default_clipboard_copy_mode() -> DrillGateClipboardCopyMode {
+    DrillGateClipboardCopyMode::Attempt
+}
+
+fn default_sensitive_input() -> bool {
+    true
 }
 
 fn default_hook_cwd() -> PathBuf {
@@ -1289,6 +2802,7 @@ impl DrillReport {
                 path: path.to_string_lossy().to_string(),
                 workspace_root: String::new(),
                 setup: Vec::new(),
+                gates: Vec::new(),
                 teardown: Vec::new(),
             }),
             options: DrillOptionsReport {
@@ -1331,6 +2845,7 @@ impl DrillReport {
             path: script.path.to_string_lossy().to_string(),
             workspace_root: script.workspace_root.to_string_lossy().to_string(),
             setup: Vec::new(),
+            gates: Vec::new(),
             teardown: Vec::new(),
         });
     }
@@ -1340,6 +2855,7 @@ impl DrillReport {
             path: script.path.to_string_lossy().to_string(),
             workspace_root: script.workspace_root.to_string_lossy().to_string(),
             setup: Vec::new(),
+            gates: Vec::new(),
             teardown: Vec::new(),
         });
         script_report.path = script.path.to_string_lossy().to_string();
@@ -1348,6 +2864,19 @@ impl DrillReport {
             DrillHookLifecycle::Setup => script_report.setup.push(hook),
             DrillHookLifecycle::Teardown => script_report.teardown.push(hook),
         }
+    }
+
+    fn push_gate(&mut self, script: &ResolvedDrillScript, gate: DrillGateReport) {
+        let script_report = self.script.get_or_insert_with(|| DrillScriptReport {
+            path: script.path.to_string_lossy().to_string(),
+            workspace_root: script.workspace_root.to_string_lossy().to_string(),
+            setup: Vec::new(),
+            gates: Vec::new(),
+            teardown: Vec::new(),
+        });
+        script_report.path = script.path.to_string_lossy().to_string();
+        script_report.workspace_root = script.workspace_root.to_string_lossy().to_string();
+        script_report.gates.push(gate);
     }
 }
 
@@ -1469,6 +2998,31 @@ mod tests {
                 "timeoutMs": 30000,
                 "cwd": "."
             }],
+            "gates": [{
+                "name": "Approve OAuth",
+                "instructions": "Approve the GitHub device-code flow in the app or browser.",
+                "selector": "#status",
+                "expectText": "Signed in",
+                "timeoutMs": 120000,
+                "clipboard": {
+                    "label": "Device code",
+                    "value": "ABCD-1234",
+                    "sensitive": true,
+                    "copy": "attempt"
+                },
+                "choices": [
+                    { "id": "done", "label": "Done", "outcome": "continue" },
+                    { "id": "blocked", "label": "Blocked", "outcome": "fail" }
+                ],
+                "inputs": [
+                    {
+                        "id": "external-error",
+                        "label": "External error message",
+                        "kind": "multilineText",
+                        "required": false
+                    }
+                ]
+            }],
             "teardown": [{
                 "name": "Clean data",
                 "run": "npm",
@@ -1479,12 +3033,164 @@ mod tests {
         .unwrap();
 
         assert_eq!(script.setup.len(), 1);
+        assert_eq!(script.gates.len(), 1);
         assert_eq!(script.setup[0].name, "Seed data");
         assert_eq!(script.setup[0].args, vec!["run", "seed"]);
         assert_eq!(script.setup[0].timeout_ms, 30_000);
         assert_eq!(script.setup[0].cwd, PathBuf::from("."));
+        assert_eq!(script.gates[0].name, "Approve OAuth");
+        assert!(script.gates[0].manual_continue);
+        assert_eq!(script.gates[0].timeout_ms, 120_000);
+        assert_eq!(script.gates[0].choices.len(), 2);
+        assert_eq!(
+            script.gates[0].choices[1].outcome,
+            DrillGateChoiceOutcome::Fail
+        );
+        assert_eq!(
+            script.gates[0]
+                .clipboard
+                .as_ref()
+                .map(|clipboard| clipboard.copy),
+            Some(DrillGateClipboardCopyMode::Attempt)
+        );
+        assert_eq!(script.gates[0].inputs.len(), 1);
+        assert!(script.gates[0].inputs[0].sensitive);
         assert_eq!(script.teardown[0].timeout_ms, DEFAULT_HOOK_TIMEOUT_MS);
         assert!(script.teardown[0].always);
+    }
+
+    #[test]
+    fn resolves_manual_gate_defaults() {
+        let gate = resolve_gate(DrillGate {
+            name: "Approve OAuth".to_string(),
+            instructions: "Approve the browser handoff.".to_string(),
+            selector: None,
+            expect_text: None,
+            timeout_ms: default_gate_timeout_ms(),
+            manual_continue: default_manual_continue(),
+            choices: Vec::new(),
+            inputs: Vec::new(),
+            clipboard: None,
+        })
+        .unwrap();
+
+        assert_eq!(gate.name, "Approve OAuth");
+        assert!(gate.manual_continue);
+        assert_eq!(gate.timeout_ms, 300_000);
+    }
+
+    #[test]
+    fn rejects_gate_expected_text_without_selector() {
+        let error = resolve_gate(DrillGate {
+            name: "Bad gate".to_string(),
+            instructions: "Wait for something.".to_string(),
+            selector: None,
+            expect_text: Some("Done".to_string()),
+            timeout_ms: 1_000,
+            manual_continue: true,
+            choices: Vec::new(),
+            inputs: Vec::new(),
+            clipboard: None,
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("expectText requires selector"));
+    }
+
+    #[test]
+    fn redacts_sensitive_gate_input_reports() {
+        let input = DrillGateInput {
+            id: "external-error".to_string(),
+            label: "External error message".to_string(),
+            kind: DrillGateInputKind::MultilineText,
+            required: false,
+            sensitive: true,
+        };
+
+        let report = gate_input_report(&input, "SSO error details".to_string());
+
+        assert!(report.redacted);
+        assert_eq!(report.value, Some("[REDACTED]".to_string()));
+    }
+
+    #[test]
+    fn prequeued_gate_response_completes_manual_choice_gate() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send("done".to_string()).unwrap();
+        sender
+            .send("approved in external browser".to_string())
+            .unwrap();
+
+        let gate = ResolvedDrillGate {
+            name: "Approve OAuth".to_string(),
+            instructions: "Approve the browser handoff.".to_string(),
+            selector: None,
+            expect_text: None,
+            timeout_ms: 1_000,
+            manual_continue: true,
+            choices: vec![DrillGateChoice {
+                id: "done".to_string(),
+                label: "Done".to_string(),
+                outcome: DrillGateChoiceOutcome::Continue,
+            }],
+            inputs: vec![DrillGateInput {
+                id: "external-note".to_string(),
+                label: "External note".to_string(),
+                kind: DrillGateInputKind::Text,
+                required: false,
+                sensitive: true,
+            }],
+            clipboard: None,
+        };
+
+        let outcome = execute_gate(
+            &gate,
+            &discovered_app("2026-06-27T22:00:00Z", "2026-06-27T22:00:01Z"),
+            None,
+            Some(&receiver),
+        )
+        .unwrap();
+
+        let GateOutcome::Passed(report) = outcome else {
+            panic!("expected manual gate to pass");
+        };
+        assert_eq!(report.satisfied_by, DrillGateSatisfiedBy::Choice);
+        assert_eq!(
+            report
+                .selected_choice
+                .as_ref()
+                .map(|choice| choice.id.as_str()),
+            Some("done")
+        );
+        assert_eq!(report.inputs.len(), 1);
+        assert_eq!(report.inputs[0].value, Some("[REDACTED]".to_string()));
+    }
+
+    #[test]
+    fn redacts_sensitive_clipboard_reports() {
+        let clipboard = DrillGateClipboard {
+            label: "Device code".to_string(),
+            value: "ABCD-1234".to_string(),
+            sensitive: true,
+            copy: DrillGateClipboardCopyMode::ManualOnly,
+        };
+
+        let report = DrillGateClipboardReport {
+            label: clipboard.label.clone(),
+            sensitive: clipboard.sensitive,
+            redacted: clipboard.sensitive,
+            value: if clipboard.sensitive {
+                Some("[REDACTED]".to_string())
+            } else {
+                Some(clipboard.value.clone())
+            },
+            copy: clipboard.copy,
+            status: DrillGateClipboardStatus::ManualOnly,
+            error: None,
+        };
+
+        assert!(report.redacted);
+        assert_eq!(report.value, Some("[REDACTED]".to_string()));
     }
 
     #[test]
@@ -1577,12 +3283,62 @@ mod tests {
     }
 
     #[test]
+    fn teardown_always_hooks_run_after_prior_teardown_failure() {
+        let workspace = TempDir::new().unwrap();
+        let marker = workspace.path().join("always-ran.txt");
+        let (fail_run, fail_args) = failing_command();
+        let (mark_run, mark_args) = write_marker_command(&marker);
+        let script = ResolvedDrillScript {
+            path: workspace.path().join("drill.json"),
+            workspace_root: workspace.path().to_path_buf(),
+            setup: Vec::new(),
+            gates: Vec::new(),
+            teardown: vec![
+                ResolvedDrillHook {
+                    name: "Fail cleanup".to_string(),
+                    run: fail_run,
+                    args: fail_args,
+                    timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
+                    cwd: workspace.path().to_path_buf(),
+                    always: false,
+                },
+                ResolvedDrillHook {
+                    name: "Always cleanup".to_string(),
+                    run: mark_run,
+                    args: mark_args,
+                    timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
+                    cwd: workspace.path().to_path_buf(),
+                    always: true,
+                },
+            ],
+        };
+        let options = test_options(Some(script.path.clone()));
+        let mut report = DrillReport::new(&options, &[]);
+        report.set_script(&script);
+        let mut exit_code = EXIT_PASSED;
+
+        let error = run_hooks(
+            &script,
+            DrillHookLifecycle::Teardown,
+            &mut report,
+            &mut exit_code,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Fail cleanup"));
+        assert_eq!(exit_code, EXIT_CLEANUP_FAILED);
+        assert!(marker.exists());
+        assert_eq!(report.script.as_ref().unwrap().teardown.len(), 2);
+    }
+
+    #[test]
     fn aggregates_hook_results_into_report() {
         let workspace = TempDir::new().unwrap();
         let script = ResolvedDrillScript {
             path: workspace.path().join("drill.json"),
             workspace_root: workspace.path().to_path_buf(),
             setup: Vec::new(),
+            gates: Vec::new(),
             teardown: Vec::new(),
         };
         let options = test_options(Some(script.path.clone()));
@@ -1685,5 +3441,54 @@ mod tests {
             churn_window_seconds: None,
             churn_hint: None,
         }
+    }
+
+    #[cfg(windows)]
+    fn failing_command() -> (String, Vec<String>) {
+        (
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "exit 1".to_string(),
+            ],
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn failing_command() -> (String, Vec<String>) {
+        (
+            "sh".to_string(),
+            vec!["-c".to_string(), "exit 1".to_string()],
+        )
+    }
+
+    #[cfg(windows)]
+    fn write_marker_command(marker: &Path) -> (String, Vec<String>) {
+        (
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!(
+                    "Set-Content -LiteralPath '{}' -Value ran",
+                    marker.display().to_string().replace('\'', "''")
+                ),
+            ],
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn write_marker_command(marker: &Path) -> (String, Vec<String>) {
+        (
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                format!(
+                    "printf ran > '{}'",
+                    marker.display().to_string().replace('\'', "'\\''")
+                ),
+            ],
+        )
     }
 }

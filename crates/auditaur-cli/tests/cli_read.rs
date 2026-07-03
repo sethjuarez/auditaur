@@ -502,6 +502,62 @@ fn packaged_init_skill_matches_repo_skill() {
 }
 
 #[test]
+fn init_extension_installs_auditaur_gate_canvas() {
+    let repo = TempDir::new().unwrap();
+    let extension_path = repo
+        .path()
+        .join(".github")
+        .join("extensions")
+        .join("auditaur-gate")
+        .join("extension.mjs");
+
+    let installed = run_json([
+        "init",
+        "extension",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(installed["ok"], true);
+    assert_eq!(installed["overwritten"], false);
+    let extension = fs::read_to_string(&extension_path).unwrap();
+    assert!(extension.contains("id: \"auditaur-human-gate\""));
+    assert!(extension.contains("respond"));
+
+    let failure = run_failure([
+        "init",
+        "extension",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(failure.contains("already exists"));
+
+    fs::write(&extension_path, "stale").unwrap();
+    let overwritten = run_json([
+        "init",
+        "extension",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--force",
+        "--json",
+    ]);
+    assert_eq!(overwritten["overwritten"], true);
+    assert!(fs::read_to_string(extension_path)
+        .unwrap()
+        .contains("Auditaur Manual Gate"));
+}
+
+#[test]
+fn packaged_init_extension_matches_repo_extension() {
+    let repo_extension = include_str!("../../../.github/extensions/auditaur-gate/extension.mjs")
+        .replace("\r\n", "\n");
+    let packaged_extension =
+        include_str!("../assets/auditaur-gate-extension.mjs").replace("\r\n", "\n");
+    assert_eq!(packaged_extension, repo_extension);
+}
+
+#[test]
 fn agentive_runs_group_model_tool_events_and_related_by_run_id() {
     let db = fixture_database();
     let store = SqliteStore::open(db.path()).unwrap();

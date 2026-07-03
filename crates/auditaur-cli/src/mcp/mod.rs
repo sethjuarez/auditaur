@@ -97,6 +97,16 @@ fn call_tool(params: Value) -> Result<Value> {
             Ok(serde_json::to_value(report)?)
         }
         "get_health" => Ok(serde_json::to_value(crate::commands::health::report())?),
+        "list_pending_human_gates" => crate::commands::drill::pending_human_gate_requests(),
+        "respond_human_gate" => {
+            let request_id = required_string(&arguments, "requestId")?;
+            crate::commands::drill::respond_human_gate(
+                &request_id,
+                optional_string(&arguments, "choiceId"),
+                arguments.get("inputs").cloned().unwrap_or(Value::Null),
+                optional_string(&arguments, "responder"),
+            )
+        }
         "list_sessions" => {
             let store = open_store(&arguments)?;
             Ok(serde_json::to_value(store.list_sessions(limit(
@@ -446,6 +456,16 @@ fn tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "list_pending_human_gates",
+            "List pending Auditaur drill human gate requests that can be answered by an agent or UI.",
+            &[],
+        ),
+        tool(
+            "respond_human_gate",
+            "Answer a pending Auditaur drill human gate by requestId with optional choiceId, inputs object, and responder label.",
+            &["requestId"],
+        ),
+        tool(
             "list_sessions",
             "List sessions in a SQLite DB. Uses discovery when db is omitted.",
             &[],
@@ -522,6 +542,10 @@ fn tool(name: &str, description: &str, required: &[&str]) -> Value {
                 "startTimeUnixNanos": { "type": "integer" },
                 "endTimeUnixNanos": { "type": "integer" },
                 "sinceSeconds": { "type": "integer", "minimum": 0 },
+                "requestId": { "type": "string" },
+                "choiceId": { "type": "string" },
+                "inputs": { "type": ["object", "array", "null"] },
+                "responder": { "type": "string" },
                 "limit": { "type": "integer", "minimum": 1 }
             },
             "required": required,
@@ -556,10 +580,12 @@ mod tests {
     fn lists_tools() {
         let response = handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
         assert_eq!(response["result"]["tools"][0]["name"], "doctor");
-        assert_eq!(
-            response["result"]["tools"][6]["inputSchema"]["required"],
-            json!(["traceId"])
-        );
+        let tools = response["result"]["tools"].as_array().unwrap();
+        let get_trace = tools
+            .iter()
+            .find(|tool| tool["name"] == "get_trace")
+            .unwrap();
+        assert_eq!(get_trace["inputSchema"]["required"], json!(["traceId"]));
     }
 
     #[test]
