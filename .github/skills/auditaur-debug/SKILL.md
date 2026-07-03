@@ -15,11 +15,23 @@ Translate common user phrases to the appropriate Auditaur workflow:
 | User phrase | Agent interpretation |
 | --- | --- |
 | "observe the app" | Attach to the already-running app and watch readiness. |
-| "start with Auditaur" / "Auditaur start the app" | Start the normal app command under Auditaur observation with `debug run -- <normal command>`. |
+| "start with Auditaur" / "Auditaur start the app" | Run `auditaur start` when `.auditaur/config.json` exists; otherwise start the normal app command under Auditaur observation with `debug run -- <normal command>`. |
 | "debug the app with Auditaur" | Check readiness first, then inspect logs/timeline/traces/IPC. |
 | "drive the app" / "click in the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
+| "run a drill" / "smoke test the app" | Run `auditaur drill` for the configured default drill, or `auditaur drill <name>` for a named drill. |
 
-Never invent an `auditaur start` command. Preserve the app's normal startup command and wrap or observe it.
+Preserve the app's normal startup command. Prefer the simple repo-configured flow when available:
+
+```bash
+auditaur start
+auditaur drill
+auditaur inspect
+auditaur stop
+```
+
+These commands read `.auditaur/config.json` and share `.auditaur/session.json` by default so agents do not need custom wrappers for readiness polling, session IDs, database paths, or process cleanup.
+
+Use `auditaur start --json` when an agent needs machine-readable startup output. It emits one final JSON object with the exact app session, process, selectors, session file path, and any generated named ports. `auditaur stop` stops the recorded process tree and removes the session file after cleanup so follow-up commands do not target a dead session.
 
 ## Readiness first
 
@@ -67,10 +79,16 @@ Use wrapper mode only when the agent or a smoke script needs to own a repeatable
 If the agent should start the app, wrap the existing command:
 
 ```bash
-auditaur debug --app <app-name> --active --json run --timeout-seconds 180 -- npm run tauri dev
+auditaur start
 ```
 
-`debug run` reports readiness and intentionally leaves the app running after it becomes ready. Clean up the spawned app process when the validation is done.
+`auditaur start` uses `.auditaur/config.json`, reports readiness, writes `.auditaur/session.json`, and intentionally leaves the app running after it becomes ready. If the config declares named ports, `start` reserves random local ports, expands `{{port:name}}` placeholders in the command, sets configured port environment variables, and records the chosen ports in the session file and JSON output. If no config exists yet, use the lower-level form:
+
+```bash
+auditaur debug --app <app-name> --require-frontend --json run --timeout-seconds 180 --write-session .auditaur/session.json -- npm run tauri dev
+```
+
+`debug run` reports readiness and intentionally leaves the app running after it becomes ready. When `--app` is supplied, it ignores matching discovery records that existed before spawn, waits for the new Auditaur session, and pins readiness to that exact session/database/pid. Use `--write-session <path>` for agent-owned startup so later commands can read `sessionId`, `instanceId`, `pid`, `databasePath`, and the generated selector argument arrays instead of guessing with `--active` or `--latest`. Clean up the spawned app process with `auditaur stop` when the validation is done.
 
 ## Interpreting readiness
 

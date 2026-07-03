@@ -1,8 +1,10 @@
 use std::{
+    collections::HashSet,
+    fs,
     io::{Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -23,6 +25,7 @@ use auditaur_core::{
     },
 };
 use serde::Serialize;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::{
     commands::read,
@@ -103,9 +106,26 @@ pub struct DebugCdpStatus {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DebugRunResult {
+pub(crate) struct DebugRunResult {
+    schema_version: u8,
+    generated_at_unix_nanos: i64,
+    app: Option<DebugRunApp>,
     status: DebugStatus,
     process: DebugProcessStatus,
+    selectors: DebugRunSelectors,
+    session_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugRunApp {
+    service_name: String,
+    session_id: String,
+    instance_id: String,
+    pid: u32,
+    database_path: String,
+    capabilities: Vec<String>,
+    pinned_by: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +135,21 @@ struct DebugProcessStatus {
     pid: Option<u32>,
     exit_code: Option<i32>,
     running: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugRunSelectors {
+    debug: Vec<String>,
+    drive: Vec<String>,
+    read: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DebugRunOutput {
+    Human,
+    JsonLines,
+    Quiet,
 }
 
 pub fn status(selector: DebugSelector, json: bool) -> Result<()> {
@@ -161,8 +196,35 @@ pub fn run(
     interval_ms: u64,
     timeout_seconds: Option<u64>,
     json: bool,
+    write_session: Option<PathBuf>,
+    environment: Vec<(String, String)>,
     command: Vec<String>,
-) -> Result<()> {
+) -> Result<DebugRunResult> {
+    let output = if json {
+        DebugRunOutput::JsonLines
+    } else {
+        DebugRunOutput::Human
+    };
+    run_with_output(
+        selector,
+        interval_ms,
+        timeout_seconds,
+        output,
+        write_session,
+        environment,
+        command,
+    )
+}
+
+pub(crate) fn run_with_output(
+    selector: DebugSelector,
+    interval_ms: u64,
+    timeout_seconds: Option<u64>,
+    output: DebugRunOutput,
+    write_session: Option<PathBuf>,
+    environment: Vec<(String, String)>,
+    command: Vec<String>,
+) -> Result<DebugRunResult> {
     if command.is_empty() {
         return Err(anyhow!(
             "`auditaur debug run` requires a command after `--`."
@@ -170,7 +232,8 @@ pub fn run(
     }
     let mut child_command = Command::new(&command[0]);
     child_command.args(&command[1..]);
-    if json {
+    child_command.envs(environment);
+    if output != DebugRunOutput::Human {
         child_command.stdout(Stdio::null()).stderr(Stdio::null());
         #[cfg(windows)]
         child_command.creation_flags(0x0800_0000);
@@ -180,15 +243,65 @@ pub fn run(
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
     }
+    #[cfg(not(windows))]
+    child_command.process_group(0);
+    let preexisting = if selector.db.is_none() {
+        selector
+            .app
+            .as_deref()
+            .map(matching_apps)
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let started_at = OffsetDateTime::now_utc();
     let mut child = child_command
         .spawn()
         .with_context(|| format!("failed to start `{}`", command.join(" ")))?;
     let pid = child.id();
     let started = Instant::now();
     let interval = Duration::from_millis(interval_ms).max(Duration::from_millis(100));
+    let mut active_selector = selector.clone();
+    let mut pinned_app = None;
+    if selector.db.is_none() {
+        if let Some(app_name) = selector.app.as_deref() {
+            let preexisting_ids = preexisting
+                .iter()
+                .map(|app| app.instance_id.as_str())
+                .collect::<HashSet<_>>();
+            match wait_for_spawned_app(
+                app_name,
+                started_at,
+                &preexisting_ids,
+                started,
+                timeout_seconds,
+                interval,
+                &mut child,
+            )? {
+                SpawnedAppOutcome::Pinned(app) => {
+                    active_selector = pinned_selector(&selector, &app);
+                    pinned_app = Some(app);
+                }
+                SpawnedAppOutcome::Exited(status) => {
+                    return Err(anyhow!(
+                        "debug command exited before a new Auditaur session was discovered with status {status}"
+                    ));
+                }
+                SpawnedAppOutcome::TimedOut => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(anyhow!(
+                        "Timed out after {}s waiting for a new Auditaur session after startup.",
+                        timeout_seconds.unwrap()
+                    ));
+                }
+            }
+        }
+    }
     let mut final_status;
     loop {
-        final_status = match snapshot(&selector) {
+        final_status = match snapshot(&active_selector) {
             Ok(status) => status,
             Err(error) => {
                 let _ = child.kill();
@@ -196,9 +309,9 @@ pub fn run(
                 return Err(error.context("debug readiness snapshot failed after starting command"));
             }
         };
-        if json {
+        if output == DebugRunOutput::JsonLines {
             println!("{}", serde_json::to_string(&final_status)?);
-        } else {
+        } else if output == DebugRunOutput::Human {
             print_status(&final_status)?;
             println!();
         }
@@ -206,16 +319,15 @@ pub fn run(
             break;
         }
         if let Some(status) = child.try_wait()? {
-            let result = DebugRunResult {
-                status: final_status,
-                process: DebugProcessStatus {
-                    command,
-                    pid: Some(pid),
-                    exit_code: status.code(),
-                    running: false,
-                },
+            let process = DebugProcessStatus {
+                command,
+                pid: Some(pid),
+                exit_code: status.code(),
+                running: false,
             };
-            if json {
+            let result =
+                debug_run_result(final_status, process, pinned_app.as_ref(), &write_session);
+            if output == DebugRunOutput::JsonLines {
                 println!("{}", serde_json::to_string(&result)?);
             }
             return Err(anyhow!(
@@ -241,16 +353,191 @@ pub fn run(
         exit_code: child_status.and_then(|status| status.code()),
         running: child_status.is_none(),
     };
-    let result = DebugRunResult {
-        status: final_status,
-        process,
-    };
-    if json {
+    let result = debug_run_result(final_status, process, pinned_app.as_ref(), &write_session);
+    write_session_file(write_session.as_deref(), &result)?;
+    if output == DebugRunOutput::JsonLines {
         println!("{}", serde_json::to_string(&result)?);
-    } else {
+    } else if output == DebugRunOutput::Human {
         println!("Auditaur debug session ready.");
+        if let Some(path) = &write_session {
+            println!("Session file: {}", path.display());
+        }
     }
-    Ok(())
+    Ok(result)
+}
+
+enum SpawnedAppOutcome {
+    Pinned(DiscoveredApp),
+    Exited(std::process::ExitStatus),
+    TimedOut,
+}
+
+fn wait_for_spawned_app(
+    app_name: &str,
+    started_at: OffsetDateTime,
+    preexisting_ids: &HashSet<&str>,
+    started: Instant,
+    timeout_seconds: Option<u64>,
+    interval: Duration,
+    child: &mut Child,
+) -> Result<SpawnedAppOutcome> {
+    loop {
+        if let Some(app) = find_spawned_app(app_name, started_at, preexisting_ids)? {
+            return Ok(SpawnedAppOutcome::Pinned(app));
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(SpawnedAppOutcome::Exited(status));
+        }
+        if timeout_seconds.is_some_and(|seconds| started.elapsed() >= Duration::from_secs(seconds))
+        {
+            return Ok(SpawnedAppOutcome::TimedOut);
+        }
+        thread::sleep(interval);
+    }
+}
+
+fn matching_apps(app_name: &str) -> Result<Vec<DiscoveredApp>> {
+    discovery::list_apps().map(|apps| {
+        apps.into_iter()
+            .filter(|app| app_matches(app, app_name))
+            .collect()
+    })
+}
+
+fn find_spawned_app(
+    app_name: &str,
+    started_at: OffsetDateTime,
+    preexisting_ids: &HashSet<&str>,
+) -> Result<Option<DiscoveredApp>> {
+    let mut candidates = discovery::list_apps()?
+        .into_iter()
+        .filter(|app| app_matches(app, app_name))
+        .filter(|app| app.status == DiscoveryStatus::Active)
+        .filter(|app| !preexisting_ids.contains(app.instance_id.as_str()))
+        .filter(|app| app_started_or_heartbeat_after(app, started_at))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| right.last_heartbeat_at.cmp(&left.last_heartbeat_at));
+    Ok(candidates.into_iter().next())
+}
+
+fn app_started_or_heartbeat_after(app: &DiscoveredApp, started_at: OffsetDateTime) -> bool {
+    let cutoff = started_at - time::Duration::seconds(2);
+    parse_rfc3339(&app.started_at).is_some_and(|time| time >= cutoff)
+        || parse_rfc3339(&app.last_heartbeat_at).is_some_and(|time| time >= cutoff)
+}
+
+fn parse_rfc3339(value: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(value, &Rfc3339).ok()
+}
+
+fn pinned_selector(base: &DebugSelector, app: &DiscoveredApp) -> DebugSelector {
+    DebugSelector {
+        db: Some(PathBuf::from(&app.database_path)),
+        app: None,
+        session_id: Some(app.session_id.clone()),
+        instance_id: Some(app.instance_id.clone()),
+        pid: Some(app.pid),
+        latest: false,
+        active: false,
+        cdp_port: base.cdp_port,
+        require_frontend: base.require_frontend,
+        require_drive_bridge: base.require_drive_bridge,
+    }
+}
+
+fn debug_run_result(
+    status: DebugStatus,
+    process: DebugProcessStatus,
+    pinned_app: Option<&DiscoveredApp>,
+    session_file: &Option<PathBuf>,
+) -> DebugRunResult {
+    let app = pinned_app
+        .map(|app| DebugRunApp::from_discovered(app, "newDiscoveryAfterSpawn"))
+        .or_else(|| {
+            status
+                .app
+                .as_ref()
+                .map(|app| DebugRunApp::from_discovered(app, "selector"))
+        });
+    let selectors = app
+        .as_ref()
+        .map(DebugRunSelectors::from_app)
+        .unwrap_or_default();
+    DebugRunResult {
+        schema_version: 1,
+        generated_at_unix_nanos: read::current_time_unix_nanos(),
+        app,
+        status,
+        process,
+        selectors,
+        session_file: session_file
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+    }
+}
+
+fn write_session_file(path: Option<&Path>, result: &DebugRunResult) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create session file directory `{}`",
+                parent.display()
+            )
+        })?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(result)?)
+        .with_context(|| format!("failed to write session file `{}`", path.display()))
+}
+
+impl DebugRunApp {
+    fn from_discovered(app: &DiscoveredApp, pinned_by: impl Into<String>) -> Self {
+        Self {
+            service_name: app.service_name.clone(),
+            session_id: app.session_id.clone(),
+            instance_id: app.instance_id.clone(),
+            pid: app.pid,
+            database_path: app.database_path.clone(),
+            capabilities: app.capabilities.clone(),
+            pinned_by: pinned_by.into(),
+        }
+    }
+}
+
+impl DebugRunSelectors {
+    fn from_app(app: &DebugRunApp) -> Self {
+        Self {
+            debug: vec![
+                "--db".to_string(),
+                app.database_path.clone(),
+                "--session-id".to_string(),
+                app.session_id.clone(),
+                "--instance-id".to_string(),
+                app.instance_id.clone(),
+                "--pid".to_string(),
+                app.pid.to_string(),
+            ],
+            drive: vec![
+                "--session-id".to_string(),
+                app.session_id.clone(),
+                "--instance-id".to_string(),
+                app.instance_id.clone(),
+                "--pid".to_string(),
+                app.pid.to_string(),
+            ],
+            read: vec![
+                "--db".to_string(),
+                app.database_path.clone(),
+                "--session".to_string(),
+                app.session_id.clone(),
+            ],
+        }
+    }
 }
 
 pub(crate) fn snapshot(selector: &DebugSelector) -> Result<DebugStatus> {
@@ -855,6 +1142,117 @@ fn stage(
         name: name.into(),
         status,
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn startup_selectors_target_exact_session() {
+        let app = DebugRunApp {
+            service_name: "fixture".to_string(),
+            session_id: "session-fixture".to_string(),
+            instance_id: "instance-fixture".to_string(),
+            pid: 42,
+            database_path: "C:\\tmp\\telemetry.sqlite".to_string(),
+            capabilities: vec!["logs".to_string()],
+            pinned_by: "newDiscoveryAfterSpawn".to_string(),
+        };
+
+        let selectors = DebugRunSelectors::from_app(&app);
+
+        assert_eq!(
+            selectors.debug,
+            vec![
+                "--db",
+                "C:\\tmp\\telemetry.sqlite",
+                "--session-id",
+                "session-fixture",
+                "--instance-id",
+                "instance-fixture",
+                "--pid",
+                "42"
+            ]
+        );
+        assert_eq!(
+            selectors.drive,
+            vec![
+                "--session-id",
+                "session-fixture",
+                "--instance-id",
+                "instance-fixture",
+                "--pid",
+                "42"
+            ]
+        );
+        assert_eq!(
+            selectors.read,
+            vec![
+                "--db",
+                "C:\\tmp\\telemetry.sqlite",
+                "--session",
+                "session-fixture"
+            ]
+        );
+    }
+
+    #[test]
+    fn writes_startup_session_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".auditaur").join("session.json");
+        let status = DebugStatus {
+            schema_version: 1,
+            generated_at_unix_nanos: 1,
+            ready: true,
+            app: None,
+            database_path: Some("C:\\tmp\\telemetry.sqlite".to_string()),
+            session_id: Some("session-fixture".to_string()),
+            stages: Vec::new(),
+            telemetry: DebugTelemetryCounts::default(),
+            cdp: None,
+            hints: Vec::new(),
+        };
+        let process = DebugProcessStatus {
+            command: vec!["npm".to_string(), "run".to_string(), "debug".to_string()],
+            pid: Some(123),
+            exit_code: None,
+            running: true,
+        };
+        let app = DiscoveredApp {
+            instance_id: "instance-fixture".to_string(),
+            session_id: "session-fixture".to_string(),
+            service_name: "fixture".to_string(),
+            service_version: None,
+            app_identifier: None,
+            pid: 42,
+            started_at: "2099-01-01T00:00:00Z".to_string(),
+            last_heartbeat_at: "2099-01-01T00:00:00Z".to_string(),
+            heartbeat_age_seconds: Some(0),
+            status: DiscoveryStatus::Active,
+            capabilities: vec!["logs".to_string()],
+            database_path: "C:\\tmp\\telemetry.sqlite".to_string(),
+            database_readable: true,
+            schema_valid: true,
+            discovery_path: "C:\\tmp\\apps\\instance-fixture.json".to_string(),
+            stale_reason: None,
+            superseded_by_session_id: None,
+            seconds_until_next_start: None,
+            churn_session_count: None,
+            churn_window_seconds: None,
+            churn_hint: None,
+        };
+        let result = debug_run_result(status, process, Some(&app), &Some(path.clone()));
+
+        write_session_file(Some(&path), &result).unwrap();
+
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["app"]["sessionId"], "session-fixture");
+        assert_eq!(written["app"]["instanceId"], "instance-fixture");
+        assert_eq!(written["selectors"]["read"][3], "session-fixture");
+        assert_eq!(written["process"]["running"], true);
     }
 }
 

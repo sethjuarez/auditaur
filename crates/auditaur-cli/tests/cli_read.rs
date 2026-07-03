@@ -345,6 +345,85 @@ fn drill_run_help_exposes_first_slice_options() {
 }
 
 #[test]
+fn debug_run_help_exposes_session_file_option() {
+    let help = run_stdout(["debug", "run", "--help"]);
+    assert!(help.contains("--write-session"));
+}
+
+#[test]
+fn simplified_agent_commands_are_discoverable() {
+    assert!(run_stdout(["start", "--help"]).contains("--write-session"));
+    assert!(run_stdout(["drill", "--help"]).contains("--session-file"));
+    assert!(run_stdout(["inspect", "--help"]).contains("--session-file"));
+    assert!(run_stdout(["stop", "--help"]).contains("--session-file"));
+}
+
+#[test]
+fn simplified_drill_and_inspect_use_config_and_session_file() {
+    let temp = TempDir::new().unwrap();
+    let live_pid = std::process::id();
+    let db_path = write_drive_fixture_with_pid(temp.path(), "agent-ux-fixture", live_pid);
+    let auditaur_dir = temp.path().join(".auditaur");
+    fs::create_dir_all(&auditaur_dir).unwrap();
+    fs::write(
+        auditaur_dir.join("config.json"),
+        serde_json::to_vec_pretty(&json!({
+            "app": "fixture",
+            "start": ["npm", "run", "debug"],
+            "readiness": {
+                "frontend": true,
+                "driveBridge": true,
+                "timeoutSeconds": 180
+            },
+            "defaultDrill": "smoke",
+            "drills": {
+                "smoke": {}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        auditaur_dir.join("session.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schemaVersion": 1,
+            "app": {
+                "serviceName": "auditaur-fixture",
+                "sessionId": "session-fixture",
+                "instanceId": "agent-ux-fixture",
+                "pid": live_pid,
+                "databasePath": db_path.to_string_lossy()
+            },
+            "process": {
+                "pid": live_pid,
+                "running": true
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut drill = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+    drill
+        .args(["drill", "--json"])
+        .current_dir(temp.path())
+        .env("AUDITAUR_DATA_DIR", temp.path());
+    let drill_report = run_json_command(&mut drill);
+    assert_eq!(drill_report["status"], "passed");
+    assert_eq!(drill_report["drill"]["name"], "smoke");
+    assert_eq!(drill_report["app"]["sessionId"], "session-fixture");
+
+    let mut inspect = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+    inspect
+        .args(["inspect", "--json"])
+        .current_dir(temp.path())
+        .env("AUDITAUR_DATA_DIR", temp.path());
+    let inspect_report = run_json_command(&mut inspect);
+    assert_eq!(inspect_report["app"]["sessionId"], "session-fixture");
+    assert!(inspect_report["explain"]["findings"].is_array());
+}
+
+#[test]
 fn init_skill_installs_auditaur_debug_skill() {
     let repo = TempDir::new().unwrap();
     let skill_path = repo
@@ -1588,6 +1667,10 @@ fn write_discovery_file(root: &std::path::Path, discovery: DiscoveryFile) {
 }
 
 fn write_drive_fixture(root: &std::path::Path, instance_id: &str) -> PathBuf {
+    write_drive_fixture_with_pid(root, instance_id, 42)
+}
+
+fn write_drive_fixture_with_pid(root: &std::path::Path, instance_id: &str, pid: u32) -> PathBuf {
     let db_path = root
         .join("sessions")
         .join("session-fixture")
@@ -1603,7 +1686,7 @@ fn write_drive_fixture(root: &std::path::Path, instance_id: &str) -> PathBuf {
             service_name: "auditaur-fixture".to_string(),
             service_version: Some("0.1.0".to_string()),
             app_identifier: Some("dev.auditaur.fixture".to_string()),
-            pid: 42,
+            pid,
             started_at: "2026-05-18T18:00:00Z".to_string(),
             database_path: db_path.to_string_lossy().to_string(),
             capabilities: expected_capabilities(),

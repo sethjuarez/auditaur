@@ -50,6 +50,7 @@ pub struct DrillRunOptions {
     pub expect_text: Option<String>,
     pub script: Option<PathBuf>,
     pub json: bool,
+    pub environment: Vec<(String, String)>,
     pub command: Vec<String>,
 }
 
@@ -260,7 +261,7 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
     }
 
     let spawn_start = Instant::now();
-    let mut child = match spawn_command(&options.command) {
+    let mut child = match spawn_command(&options.command, &options.environment) {
         Ok(child) => {
             let root_pid = child.id();
             report.command.root_pid = Some(root_pid);
@@ -1070,13 +1071,14 @@ fn wait_for_debug_ready(
     }
 }
 
-fn spawn_command(command: &[String]) -> Result<Child> {
+fn spawn_command(command: &[String], environment: &[(String, String)]) -> Result<Child> {
     if command.is_empty() {
         return Err(anyhow!("drill run requires a command after `--`"));
     }
     let mut child_command = Command::new(&command[0]);
     child_command
         .args(&command[1..])
+        .envs(environment.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -1435,6 +1437,7 @@ mod tests {
             expect_text: None,
             script: None,
             json: false,
+            environment: Vec::new(),
             command: vec!["fixture".to_string()],
         };
         let mut report = DrillReport::new(&options, &[]);
@@ -1642,6 +1645,7 @@ mod tests {
             expect_text: None,
             script,
             json: false,
+            environment: Vec::new(),
             command: vec!["fixture".to_string()],
         }
     }
