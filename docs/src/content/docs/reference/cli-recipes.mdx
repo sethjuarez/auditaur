@@ -18,6 +18,15 @@ auditaur stop
 
 Use `auditaur drill <name>` when the config defines multiple drills. `start` writes `.auditaur\session.json`; `drill`, `inspect`, and `stop` read it so agents do not need custom wrappers for readiness polling, session IDs, database paths, or process cleanup.
 
+## Scaffold agent helpers in a consuming repo
+
+```powershell
+auditaur init skill
+auditaur init extension
+```
+
+`init skill` installs the Auditaur debugging workflow for agents. `init extension` installs the Copilot canvas extension that can render drill human gates as action cards. Use `--path <repo-root>` to target another repository.
+
 ## Inspect the latest active app
 
 ```powershell
@@ -74,6 +83,14 @@ auditaur drill run --app my-tauri-app --require-drive-bridge --selector "#ready"
 ```
 
 Use drill mode when Auditaur should start the app, wait for a fresh session, check readiness, optionally drive one selector/text assertion, write a report, and clean up the app process tree.
+
+## Pause for a human approval inside a drill
+
+```powershell
+auditaur drill run --app my-tauri-app --require-drive-bridge --script .auditaur\drills\github-login.json -- npm run tauri dev
+```
+
+Use a human gate when the flow requires OAuth consent, OS permissions, elevation, browser handoff, or hardware-key approval. The gate runs after Auditaur pins the spawned app session and before final evidence collection, so the report stays tied to one session. A tester can answer in the terminal, through `list_pending_human_gates`/`respond_human_gate` over MCP, or through the `auditaur-human-gate` canvas installed by `auditaur init extension`.
 
 ## Verify the Tauri-native drive bridge
 

@@ -1,0 +1,104 @@
+---
+title: Human-in-the-Loop Drills
+description: Pause Auditaur drills for OAuth consent, OS prompts, hardware keys, and other manual approval steps.
+---
+
+Human-in-the-loop drills let Auditaur own a confidence run while a real person completes a trust-sensitive step. Use them when an agent should not fake the action: OAuth device-code approval, SSO consent, OS permission prompts, installer elevation, external browser handoffs, camera/mic permissions, or hardware security keys.
+
+The important property is continuity. Auditaur starts the normal app command, waits for a fresh post-spawn session, pins that exact session/database/pid, reaches readiness, pauses for the human gate, then resumes evidence collection against the same session. That keeps the drill report trustworthy before and after the manual action.
+
+## Install the optional canvas
+
+In a consuming repo, install the project extension if testers will respond through the Copilot app UI:
+
+```powershell
+auditaur init extension
+```
+
+This writes `.github/extensions/auditaur-gate/extension.mjs`. When a gate is pending, agents can open the `auditaur-human-gate` canvas to show the instructions, choices, required inputs, and evidence context. Terminal and MCP responses remain available when a canvas is not.
+
+## Write a gate script
+
+Save a script such as `.auditaur\drills\github-login.json`:
+
+```json
+{
+  "gates": [
+    {
+      "name": "Approve GitHub sign-in",
+      "instructions": "Complete the GitHub device-code approval in the app or browser, then return here.",
+      "selector": "#status-card",
+      "expectText": "Signed in",
+      "manualContinue": true,
+      "timeoutMs": 300000,
+      "clipboard": {
+        "label": "Device code",
+        "value": "ABCD-1234",
+        "sensitive": true,
+        "copy": "attempt"
+      },
+      "choices": [
+        { "id": "done", "label": "Done", "outcome": "continue" },
+        { "id": "retry", "label": "Retry approval", "outcome": "retry" },
+        { "id": "blocked", "label": "Blocked by SSO or consent", "outcome": "fail" },
+        { "id": "abort", "label": "Abort drill", "outcome": "abort" }
+      ],
+      "inputs": [
+        {
+          "id": "note",
+          "label": "Approval note",
+          "kind": "multilineText",
+          "required": false,
+          "sensitive": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+`selector` plus `expectText` makes Auditaur monitor the app while the human acts. `manualContinue` and `choices` let the tester explicitly continue, retry, fail, skip, or abort. Inputs and clipboard values marked `sensitive` are redacted in the drill report, but local temporary gate response JSON can briefly contain raw response values until the drill consumes and removes it.
+
+## Run the drill
+
+Human gate scripts currently use the explicit `drill run --script` form:
+
+```powershell
+auditaur drill run --app my-tauri-app --require-frontend --require-drive-bridge --script .auditaur\drills\github-login.json -- npm run tauri dev
+```
+
+During the gate, complete the manual action in the real app, browser, OS dialog, installer, or hardware device. Do not restart the app or switch sessions; the gate is deliberately tied to the pinned session.
+
+## Response paths
+
+### Terminal
+
+If no agent UI responds, the terminal prompts the tester for a choice and any configured inputs. Press ENTER to select the first `continue` choice when one exists.
+
+### MCP
+
+Run the MCP server with the same Auditaur data directory as the drill:
+
+```powershell
+auditaur mcp
+```
+
+An agent can call `list_pending_human_gates` to find the request, then `respond_human_gate` with the `requestId`, optional `choiceId`, optional `inputs`, and a clear `responder` string.
+
+### Copilot canvas
+
+When `auditaur init extension` has installed the project extension, an agent can open the `auditaur-human-gate` canvas for the pending request. The canvas writes the same local response file as MCP, and the drill records the selected choice, non-sensitive inputs, responder, and gate outcome.
+
+## Gate shapes
+
+| Shape | Use when | Typical fields |
+| --- | --- | --- |
+| Monitored wait | The app can prove completion by visible text and no click is needed. | `selector`, `expectText`, `timeoutMs` |
+| Manual continue | A tester must confirm an external step is complete. | `instructions`, `manualContinue`, `choices` |
+| Retryable approval | OAuth/SSO can fail transiently or require a second attempt. | `choices` with `continue`, `retry`, and `fail` outcomes |
+| Evidence note | The tester should record why a gate was approved or blocked. | `inputs` with `sensitive` based on content |
+| External code handoff | A device code or one-time value helps the tester complete the flow. | `clipboard` with `copy: "attempt"` |
+
+## Report behavior
+
+Gate results are included in the redacted drill report with the gate name, satisfaction mode, selected choice, responder, input metadata, and timing. The final selector/text/error/IPC/explain phases run after the gate, so failures caused by the manual step are visible in the same report.

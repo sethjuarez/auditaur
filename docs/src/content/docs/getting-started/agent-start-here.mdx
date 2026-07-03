@@ -17,6 +17,7 @@ Auditaur observes the app. It does not replace the app's normal dev command. For
 | "debug with Auditaur" | Check readiness first, then inspect logs, errors, timeline, traces, IPC, and events. |
 | "drive the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
 | "run a confidence drill" | Run `auditaur drill` for the configured default drill, or `auditaur drill <name>` for a named drill. |
+| "approve sign-in" / "manual approval" | Use a drill human gate; do not synthesize or bypass the human step. |
 
 ## Install the agent skill
 
@@ -51,6 +52,16 @@ gh skill publish .github --dry-run
 ```
 
 `gh skill preview` reads from GitHub, so previewing `sethjuarez/auditaur` will only find `auditaur-debug` after the branch containing `.github/skills/auditaur-debug/SKILL.md` is pushed/merged.
+
+## Install the manual gate canvas extension
+
+If the repo uses Copilot app canvases, install the Auditaur manual-gate canvas extension alongside the skill:
+
+```powershell
+auditaur init extension
+```
+
+This writes `.github/extensions/auditaur-gate/extension.mjs` in the consuming repo. During a drill human gate, agents can open the `auditaur-human-gate` canvas so the tester sees the instructions, evidence context, choices, and inputs in a first-class action card. The terminal and MCP response paths still work when no canvas client is available.
 
 ## Simplest agent workflow
 
@@ -118,6 +129,12 @@ auditaur drill run --app my-app --require-drive-bridge --selector "#ready" --exp
 
 See [Drill Confidence Runs](/getting-started/drill-confidence-runs/) for report, hook, and exit-code details.
 
+## Manual gates for human steps
+
+When validation requires a real human decision, put that pause in a drill script instead of asking the agent to improvise. Human gates preserve the same pinned app session before and after the pause, so the final report can connect readiness, the manual step, frontend errors, IPC, traces, and explain output.
+
+Use this for OAuth device-code approval, SSO consent, OS permission prompts, installer elevation, camera/mic permissions, external browser handoffs, and hardware security keys. Use the lower-level `auditaur drill run --script <path>` form for gate scripts; see [Human-in-the-Loop Drills](/getting-started/human-in-the-loop-drills/) for complete scripts and the terminal/MCP/canvas response paths.
+
 ## Drive the UI
 
 Use the Tauri-native drive bridge for selector actions, screenshots, and snapshots. Enable it in exactly one debug/test WebView:
@@ -151,6 +168,7 @@ Selector screenshots use native WebView capture first and crop to the requested 
 - [Tauri Plugin](/getting-started/tauri-plugin/)
 - [Frontend API](/getting-started/frontend-api/)
 - [Drill Confidence Runs](/getting-started/drill-confidence-runs/)
+- [Human-in-the-Loop Drills](/getting-started/human-in-the-loop-drills/)
 - [Architecture](/concepts/architecture/)
 - [Troubleshooting](/reference/troubleshooting/)
 - [CLI Recipes](/reference/cli-recipes/)
