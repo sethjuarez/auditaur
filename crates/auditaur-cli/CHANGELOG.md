@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.0...auditaur-cli-v0.4.1) - 2026-07-03
+
+### Added
+
+- add human gate drill support
+- add agent startup workflow
+
+### Fixed
+
+- restore unix debug run build
+
 ## [0.4.0](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.3.2...auditaur-cli-v0.4.0) - 2026-06-28
 
 ### Added
