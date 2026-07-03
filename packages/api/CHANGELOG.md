@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/sethjuarez/auditaur/compare/api-v0.5.1...api-v0.6.0) (2026-07-03)
+
+
+### Features
+
+* add auditaur drill run ([50b004b](https://github.com/sethjuarez/auditaur/commit/50b004b7a73df21f07ab7ea668ae74dd4e5b6509))
+* add auditaur drill run ([23c63f4](https://github.com/sethjuarez/auditaur/commit/23c63f4b9e88fbe1c20d21429901cbeb24988034))
+* add targeted native webview screenshots ([5a032bc](https://github.com/sethjuarez/auditaur/commit/5a032bc40468c10bb582ba5a48b84c374a75f18d))
+* add targeted native webview screenshots ([a8d596c](https://github.com/sethjuarez/auditaur/commit/a8d596cef2dc64e8f05f64f747f3316b72905ca3))
+
+
+### Bug Fixes
+
+* scroll screenshot targets into view ([e8878fa](https://github.com/sethjuarez/auditaur/commit/e8878fa544920fe7eac9cc85928847b648cd42df))
+
 ## [0.5.1](https://github.com/sethjuarez/auditaur/compare/api-v0.5.0...api-v0.5.1) (2026-06-26)
 
 
