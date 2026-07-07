@@ -58,6 +58,7 @@ MCP clients should point at the built binary or the cargo command above. The too
 - SQLite session store with WAL and schema validation.
 - Discovery files under the local Auditaur data directory.
 - CLI reads for apps, health, sessions, logs, errors, IPC, events, traces, trace detail, related telemetry, stored window rows, timeline, explain, tail, and redacted bundles.
+- Apple Simulator observe foundation for booting/selecting a destination, optional build/install/launch scaffolding, screenshots, logs, diagnostics counts, and agent-readable JSON reports.
 - MCP reads and agent summaries over stdio for the same data.
 - Tauri plugin collector for frontend batches, window startup/lifecycle state, Rust `tracing`, and Rust panic diagnostics.
 - Frontend console/error/invoke/event wrappers.
@@ -73,6 +74,7 @@ Auditaur packages are published publicly:
 - Rust crates: `auditaur-core`, `auditaur-collector`, `auditaur-cli`, `tauri-plugin-auditaur`.
 - CLI crate: install the `auditaur` command with `cargo install auditaur-cli`.
 - Frontend package: install with `npm install @auditaur/api`.
+- Apple Swift package: add the SwiftPM package in `swift/` and use the `AuditaurAppleCore` product.
 - Agent skill: scaffold into a consuming repo with `auditaur init skill`; use `auditaur init skill --agents-path` for `.agents/skills` consumers. After the skill is available on GitHub, install with `gh skill install sethjuarez/auditaur auditaur-debug`. Maintainers can validate publishing with `gh skill publish .github --dry-run`.
 - Copilot canvas extension: scaffold the Auditaur manual-gate card into a consuming repo with `auditaur init extension`.
 

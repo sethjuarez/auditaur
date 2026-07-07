@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod apple;
 pub mod debug;
 pub mod doctor;
 pub mod drill;

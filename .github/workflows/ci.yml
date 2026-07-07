@@ -58,6 +58,14 @@ jobs:
         working-directory: packages/api
         continue-on-error: true
 
+  swift-apple-package:
+    name: Swift Apple package
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+
   docs:
     name: Docs
     runs-on: ubuntu-latest

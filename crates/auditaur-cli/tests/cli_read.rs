@@ -359,6 +359,19 @@ fn simplified_agent_commands_are_discoverable() {
 }
 
 #[test]
+fn apple_observe_commands_are_discoverable() {
+    assert!(run_stdout(["apple", "--help"]).contains("observe"));
+    let observe = run_stdout(["apple", "observe", "--help"]);
+    assert!(observe.contains("--destination"));
+    assert!(observe.contains("--scheme"));
+    assert!(observe.contains("--screenshot"));
+    assert!(observe.contains("--diagnostics"));
+    assert!(run_stdout(["apple", "screenshot", "--help"]).contains("--output"));
+    assert!(run_stdout(["apple", "logs", "--help"]).contains("--predicate"));
+    assert!(run_stdout(["apple", "status", "--help"]).contains("--destination"));
+}
+
+#[test]
 fn simplified_drill_and_inspect_use_config_and_session_file() {
     let temp = TempDir::new().unwrap();
     let live_pid = std::process::id();

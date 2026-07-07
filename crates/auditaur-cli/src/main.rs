@@ -37,6 +37,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Apple {
+        #[command(subcommand)]
+        command: AppleCommand,
+    },
     Start {
         #[arg(long, default_value_os_t = commands::workflow::default_config_path())]
         config: PathBuf,
@@ -315,6 +319,66 @@ enum DoctorCommand {
     Tauri {
         #[arg(long)]
         path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AppleCommand {
+    Observe {
+        #[arg(long)]
+        scheme: Option<String>,
+        #[arg(long)]
+        destination: String,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        bundle_id: Option<String>,
+        #[arg(long)]
+        app_path: Option<PathBuf>,
+        #[arg(long)]
+        screenshot: Option<PathBuf>,
+        #[arg(long, default_value = "apple-observe-report.json")]
+        report: PathBuf,
+        #[arg(long)]
+        diagnostics: Option<PathBuf>,
+        #[arg(long)]
+        log_predicate: Option<String>,
+        #[arg(long, default_value_t = 60)]
+        log_seconds: u64,
+        #[arg(long)]
+        skip_build: bool,
+        #[arg(long)]
+        skip_launch: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Screenshot {
+        #[arg(long)]
+        destination: String,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Logs {
+        #[arg(long)]
+        destination: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        predicate: Option<String>,
+        #[arg(long, default_value_t = 60)]
+        seconds: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        #[arg(long)]
+        destination: String,
         #[arg(long)]
         json: bool,
     },
@@ -665,6 +729,64 @@ fn inner_main() -> Result<()> {
         },
         Command::Apps { json } => commands::read::apps(json),
         Command::Health { json } => commands::health::run(json),
+        Command::Apple { command } => match command {
+            AppleCommand::Observe {
+                scheme,
+                destination,
+                workspace,
+                project,
+                bundle_id,
+                app_path,
+                screenshot,
+                report,
+                diagnostics,
+                log_predicate,
+                log_seconds,
+                skip_build,
+                skip_launch,
+                json,
+            } => commands::apple::observe(commands::apple::ObserveOptions {
+                scheme,
+                destination,
+                workspace,
+                project,
+                bundle_id,
+                app_path,
+                screenshot,
+                report,
+                diagnostics,
+                log_predicate,
+                log_seconds,
+                skip_build,
+                skip_launch,
+                json,
+            }),
+            AppleCommand::Screenshot {
+                destination,
+                output,
+                json,
+            } => commands::apple::screenshot(commands::apple::ScreenshotOptions {
+                destination,
+                output,
+                json,
+            }),
+            AppleCommand::Logs {
+                destination,
+                output,
+                predicate,
+                seconds,
+                json,
+            } => commands::apple::logs(commands::apple::LogsOptions {
+                destination,
+                output,
+                predicate,
+                seconds,
+                json,
+            }),
+            AppleCommand::Status { destination, json } => {
+                commands::apple::status(commands::apple::StatusOptions { destination, json })
+            }
+        },
         Command::Start {
             config,
             write_session,

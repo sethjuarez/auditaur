@@ -1,4 +1,6 @@
 /target/
+/.build/
+/swift/.build/
 /docs/dist/
 /docs/.astro/
 /docs/node_modules/

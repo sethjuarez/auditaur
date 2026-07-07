@@ -21,6 +21,8 @@ auditaur trace <trace-id> --json
 auditaur agent-runs --app cutready --json
 auditaur agent-run <run-id> --json
 auditaur related --run-id <run-id> --json
+auditaur apple observe --destination "platform=iOS Simulator,name=iPhone 16" --report report/apple-observe.json
+auditaur apple screenshot --destination "platform=iOS Simulator,name=iPhone 16" --output report/launch.png
 auditaur windows --json
 auditaur timeline --json
 auditaur explain
