@@ -15,8 +15,9 @@ Auditaur packages are published publicly and the repository is configured for se
 | Tauri plugin macro crate | `tauri-plugin-auditaur-macros` | Published to crates.io before the plugin crate; re-exported by `tauri-plugin-auditaur`. |
 | Tauri plugin crate | `tauri-plugin-auditaur` | Published to crates.io for Tauri v2 apps. |
 | Frontend package | `@auditaur/api` | Published to npm. |
+| Apple Swift package | `AuditaurAppleCore` | Consumed through SwiftPM from the repository root package; `swift/Package.swift` supports local package development. |
 
-The Rust workspace declares MIT license and repository metadata. Each crate includes crates.io metadata and versioned workspace dependency declarations. The npm package is public-scoped through `publishConfig.access = "public"`.
+The Rust workspace declares MIT license and repository metadata. Each crate includes crates.io metadata and versioned workspace dependency declarations. The npm package is public-scoped through `publishConfig.access = "public"`. The Apple Swift package is distributed by Git tag through SwiftPM rather than a package registry.
 
 ## CLI build
 
@@ -63,6 +64,39 @@ The frontend package uses release-please:
 3. `.github/workflows/publish-api.yml` publishes matching `@auditaur/api-v*` releases to npm with provenance.
 4. Publishing uses npm trusted publishing/OIDC, so no `NPM_TOKEN` is required after the package is configured on npm.
 
+The Apple Swift package uses SwiftPM Git resolution:
+
+1. The root `Package.swift` exposes the `AuditaurAppleCore` product for consumers using `.package(url: "https://github.com/sethjuarez/auditaur.git", ...)`.
+2. The `swift/Package.swift` manifest points at the same sources for local package development and direct `swift test --package-path swift` validation.
+3. Before the first SwiftPM-compatible tag, consumers should depend on a branch or exact revision:
+
+   ```swift
+   .package(url: "https://github.com/sethjuarez/auditaur.git", branch: "main")
+   ```
+
+   or:
+
+   ```swift
+   .package(
+       url: "https://github.com/sethjuarez/auditaur.git",
+       revision: "<commit-sha>"
+   )
+   ```
+
+4. After release, consumers can use a root semantic tag:
+
+   ```swift
+   .package(url: "https://github.com/sethjuarez/auditaur.git", from: "0.1.0")
+   ```
+
+5. Consumer targets should depend on the product:
+
+   ```swift
+   .product(name: "AuditaurAppleCore", package: "auditaur")
+   ```
+
+SwiftPM version resolution reads semantic version tags from the repository root. Existing Auditaur component tags such as `auditaur-core-v0.4.1`, `tauri-plugin-auditaur-v0.4.1`, and `api-v0.6.0` are for Rust/npm release automation and should not be used as SwiftPM `from:` versions.
+
 Manual dry runs are available locally:
 
 ```powershell
@@ -74,6 +108,9 @@ cargo publish -p auditaur-cli --dry-run
 
 cd packages\api
 npm publish --dry-run --access public
+
+swift test
+swift test --package-path swift
 ```
 
 For a single local preflight before a release, run:
@@ -99,4 +136,6 @@ The live dogfood app smoke is also available as a manual GitHub Actions workflow
 4. Run `python scripts/check-skill-drift.py` after editing the Auditaur debug skill or gate canvas extension, and keep their matching files in `crates\auditaur-cli\assets` identical.
 5. Run `.\scripts\preflight-release.ps1` before publishing release PRs. Use `-IncludeDogfoodSmoke` when a live Windows dogfood pass is appropriate.
 6. Before publishing the agent skill for real, review `gh skill publish .github --dry-run` warnings. Repo-level warnings such as secret scanning, push protection, and tag rulesets are GitHub repository settings, not code changes.
-7. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
+7. Before cutting an Apple Swift package tag, verify a clean checkout can resolve both manifests with `swift test` and `swift test --package-path swift`.
+8. Cut the first Apple Swift package release with a root semantic tag such as `0.1.0` or `v0.1.0`; do not use component-prefixed Rust/npm tags for SwiftPM `from:` consumers.
+9. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
