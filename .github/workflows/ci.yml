@@ -65,6 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swift test
+      - run: swift test --package-path swift
 
   docs:
     name: Docs

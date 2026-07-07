@@ -74,7 +74,7 @@ Auditaur packages are published publicly:
 - Rust crates: `auditaur-core`, `auditaur-collector`, `auditaur-cli`, `tauri-plugin-auditaur`.
 - CLI crate: install the `auditaur` command with `cargo install auditaur-cli`.
 - Frontend package: install with `npm install @auditaur/api`.
-- Apple Swift package: add the SwiftPM package in `swift/` and use the `AuditaurAppleCore` product.
+- Apple Swift package: add the repository SwiftPM package and use the `AuditaurAppleCore` product. The root `Package.swift` supports Git URL/tag consumers; `swift/Package.swift` is available for local package development.
 - Agent skill: scaffold into a consuming repo with `auditaur init skill`; use `auditaur init skill --agents-path` for `.agents/skills` consumers. After the skill is available on GitHub, install with `gh skill install sethjuarez/auditaur auditaur-debug`. Maintainers can validate publishing with `gh skill publish .github --dry-run`.
 - Copilot canvas extension: scaffold the Auditaur manual-gate card into a consuming repo with `auditaur init extension`.
 
