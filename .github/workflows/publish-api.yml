@@ -10,10 +10,19 @@ on:
         default: true
         required: true
         type: boolean
+      publish_target:
+        description: "Registry target for manual dispatch"
+        default: github-packages
+        required: true
+        type: choice
+        options:
+          - github-packages
+          - npmjs-and-github-packages
 
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 concurrency:
   group: publish-api
@@ -39,10 +48,51 @@ jobs:
       - run: npm run build
         working-directory: packages/api
       - name: Dry-run npm publish
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.publish_target == 'npmjs-and-github-packages'
         run: npm publish --dry-run --access public
         working-directory: packages/api
       - name: Publish to npm
-        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run && inputs.publish_target == 'npmjs-and-github-packages')
         run: npm publish --provenance --access public
         working-directory: packages/api
+      - uses: actions/setup-node@v4
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: "@sethjuarez"
+      - name: Check GitHub Packages version
+        id: github_package
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if npm view "@sethjuarez/auditaur-api@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        working-directory: packages/api
+      - name: Dry-run GitHub Packages publish
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm pkg set name=@sethjuarez/auditaur-api
+          npm pkg set publishConfig.registry=https://npm.pkg.github.com
+          npm publish --dry-run --access public
+        working-directory: packages/api
+      - name: Publish to GitHub Packages
+        if: (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) && steps.github_package.outputs.exists == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm pkg set name=@sethjuarez/auditaur-api
+          npm pkg set publishConfig.registry=https://npm.pkg.github.com
+          npm publish --access public
+        working-directory: packages/api
+      - name: Skip existing GitHub Packages version
+        if: (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) && steps.github_package.outputs.exists == 'true'
+        run: echo "GitHub Packages already has @sethjuarez/auditaur-api@${{ steps.github_package.outputs.version }}; skipping mirror publish."

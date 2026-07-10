@@ -14,9 +14,9 @@ Auditaur packages are published publicly and the repository is configured for se
 | Collector crate | `auditaur-collector` | Published to crates.io for SQLite store and receiver types. |
 | Tauri plugin macro crate | `tauri-plugin-auditaur-macros` | Published to crates.io before the plugin crate; re-exported by `tauri-plugin-auditaur`. |
 | Tauri plugin crate | `tauri-plugin-auditaur` | Published to crates.io for Tauri v2 apps. |
-| Frontend package | `@auditaur/api` | Published to npm. |
+| Frontend package | `@auditaur/api` | Published to npm; also published to GitHub Packages as `@sethjuarez/auditaur-api`. |
 
-The Rust workspace declares MIT license and repository metadata. Each crate includes crates.io metadata and versioned workspace dependency declarations. The npm package is public-scoped through `publishConfig.access = "public"`.
+The Rust workspace declares MIT license and repository metadata. Each crate includes crates.io metadata and versioned workspace dependency declarations. The npm package is public-scoped through `publishConfig.access = "public"`. Its source package name remains `@auditaur/api`; the GitHub Packages workflow temporarily rewrites package metadata at publish time so imports and npmjs installs do not change.
 
 ## CLI build
 
@@ -61,7 +61,16 @@ The frontend package uses release-please:
 1. `.github/workflows/release-api.yml` opens or updates a release PR for `packages\api`.
 2. Merging the release PR creates a GitHub release tagged for `@auditaur/api`.
 3. `.github/workflows/publish-api.yml` publishes matching `@auditaur/api-v*` releases to npm with provenance.
-4. Publishing uses npm trusted publishing/OIDC, so no `NPM_TOKEN` is required after the package is configured on npm.
+4. The same workflow then publishes the built package to GitHub Packages as `@sethjuarez/auditaur-api` using the release workflow's `GITHUB_TOKEN`.
+5. Manual workflow dispatch defaults to `publish_target: github-packages`, so real manual mirror publishes do not publish to npmjs. Select `npmjs-and-github-packages` only when intentionally exercising the full release publish path.
+6. Before a real GitHub Packages publish, the workflow checks whether `@sethjuarez/auditaur-api@<version>` already exists and skips the mirror publish if it does.
+7. Publishing to npm uses npm trusted publishing/OIDC, so no `NPM_TOKEN` is required after the package is configured on npm. Publishing to GitHub Packages uses `packages: write` workflow permission and `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}`. A separate PAT is only required if the package is later published to a different owner or repository scope that the workflow token cannot write.
+
+Downstream apps that cannot reach npmjs can consume the GitHub Packages copy via an npm alias while preserving imports:
+
+```json
+"@auditaur/api": "npm:@sethjuarez/auditaur-api@<version>"
+```
 
 Manual dry runs are available locally:
 
@@ -74,7 +83,10 @@ cargo publish -p auditaur-cli --dry-run
 
 cd packages\api
 npm publish --dry-run --access public
+npm pack --dry-run
 ```
+
+Use the `publish-api.yml` workflow dispatch dry-run to exercise the authenticated GitHub Packages publish path without creating a package version. For real manual mirror publishes, keep the default `publish_target: github-packages`; this skips npmjs and publishes only the GitHub Packages mirror.
 
 For a single local preflight before a release, run:
 
@@ -94,9 +106,10 @@ The live dogfood app smoke is also available as a manual GitHub Actions workflow
    - Repository: `auditaur`.
    - Workflow: `publish-api.yml`.
    - Environment: leave blank unless this workflow is later updated to use one.
-2. Keep `CARGO_REGISTRY_TOKEN` available until crates.io trusted publishing is configured for all Rust crates.
-3. For the first release that includes `tauri-plugin-auditaur-macros`, confirm the release-plz run lists the macro crate before `tauri-plugin-auditaur`.
-4. Run `python scripts/check-skill-drift.py` after editing the Auditaur debug skill or gate canvas extension, and keep their matching files in `crates\auditaur-cli\assets` identical.
-5. Run `.\scripts\preflight-release.ps1` before publishing release PRs. Use `-IncludeDogfoodSmoke` when a live Windows dogfood pass is appropriate.
-6. Before publishing the agent skill for real, review `gh skill publish .github --dry-run` warnings. Repo-level warnings such as secret scanning, push protection, and tag rulesets are GitHub repository settings, not code changes.
-7. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
+2. Keep `.github/workflows/publish-api.yml` configured with `packages: write` and same-repository `GITHUB_TOKEN` package publishing for `@sethjuarez/auditaur-api`.
+3. Keep `CARGO_REGISTRY_TOKEN` available until crates.io trusted publishing is configured for all Rust crates.
+4. For the first release that includes `tauri-plugin-auditaur-macros`, confirm the release-plz run lists the macro crate before `tauri-plugin-auditaur`.
+5. Run `python scripts/check-skill-drift.py` after editing the Auditaur debug skill or gate canvas extension, and keep their matching files in `crates\auditaur-cli\assets` identical.
+6. Run `.\scripts\preflight-release.ps1` before publishing release PRs. Use `-IncludeDogfoodSmoke` when a live Windows dogfood pass is appropriate.
+7. Before publishing the agent skill for real, review `gh skill publish .github --dry-run` warnings. Repo-level warnings such as secret scanning, push protection, and tag rulesets are GitHub repository settings, not code changes.
+8. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.
