@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.2...auditaur-cli-v0.4.3) - 2026-08-12
+
+### Added
+
+- *(cli)* add generic diagnostics workflow
+
 ## [0.4.2](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.1...auditaur-cli-v0.4.2) - 2026-08-12
 
 ### Added

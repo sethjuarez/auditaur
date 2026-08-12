@@ -15,8 +15,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-auditaur-collector = { version = "0.4.2", path = "../auditaur-collector" }
-auditaur-core = { version = "0.4.2", path = "../auditaur-core" }
+auditaur-collector = { version = "0.4.3", path = "../auditaur-collector" }
+auditaur-core = { version = "0.4.3", path = "../auditaur-core" }
 base64.workspace = true
 clap.workspace = true
 serde.workspace = true
