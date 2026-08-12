@@ -58,6 +58,14 @@ cargo run -p auditaur-cli -- ipc --db "<databasePath>" --json
 cargo run -p auditaur-cli -- events --db "<databasePath>" --json
 ```
 
+If you started dogfood with `auditaur observe` or `auditaur start`, prefer the pinned session file for follow-up reads:
+
+```powershell
+cargo run -p auditaur-cli -- logs --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- ipc --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- explain --session-file .auditaur\session.json
+```
+
 With discovery:
 
 ```powershell

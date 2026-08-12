@@ -2404,7 +2404,10 @@ fn run_telemetry_phases(
     run_phase(report, exit_code, "explain", "telemetryExplain", || {
         polish::explain_json_value(
             &Some(db.clone()),
+            &None,
             Some(app.session_id.clone()),
+            None,
+            None,
             None,
             None,
             200,

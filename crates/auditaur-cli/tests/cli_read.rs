@@ -211,6 +211,289 @@ fn reads_fixture_database_as_json() {
 }
 
 #[test]
+fn generic_diagnostics_support_anchors_diagnose_and_failure_tail() {
+    let db = fixture_database();
+    let db_arg = db.path().to_str().unwrap();
+
+    let anchored_timeline = run_json([
+        "timeline",
+        "--db",
+        db_arg,
+        "--anchor",
+        "ipc:fixture_command",
+        "--window",
+        "10s",
+        "--json",
+    ]);
+    assert_eq!(anchored_timeline["anchor"]["kind"], "ipc");
+    assert_eq!(anchored_timeline["anchor"]["value"], "fixture_command");
+    assert!(anchored_timeline["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["kind"] == "ipc"));
+    assert!(anchored_timeline["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["summary"] == "fixture panic"));
+
+    let anchored_related = run_json([
+        "related",
+        "--db",
+        db_arg,
+        "--anchor",
+        "error:latest",
+        "--anchor-window",
+        "10s",
+        "--json",
+    ]);
+    assert_eq!(anchored_related["anchor"]["kind"], "error");
+    assert!(anchored_related["related"]["frontendErrors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|error| error["message"] == "fixture panic"));
+
+    let anchored_explain = run_json([
+        "explain",
+        "--db",
+        db_arg,
+        "--anchor",
+        "trace:trace-fixture",
+        "--json",
+    ]);
+    assert_eq!(anchored_explain["anchor"]["kind"], "trace");
+    assert_eq!(anchored_explain["failedIpcCount"], 1);
+
+    let event_anchor = run_json([
+        "timeline",
+        "--db",
+        db_arg,
+        "--anchor",
+        "event:fixture:event",
+        "--window",
+        "10s",
+        "--json",
+    ]);
+    assert_eq!(event_anchor["anchor"]["kind"], "event");
+    assert!(event_anchor["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["kind"] == "event"));
+
+    let time_anchor = run_json([
+        "timeline", "--db", db_arg, "--anchor", "time:180", "--window", "10s", "--json",
+    ]);
+    assert_eq!(time_anchor["anchor"]["kind"], "time");
+    assert!(time_anchor["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["kind"] == "ipc"));
+
+    let diagnose = run_json(["diagnose", "--db", db_arg, "--json"]);
+    assert!(diagnose["findingCount"].as_u64().unwrap() >= 1);
+    assert!(diagnose["failureEntries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["kind"] == "ipc"));
+    assert!(diagnose["suggestedCommands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command.as_str().unwrap().contains("tail")));
+    assert!(diagnose["suggestedCommands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|command| command.as_str().unwrap().contains("--db")));
+    assert!(diagnose["suggestedCommands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|command| command.as_str().unwrap().contains("--db \"")));
+
+    let failure_tail = run_stdout([
+        "tail",
+        "--db",
+        db_arg,
+        "--signal",
+        "failures",
+        "--replay",
+        "--duration-seconds",
+        "0",
+        "--json",
+    ]);
+    assert!(failure_tail.contains("\"kind\":\"ipc\""));
+    assert!(failure_tail.contains("\"kind\":\"frontend_error\""));
+    assert!(!failure_tail.contains("\"kind\":\"event\""));
+}
+
+#[test]
+fn read_commands_accept_postmortem_session_file() {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp.path().join("telemetry.sqlite");
+    drop(create_fixture_database_at(&db_path));
+    let session_file = temp.path().join("session.json");
+    write_pinned_session_file(&session_file, &db_path, "session-fixture", false);
+    let session_file = session_file.to_str().unwrap();
+
+    let logs = run_json(["logs", "--session-file", session_file, "--json"]);
+    assert_eq!(logs[0]["body"], "fixture log");
+
+    let errors = run_json(["errors", "--session-file", session_file, "--json"]);
+    assert_eq!(errors[0]["message"], "fixture panic");
+
+    let ipc = run_json(["ipc", "--session-file", session_file, "--json"]);
+    assert_eq!(ipc[0]["command"], "fixture_command");
+
+    let events = run_json(["events", "--session-file", session_file, "--json"]);
+    assert_eq!(events[0]["eventName"], "fixture:event");
+
+    let windows = run_json(["windows", "--session-file", session_file, "--json"]);
+    assert_eq!(windows[0]["windowLabel"], "main");
+
+    let traces = run_json(["traces", "--session-file", session_file, "--json"]);
+    assert_eq!(traces[0]["traceId"], "trace-fixture");
+
+    let trace = run_json([
+        "trace",
+        "trace-fixture",
+        "--session-file",
+        session_file,
+        "--json",
+    ]);
+    assert_eq!(trace["logs"][0]["body"], "fixture log");
+
+    let timeline = run_json(["timeline", "--session-file", session_file, "--json"]);
+    assert!(timeline
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["kind"] == "ipc"));
+
+    let related = run_json([
+        "related",
+        "--session-file",
+        session_file,
+        "--trace",
+        "trace-fixture",
+        "--json",
+    ]);
+    assert_eq!(related["tauriIpcCalls"][0]["command"], "fixture_command");
+
+    let explain = run_json(["explain", "--session-file", session_file, "--json"]);
+    assert_eq!(explain["failedIpcCount"], 1);
+
+    let exceptions = run_json(["exceptions", "--session-file", session_file, "--json"]);
+    assert!(exceptions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|report| report["source"] == "failed_ipc"));
+
+    let bundle = run_json(["bundle", "--session-file", session_file, "--redacted"]);
+    assert_eq!(bundle["tauriIpcCalls"][0]["argsJson"], "[redacted]");
+
+    let tail = run_stdout([
+        "tail",
+        "--session-file",
+        session_file,
+        "--replay",
+        "--duration-seconds",
+        "0",
+        "--json",
+    ]);
+    assert!(tail.contains("\"kind\":\"ipc\""));
+}
+
+#[test]
+fn session_file_read_selectors_validate_conflicts_and_missing_session() {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp.path().join("telemetry.sqlite");
+    drop(create_fixture_database_at(&db_path));
+    let session_file = temp.path().join("session.json");
+    write_pinned_session_file(&session_file, &db_path, "session-fixture", false);
+
+    let session_conflict = run_failure([
+        "logs",
+        "--session-file",
+        session_file.to_str().unwrap(),
+        "--session",
+        "other-session",
+        "--json",
+    ]);
+    assert!(session_conflict.contains("conflicts"));
+    assert!(session_conflict.contains("other-session"));
+
+    let other_db = temp.path().join("other.sqlite");
+    drop(create_fixture_database_at(&other_db));
+    let db_conflict = run_failure([
+        "logs",
+        "--session-file",
+        session_file.to_str().unwrap(),
+        "--db",
+        other_db.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(db_conflict.contains("conflicts"));
+    assert!(db_conflict.contains("databasePath"));
+
+    let missing_session_file = temp.path().join("missing-session.json");
+    write_pinned_session_file(&missing_session_file, &db_path, "missing-session", false);
+    let missing_session = run_failure([
+        "logs",
+        "--session-file",
+        missing_session_file.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(missing_session.contains("not present"));
+    assert!(missing_session.contains("missing-session"));
+
+    let malformed_session_file = temp.path().join("malformed-session.json");
+    fs::write(&malformed_session_file, "{not-json").unwrap();
+    let malformed = run_failure([
+        "logs",
+        "--session-file",
+        malformed_session_file.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(malformed.contains("failed to parse"));
+
+    let missing_app_session_file = temp.path().join("missing-app-session.json");
+    fs::write(&missing_app_session_file, "{}").unwrap();
+    let missing_app = run_failure([
+        "logs",
+        "--session-file",
+        missing_app_session_file.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(missing_app.contains("missing app"));
+
+    let missing_database_path_file = temp.path().join("missing-db-session.json");
+    fs::write(
+        &missing_database_path_file,
+        serde_json::to_vec_pretty(&json!({
+            "app": {
+                "sessionId": "session-fixture"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let missing_database_path = run_failure([
+        "logs",
+        "--session-file",
+        missing_database_path_file.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(missing_database_path.contains("app.databasePath"));
+}
+
+#[test]
 fn debug_status_reports_readiness_for_database_and_discovered_app() {
     let db = fixture_database();
     let status = run_json([
@@ -626,6 +909,85 @@ fn init_extension_installs_auditaur_gate_canvas() {
 }
 
 #[test]
+fn init_diagnostics_installs_versioned_config_and_guidance() {
+    let repo = TempDir::new().unwrap();
+    let config_path = repo.path().join(".auditaur").join("diagnostics.json");
+    let guide_path = repo.path().join(".auditaur").join("diagnostics.md");
+
+    let dry_run = run_json([
+        "init",
+        "diagnostics",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--dry-run",
+        "--json",
+    ]);
+    assert_eq!(dry_run["ok"], true);
+    assert_eq!(dry_run["dryRun"], true);
+    assert!(!config_path.exists());
+
+    let installed = run_json([
+        "init",
+        "diagnostics",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(installed["ok"], true);
+    assert_eq!(installed["files"].as_array().unwrap().len(), 2);
+    let config: Value = serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(config["version"], 1);
+    assert!(config["privacy"]["doNotRecord"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == "tokens"));
+    let guide = fs::read_to_string(&guide_path).unwrap();
+    assert!(guide.contains("auditaur diagnose --session-file .auditaur/session.json"));
+    assert!(guide.contains("<domain_or_operation>.<phase>"));
+
+    let failure = run_failure([
+        "init",
+        "diagnostics",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(failure.contains("already exists"));
+
+    let partial_repo = TempDir::new().unwrap();
+    let partial_dir = partial_repo.path().join(".auditaur");
+    fs::create_dir_all(&partial_dir).unwrap();
+    fs::write(partial_dir.join("diagnostics.md"), "custom").unwrap();
+    let partial_failure = run_failure([
+        "init",
+        "diagnostics",
+        "--path",
+        partial_repo.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(partial_failure.contains("already exists"));
+    assert!(!partial_dir.join("diagnostics.json").exists());
+
+    fs::write(&config_path, "{}").unwrap();
+    let overwritten = run_json([
+        "init",
+        "diagnostics",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--force",
+        "--json",
+    ]);
+    assert!(overwritten["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|file| file["overwritten"] == true));
+    let config: Value = serde_json::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+    assert_eq!(config["version"], 1);
+}
+
+#[test]
 fn packaged_init_extension_matches_repo_extension() {
     let repo_extension = include_str!("../../../.github/extensions/auditaur-gate/extension.mjs")
         .replace("\r\n", "\n");
@@ -640,6 +1002,9 @@ fn agentive_runs_group_model_tool_events_and_related_by_run_id() {
     let store = SqliteStore::open(db.path()).unwrap();
     insert_agentive_fixture(&store);
     drop(store);
+    let session_dir = TempDir::new().unwrap();
+    let session_file = session_dir.path().join("session.json");
+    write_pinned_session_file(&session_file, db.path(), "session-fixture", false);
 
     let runs = run_json(["agent-runs", "--db", db.path().to_str().unwrap(), "--json"]);
     let run = runs
@@ -691,6 +1056,27 @@ fn agentive_runs_group_model_tool_events_and_related_by_run_id() {
         .iter()
         .any(|span| span["name"] == "tauri.invoke agent_chat_with_tools"));
     assert_eq!(related["spanEvents"].as_array().unwrap().len(), 2);
+
+    let pinned_runs = run_json([
+        "agent-runs",
+        "--session-file",
+        session_file.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(pinned_runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|run| run["runId"] == "10ed86a4-d559-4b6d-8319-9bdba2c0ff78"));
+
+    let pinned_detail = run_json([
+        "agent-run",
+        "10ed86a4-d559-4b6d-8319-9bdba2c0ff78",
+        "--session-file",
+        session_file.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(pinned_detail["run"]["modelCallCount"], 3);
 }
 
 #[test]
@@ -1853,6 +2239,41 @@ fn write_drive_fixture_without_windows(root: &std::path::Path, instance_id: &str
         },
     );
     db_path
+}
+
+fn write_pinned_session_file(
+    path: &std::path::Path,
+    db_path: &std::path::Path,
+    session_id: &str,
+    running: bool,
+) {
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&json!({
+            "schemaVersion": 1,
+            "app": {
+                "serviceName": "auditaur-fixture",
+                "sessionId": session_id,
+                "instanceId": "postmortem-instance",
+                "pid": 999_999,
+                "databasePath": db_path.to_string_lossy()
+            },
+            "process": {
+                "pid": 999_999,
+                "running": running
+            },
+            "selectors": {
+                "read": [
+                    "--db",
+                    db_path.to_string_lossy(),
+                    "--session",
+                    session_id
+                ]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 fn expected_capabilities() -> Vec<String> {

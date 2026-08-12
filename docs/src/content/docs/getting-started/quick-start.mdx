@@ -16,12 +16,14 @@ auditaur observe --app dogfood -- npm run tauri dev
 
 Click the buttons to emit a console log, throw a frontend error, call successful and failing Tauri commands, and emit/listen to events.
 
-`observe` starts the normal Tauri dev command, waits for core Auditaur readiness, writes `.auditaur\session.json`, and leaves the app running. Use the pinned follow-up commands it prints instead of `--latest` when multiple stale sessions exist. Core readiness does not require frontend telemetry; add `--require-frontend` only when your check must wait for WebView telemetry, which may need a click or other interaction.
+`observe` starts the normal Tauri dev command, waits for core Auditaur readiness, writes `.auditaur\session.json`, and leaves the app running. Use `--session-file .auditaur\session.json` for follow-up read commands instead of `--latest` or copied selectors when multiple stale sessions exist. Core readiness does not require frontend telemetry; add `--require-frontend` only when your check must wait for WebView telemetry, which may need a click or other interaction.
 
 Inspect the session:
 
 ```powershell
-auditaur logs --db "<databasePath>" --session "<sessionId>" --json
+auditaur logs --session-file .auditaur\session.json --json
+auditaur ipc --session-file .auditaur\session.json --json
+auditaur explain --session-file .auditaur\session.json
 auditaur errors --db "<databasePath>" --session "<sessionId>" --json
 auditaur traces --db "<databasePath>" --session "<sessionId>" --json
 auditaur ipc --db "<databasePath>" --session "<sessionId>" --json

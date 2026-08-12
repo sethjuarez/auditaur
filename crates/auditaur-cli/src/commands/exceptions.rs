@@ -24,8 +24,15 @@ pub struct ExceptionOptions {
     pub limit: usize,
 }
 
-pub fn run(db: &Option<PathBuf>, options: ExceptionOptions) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+pub fn run(
+    db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
+    mut options: ExceptionOptions,
+) -> Result<()> {
+    let (db, session_id) =
+        read::resolve_read_selectors(db, session_file, options.session_id.take())?;
+    options.session_id = session_id;
+    let db = discovery::resolve_db(db)?;
     let store = read::open_validated_store(&db)?;
     let mut frontend_errors = store.list_frontend_errors(&FrontendErrorQuery {
         session_id: options.session_id.clone(),

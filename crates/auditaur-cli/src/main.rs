@@ -140,6 +140,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
@@ -154,6 +156,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
@@ -167,6 +171,8 @@ enum Command {
     Exceptions {
         #[arg(long)]
         db: Option<PathBuf>,
+        #[arg(long)]
+        session_file: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -188,6 +194,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         since: Option<String>,
@@ -203,6 +211,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         json: bool,
@@ -210,6 +220,8 @@ enum Command {
     AgentRuns {
         #[arg(long)]
         db: Option<PathBuf>,
+        #[arg(long)]
+        session_file: Option<PathBuf>,
         #[arg(long)]
         app: Option<String>,
         #[arg(long)]
@@ -226,6 +238,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         app: Option<String>,
         #[arg(long)]
         session: Option<String>,
@@ -235,6 +249,8 @@ enum Command {
     Ipc {
         #[arg(long)]
         db: Option<PathBuf>,
+        #[arg(long)]
+        session_file: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -252,6 +268,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
@@ -266,6 +284,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         json: bool,
@@ -276,9 +296,15 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
+        #[arg(long)]
+        anchor: Option<String>,
+        #[arg(long)]
+        window: Option<String>,
         #[arg(long)]
         since: Option<String>,
         #[arg(long)]
@@ -290,6 +316,8 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
@@ -297,6 +325,10 @@ enum Command {
         run_id: Option<String>,
         #[arg(long)]
         window: Option<String>,
+        #[arg(long)]
+        anchor: Option<String>,
+        #[arg(long)]
+        anchor_window: Option<String>,
         #[arg(long)]
         since: Option<String>,
         #[arg(long)]
@@ -308,9 +340,35 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
+        #[arg(long)]
+        anchor: Option<String>,
+        #[arg(long)]
+        window: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
+    Diagnose {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        trace: Option<String>,
+        #[arg(long)]
+        anchor: Option<String>,
+        #[arg(long)]
+        window: Option<String>,
         #[arg(long)]
         since: Option<String>,
         #[arg(long)]
@@ -321,6 +379,8 @@ enum Command {
     Bundle {
         #[arg(long)]
         db: Option<PathBuf>,
+        #[arg(long)]
+        session_file: Option<PathBuf>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -338,9 +398,13 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         #[arg(long)]
+        session_file: Option<PathBuf>,
+        #[arg(long)]
         session: Option<String>,
         #[arg(long)]
         trace: Option<String>,
+        #[arg(long)]
+        signal: Option<String>,
         #[arg(long)]
         replay: bool,
         #[arg(long, default_value_t = 1000)]
@@ -1263,22 +1327,25 @@ fn inner_main() -> Result<()> {
         Command::Sessions { db, json, limit } => commands::read::sessions(&db, json, limit),
         Command::Logs {
             db,
+            session_file,
             session,
             trace,
             since,
             json,
             limit,
-        } => commands::read::logs(&db, session, trace, since, json, limit),
+        } => commands::read::logs(&db, &session_file, session, trace, since, json, limit),
         Command::Errors {
             db,
+            session_file,
             session,
             trace,
             since,
             json,
             limit,
-        } => commands::read::errors(&db, session, trace, since, json, limit),
+        } => commands::read::errors(&db, &session_file, session, trace, since, json, limit),
         Command::Exceptions {
             db,
+            session_file,
             session,
             trace,
             since,
@@ -1289,6 +1356,7 @@ fn inner_main() -> Result<()> {
             limit,
         } => commands::exceptions::run(
             &db,
+            &session_file,
             commands::exceptions::ExceptionOptions {
                 session_id: session,
                 trace_id: trace,
@@ -1302,103 +1370,195 @@ fn inner_main() -> Result<()> {
         ),
         Command::Traces {
             db,
+            session_file,
             session,
             since,
             failed,
             json,
             limit,
-        } => commands::read::traces(&db, session, since, failed, json, limit),
+        } => commands::read::traces(&db, &session_file, session, since, failed, json, limit),
         Command::Trace {
             trace_id,
             db,
+            session_file,
             session,
             json,
-        } => commands::read::trace(&db, session, trace_id, json),
+        } => commands::read::trace(&db, &session_file, session, trace_id, json),
         Command::AgentRuns {
             db,
+            session_file,
             app,
             session,
             since,
             json,
             limit,
-        } => commands::agent::runs(&db, app, session, since, json, limit),
+        } => commands::agent::runs(&db, &session_file, app, session, since, json, limit),
         Command::AgentRun {
             run_id,
             db,
+            session_file,
             app,
             session,
             json,
-        } => commands::agent::run(&db, app, session, run_id, json),
+        } => commands::agent::run(&db, &session_file, app, session, run_id, json),
         Command::Ipc {
             db,
+            session_file,
             session,
             trace,
             since,
             failed,
             json,
             limit,
-        } => commands::read::ipc(&db, session, trace, since, failed, json, limit),
+        } => commands::read::ipc(
+            &db,
+            &session_file,
+            session,
+            trace,
+            since,
+            failed,
+            json,
+            limit,
+        ),
         Command::Events {
             db,
+            session_file,
             session,
             trace,
             since,
             json,
             limit,
-        } => commands::read::events(&db, session, trace, since, json, limit),
+        } => commands::read::events(&db, &session_file, session, trace, since, json, limit),
         Command::Windows {
             db,
+            session_file,
             session,
             json,
             limit,
-        } => commands::read::windows(&db, session, json, limit),
+        } => commands::read::windows(&db, &session_file, session, json, limit),
         Command::Timeline {
             db,
+            session_file,
             session,
             trace,
-            since,
-            json,
-            limit,
-        } => commands::polish::timeline(&db, session, trace, since, json, limit),
-        Command::Related {
-            db,
-            session,
-            trace,
-            run_id,
+            anchor,
             window,
             since,
             json,
             limit,
-        } => commands::polish::related(&db, session, trace, run_id, window, since, json, limit),
-        Command::Explain {
-            db,
+        } => commands::polish::timeline(
+            &db,
+            &session_file,
             session,
             trace,
+            anchor,
+            window,
             since,
             json,
             limit,
-        } => commands::polish::explain(&db, session, trace, since, json, limit),
+        ),
+        Command::Related {
+            db,
+            session_file,
+            session,
+            trace,
+            run_id,
+            window,
+            anchor,
+            anchor_window,
+            since,
+            json,
+            limit,
+        } => commands::polish::related(
+            &db,
+            &session_file,
+            session,
+            trace,
+            run_id,
+            window,
+            anchor,
+            anchor_window,
+            since,
+            json,
+            limit,
+        ),
+        Command::Explain {
+            db,
+            session_file,
+            session,
+            trace,
+            anchor,
+            window,
+            since,
+            json,
+            limit,
+        } => commands::polish::explain(
+            &db,
+            &session_file,
+            session,
+            trace,
+            anchor,
+            window,
+            since,
+            json,
+            limit,
+        ),
+        Command::Diagnose {
+            db,
+            session_file,
+            session,
+            trace,
+            anchor,
+            window,
+            since,
+            json,
+            limit,
+        } => commands::polish::diagnose(
+            &db,
+            &session_file,
+            session,
+            trace,
+            anchor,
+            window,
+            since,
+            json,
+            limit,
+        ),
         Command::Bundle {
             db,
+            session_file,
             session,
             trace,
             since,
             redacted,
             output,
             limit,
-        } => commands::polish::bundle(&db, session, trace, since, redacted, output, limit),
-        Command::Tail {
-            db,
+        } => commands::polish::bundle(
+            &db,
+            &session_file,
             session,
             trace,
+            since,
+            redacted,
+            output,
+            limit,
+        ),
+        Command::Tail {
+            db,
+            session_file,
+            session,
+            trace,
+            signal,
             replay,
             interval_ms,
             duration_seconds,
             json,
         } => commands::polish::tail(
             &db,
+            &session_file,
             session,
             trace,
+            signal,
             replay,
             interval_ms,
             duration_seconds,

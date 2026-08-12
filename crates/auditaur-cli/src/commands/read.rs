@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use auditaur_collector::exporter_sqlite::SqliteStore;
 use auditaur_core::{
     model::{
@@ -12,7 +12,11 @@ use auditaur_core::{
     },
 };
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use serde_json::Value;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use time::OffsetDateTime;
 
 use crate::{discovery, output::table_cell};
@@ -31,13 +35,15 @@ pub fn sessions(db: &Option<PathBuf>, json: bool, limit: usize) -> Result<()> {
 
 pub fn logs(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
     since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+    let (db, session_id) = resolve_read_selectors(db, session_file, session_id)?;
+    let db = discovery::resolve_db(db)?;
     let store = open_validated_store(&db)?;
     let mut logs = store.list_logs(&LogQuery {
         session_id,
@@ -51,13 +57,15 @@ pub fn logs(
 
 pub fn errors(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
     since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+    let (db, session_id) = resolve_read_selectors(db, session_file, session_id)?;
+    let db = discovery::resolve_db(db)?;
     let store = open_validated_store(&db)?;
     let mut errors = store.list_frontend_errors(&FrontendErrorQuery {
         session_id,
@@ -73,13 +81,15 @@ pub fn errors(
 
 pub fn traces(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     session_id: Option<String>,
     since: Option<String>,
     failed: bool,
     json: bool,
     limit: usize,
 ) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+    let (db, session_id) = resolve_read_selectors(db, session_file, session_id)?;
+    let db = discovery::resolve_db(db)?;
     let store = open_validated_store(&db)?;
     let mut summaries = store.list_trace_summaries(
         session_id.as_deref(),
@@ -101,11 +111,13 @@ pub fn traces(
 
 pub fn trace(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: String,
     json: bool,
 ) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+    let (db, session_id) = resolve_read_selectors(db, session_file, session_id)?;
+    let db = discovery::resolve_db(db)?;
     let store = open_validated_store(&db)?;
     let related = store.related_telemetry(&RelatedTelemetryQuery {
         session_id,
@@ -130,6 +142,7 @@ pub fn trace(
 
 pub fn ipc(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
     since: Option<String>,
@@ -137,7 +150,8 @@ pub fn ipc(
     json: bool,
     limit: usize,
 ) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+    let (db, session_id) = resolve_read_selectors(db, session_file, session_id)?;
+    let db = discovery::resolve_db(db)?;
     let store = open_validated_store(&db)?;
     let mut calls = store.list_tauri_ipc_calls(&TauriIpcQuery {
         session_id,
@@ -160,13 +174,15 @@ pub fn ipc(
 
 pub fn events(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     session_id: Option<String>,
     trace_id: Option<String>,
     since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+    let (db, session_id) = resolve_read_selectors(db, session_file, session_id)?;
+    let db = discovery::resolve_db(db)?;
     let store = open_validated_store(&db)?;
     let mut events = store.list_tauri_events(&TauriEventQuery {
         session_id,
@@ -182,11 +198,13 @@ pub fn events(
 
 pub fn windows(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     session_id: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
-    let db = discovery::resolve_db(db.clone())?;
+    let (db, session_id) = resolve_read_selectors(db, session_file, session_id)?;
+    let db = discovery::resolve_db(db)?;
     let store = open_validated_store(&db)?;
     let windows = store.list_tauri_windows(&TauriWindowQuery {
         session_id,
@@ -201,6 +219,94 @@ pub(crate) fn open_validated_store(db: &Path) -> Result<SqliteStore> {
     store.migrate()?;
     store.validate_schema()?;
     Ok(store)
+}
+
+pub(crate) fn resolve_read_selectors(
+    db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
+    session_id: Option<String>,
+) -> Result<(Option<PathBuf>, Option<String>)> {
+    let Some(session_file) = session_file else {
+        return Ok((db.clone(), session_id));
+    };
+
+    let pinned = read_pinned_session_file(session_file)?;
+    if let Some(db) = db {
+        ensure_same_path(db, &pinned.database_path).with_context(|| {
+            format!(
+                "`--db {}` conflicts with `{}` databasePath `{}`",
+                db.display(),
+                session_file.display(),
+                pinned.database_path.display()
+            )
+        })?;
+    }
+    if let Some(session_id) = session_id.as_deref() {
+        if session_id != pinned.session_id {
+            return Err(anyhow!(
+                "`--session {session_id}` conflicts with `{}` sessionId `{}`",
+                session_file.display(),
+                pinned.session_id
+            ));
+        }
+    }
+
+    let store = open_validated_store(&pinned.database_path).with_context(|| {
+        format!(
+            "failed to open databasePath `{}` from `{}`",
+            pinned.database_path.display(),
+            session_file.display()
+        )
+    })?;
+    if store.get_session(&pinned.session_id)?.is_none() {
+        return Err(anyhow!(
+            "`{}` points to sessionId `{}`, but that session is not present in databasePath `{}`",
+            session_file.display(),
+            pinned.session_id,
+            pinned.database_path.display()
+        ));
+    }
+    Ok((Some(pinned.database_path), Some(pinned.session_id)))
+}
+
+#[derive(Debug)]
+struct PinnedSessionFile {
+    database_path: PathBuf,
+    session_id: String,
+}
+
+fn read_pinned_session_file(path: &Path) -> Result<PinnedSessionFile> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read `{}`", path.display()))?;
+    let value: Value = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse `{}`", path.display()))?;
+    let app = value
+        .get("app")
+        .ok_or_else(|| anyhow!("`{}` is missing app", path.display()))?;
+    let database_path = required_string(app, "databasePath")?;
+    let session_id = required_string(app, "sessionId")?;
+    Ok(PinnedSessionFile {
+        database_path: PathBuf::from(database_path),
+        session_id,
+    })
+}
+
+fn required_string(value: &Value, key: &str) -> Result<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("session file app.{key} must be a string"))
+}
+
+fn ensure_same_path(left: &Path, right: &Path) -> Result<()> {
+    let left_canonical = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right_canonical = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    if left_canonical == right_canonical {
+        Ok(())
+    } else {
+        Err(anyhow!("paths differ"))
+    }
 }
 
 pub(crate) fn print_json_or_table<T: Serialize>(
@@ -271,7 +377,7 @@ fn filter_since<T>(
     Ok(())
 }
 
-fn parse_duration_nanos(value: &str) -> Result<i64> {
+pub(crate) fn parse_duration_nanos(value: &str) -> Result<i64> {
     let mut chars = value.chars();
     let unit = chars.next_back().unwrap_or_default();
     let number = chars.as_str();

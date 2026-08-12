@@ -79,16 +79,16 @@ cargo run -p auditaur-cli -- timeline --json
 cargo run -p auditaur-cli -- explain
 ```
 
-Or pass the copied path explicitly:
+Or, for runs started with `auditaur observe` or `auditaur start`, pass the pinned session file:
 
 ```powershell
-cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
-cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
-cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
-cargo run -p auditaur-cli -- exceptions --db "<databasePath>" --json
-cargo run -p auditaur-cli -- ipc --db "<databasePath>" --json
-cargo run -p auditaur-cli -- events --db "<databasePath>" --json
-cargo run -p auditaur-cli -- windows --db "<databasePath>" --json
+cargo run -p auditaur-cli -- traces --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- logs --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- errors --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- exceptions --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- ipc --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- events --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- windows --session-file .auditaur\session.json --json
 ```
 
 If multiple dogfood app instances are active, discovery intentionally refuses to guess which database to inspect. Use `apps --json`, copy the latest `databasePath`, and pass `--db`.

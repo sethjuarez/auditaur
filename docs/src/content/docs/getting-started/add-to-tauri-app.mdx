@@ -179,9 +179,9 @@ Healthy discovery looks like:
 ]
 ```
 
-If multiple active sessions exist, copy `databasePath` from `auditaur apps --json` and pass it explicitly:
+If multiple active sessions exist, copy `databasePath` from `auditaur apps --json` and pass it explicitly. If you started the app with `auditaur observe` or `auditaur start`, prefer the pinned session file instead:
 
 ```powershell
-auditaur logs --db "<databasePath>" --json
-auditaur exceptions --db "<databasePath>" --json
+auditaur logs --session-file .auditaur\session.json --json
+auditaur exceptions --session-file .auditaur\session.json --json
 ```

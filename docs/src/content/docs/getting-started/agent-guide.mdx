@@ -130,7 +130,7 @@ Use no-config observe mode when an agent or smoke script should own a repeatable
 auditaur observe --app my-app -- npm run tauri dev
 ```
 
-Observe mode starts the same app command you would have run manually; Auditaur does not replace Tauri startup. It watches core readiness, writes `.auditaur/session.json` with pinned selectors, prints status/tail/logs/drive/stop follow-up commands, and leaves the app running after readiness so the agent can drive, inspect, or clean it up. Commands such as `npm`, `pnpm`, `yarn`, and `cargo tauri` are launched directly across platforms; wrap in PowerShell/bash only when you need shell syntax.
+Observe mode starts the same app command you would have run manually; Auditaur does not replace Tauri startup. It watches core readiness, writes `.auditaur/session.json` with pinned selectors, prints status/tail/logs/drive/stop follow-up commands, and leaves the app running after readiness so the agent can drive, inspect, or clean it up. Use `--session-file .auditaur/session.json` for read commands such as `logs`, `ipc`, `timeline`, `explain`, and `tail`, including postmortem reads after the app exits or crashes. Commands such as `npm`, `pnpm`, `yarn`, and `cargo tauri` are launched directly across platforms; wrap in PowerShell/bash only when you need shell syntax.
 
 For concurrent agent sessions, avoid fixed frontend/dev-server ports. Reserve a named port and wire it into the app command:
 

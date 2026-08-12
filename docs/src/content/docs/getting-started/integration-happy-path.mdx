@@ -165,12 +165,12 @@ Healthy discovery has this shape:
 ]
 ```
 
-If more than one active session exists, copy `databasePath` from `auditaur apps --json` and pass it explicitly:
+If more than one active session exists, copy `databasePath` from `auditaur apps --json` and pass it explicitly. If the run was started with `auditaur observe` or `auditaur start`, prefer the pinned session file instead:
 
 ```powershell
-auditaur logs --db "<databasePath>" --json
-auditaur traces --db "<databasePath>" --json
-auditaur explain --db "<databasePath>" --json
+auditaur logs --session-file .auditaur\session.json --json
+auditaur traces --session-file .auditaur\session.json --json
+auditaur explain --session-file .auditaur\session.json --json
 ```
 
 ## 8. Optional: enable drive checks
