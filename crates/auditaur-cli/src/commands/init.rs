@@ -57,6 +57,11 @@ If the app emits semantic checkpoints, prefer names like `<domain_or_operation>.
 for example `settings.save.started`, `settings.save.failed`, or `sync.retrying`.
 Checkpoint attributes must be privacy-safe structured values only; never include secrets,
 raw media, full prompts, transcripts, or user content.
+
+Diagnostics config and guidance help future instrumentation stay safe, but they do not
+retroactively redact raw application logs. If the app logs provider frames, prompts,
+transcripts, URLs with secrets, or user content, Auditaur may surface those log lines in
+local timelines and JSON output. Redact at the app logging boundary before recording.
 "#;
 
 #[derive(Debug, Serialize)]
@@ -228,8 +233,12 @@ pub fn diagnostics(path: Option<&Path>, force: bool, dry_run: bool, json: bool) 
     };
     read::print_json_or_table(json, &result, || {
         for file in &result.files {
-            let action = if dry_run {
-                "would write"
+            let action = if dry_run && file.existed && !force {
+                "exists; would leave unchanged"
+            } else if dry_run && file.existed && force {
+                "exists; would overwrite"
+            } else if dry_run {
+                "missing; would write"
             } else if file.overwritten {
                 "overwrote"
             } else if file.written {

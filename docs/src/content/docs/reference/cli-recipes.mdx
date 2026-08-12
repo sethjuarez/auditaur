@@ -59,7 +59,7 @@ auditaur related --session-file .auditaur\session.json --anchor ipc:<command> --
 auditaur explain --session-file .auditaur\session.json --anchor trace:<traceId>
 ```
 
-Anchors keep the product generic: use `trace:<id>`, `ipc:<command-or-latest>`, `error:latest`, `event:<name>`, `checkpoint:<name>`, or `time:<rfc3339-or-unix-nanos>` instead of adding app-specific lenses.
+Anchors keep the product generic: use `trace:<id>`, `ipc:<command-or-latest>`, `error:latest`, `event:<name>`, `checkpoint:<name>`, or `time:<rfc3339-or-unix-nanos>` instead of adding app-specific lenses. `error:latest` resolves to the latest generic failure signal, such as a frontend error, failed IPC call, failed span, or error-level log.
 
 ## Explain one failing trace
 
@@ -149,6 +149,8 @@ auditaur tail --session-file .auditaur\session.json --signal failures --replay
 ```
 
 `--signal failures` is opt-in and filters the normal timeline stream to frontend errors, failed IPC calls, failed spans, and error logs.
+
+Failure timelines may include raw application log lines. Auditaur redacts known structured telemetry fields and bundles, but diagnostics config cannot retroactively sanitize provider frames, prompts, transcripts, URLs with secrets, or user content that an app already logged. Redact sensitive values before logging them.
 
 ## Produce a bounded handoff bundle
 
