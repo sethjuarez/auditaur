@@ -95,7 +95,18 @@ auditaur start
 auditaur observe --app <app-name> -- npm run tauri dev
 ```
 
-`observe` reports core readiness and intentionally leaves the app running after it becomes ready. It starts the command directly as argv, so package-manager and tool shims such as `npm`, `pnpm`, `yarn`, and `cargo tauri` should work naturally across Windows/macOS/Linux without manually wrapping in PowerShell/bash unless shell syntax is needed. When `--app` is supplied, it ignores matching discovery records that existed before spawn, waits for the new Auditaur session, and writes `.auditaur/session.json` with `sessionId`, `instanceId`, `pid`, `databasePath`, and generated selector argument arrays instead of guessing with `--active` or `--latest`. Clean up the spawned app process with `auditaur stop --session-file .auditaur/session.json` when the validation is done.
+`observe` reports core readiness and intentionally leaves the app running after it becomes ready. It starts the command directly as argv, so package-manager and tool shims such as `npm`, `pnpm`, `yarn`, and `cargo tauri` should work naturally across Windows/macOS/Linux without manually wrapping in PowerShell/bash unless shell syntax is needed. When `--app` is supplied, it ignores matching discovery records that existed before spawn, waits for the new Auditaur session, and writes `.auditaur/session.json` with `sessionId`, `instanceId`, `pid`, `databasePath`, and generated selector argument arrays instead of guessing with `--active` or `--latest`. Prefer read commands with `--session-file .auditaur/session.json` for follow-up telemetry, including postmortem reads after the app exits or crashes. Clean up the spawned app process with `auditaur stop --session-file .auditaur/session.json` when the validation is done.
+
+Useful pinned follow-up commands:
+
+```bash
+auditaur logs --session-file .auditaur/session.json
+auditaur ipc --session-file .auditaur/session.json --failed
+auditaur timeline --session-file .auditaur/session.json
+auditaur explain --session-file .auditaur/session.json
+auditaur diagnose --session-file .auditaur/session.json
+auditaur tail --session-file .auditaur/session.json --signal failures --replay
+```
 
 Use `--require-frontend` only when the task explicitly needs frontend telemetry readiness:
 

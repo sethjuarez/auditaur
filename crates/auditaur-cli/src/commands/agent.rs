@@ -103,11 +103,13 @@ impl Default for AgentGuide {
                 },
                 AgentWorkflow {
                     name: "Pinned follow-up".to_string(),
-                    when_to_use: "Use after observe/start writes .auditaur/session.json; prefer pinned selectors over --latest.".to_string(),
+                    when_to_use: "Use after observe/start writes .auditaur/session.json; prefer --session-file over --latest or copied selectors.".to_string(),
                     commands: vec![
                         "auditaur debug --db <databasePath> --session-id <sessionId> --instance-id <instanceId> --pid <pid> status".to_string(),
-                        "auditaur tail --db <databasePath> --session <sessionId> --replay".to_string(),
-                        "auditaur logs --db <databasePath> --session <sessionId>".to_string(),
+                        "auditaur tail --session-file .auditaur/session.json --replay".to_string(),
+                        "auditaur logs --session-file .auditaur/session.json".to_string(),
+                        "auditaur ipc --session-file .auditaur/session.json --failed".to_string(),
+                        "auditaur explain --session-file .auditaur/session.json".to_string(),
                         "auditaur drive --session-id <sessionId> --instance-id <instanceId> --pid <pid> inspect".to_string(),
                         "auditaur stop --session-file .auditaur/session.json".to_string(),
                     ],
@@ -126,13 +128,15 @@ impl Default for AgentGuide {
 
 pub fn runs(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     app: Option<String>,
     session_id: Option<String>,
     since: Option<String>,
     json: bool,
     limit: usize,
 ) -> Result<()> {
-    let db = resolve_agent_db(db, app.as_deref())?;
+    let (db, session_id) =
+        resolve_agent_read_selectors(db, session_file, app.as_deref(), session_id)?;
     let store = read::open_validated_store(&db)?;
     let cutoff = read::parse_since_cutoff(since.as_deref())?;
     let spans = store.list_spans(&SpanQuery {
@@ -187,12 +191,14 @@ pub fn runs(
 
 pub fn run(
     db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
     app: Option<String>,
     session_id: Option<String>,
     run_id: String,
     json: bool,
 ) -> Result<()> {
-    let db = resolve_agent_db(db, app.as_deref())?;
+    let (db, session_id) =
+        resolve_agent_read_selectors(db, session_file, app.as_deref(), session_id)?;
     let store = read::open_validated_store(&db)?;
     let trace_id = find_run_trace_id(&store, session_id.as_deref(), &run_id)?
         .ok_or_else(|| anyhow!("No agent run `{run_id}` found. Try `auditaur agent-runs`."))?;
@@ -254,6 +260,24 @@ fn resolve_agent_db(db: &Option<PathBuf>, app: Option<&str>) -> Result<PathBuf> 
         .first()
         .map(|app| PathBuf::from(&app.database_path))
         .ok_or_else(|| anyhow!("No discoverable Auditaur app matched `{app}`."))
+}
+
+fn resolve_agent_read_selectors(
+    db: &Option<PathBuf>,
+    session_file: &Option<PathBuf>,
+    app: Option<&str>,
+    session_id: Option<String>,
+) -> Result<(PathBuf, Option<String>)> {
+    let (db, session_id) = read::resolve_read_selectors(db, session_file, session_id)?;
+    if session_file.is_some() {
+        if let Some(app) = app {
+            return Err(anyhow!(
+                "`--app {app}` cannot be combined with `--session-file`; the session file already pins the database and session"
+            ));
+        }
+        return discovery::resolve_db(db).map(|db| (db, session_id));
+    }
+    resolve_agent_db(&db, app).map(|db| (db, session_id))
 }
 
 fn latest_trace_id(spans: &[SpanRecord]) -> Option<String> {

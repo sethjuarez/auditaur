@@ -22,7 +22,7 @@ npm run build:api
 ..\..\target\debug\auditaur observe --app dogfood -- npm run tauri dev
 ```
 
-`observe` starts the normal dev command, waits for core Auditaur readiness, writes `.auditaur\session.json`, prints pinned follow-up commands, and leaves the app running. Click every dogfood button, then inspect telemetry from another shell using the printed `--db` and `--session` selectors:
+`observe` starts the normal dev command, waits for core Auditaur readiness, writes `.auditaur\session.json`, prints pinned follow-up commands, and leaves the app running. Click every dogfood button, then inspect telemetry from another shell using the session file so every command reads the same observed run:
 
 For concurrent app runs, let Auditaur reserve ports and pass them through command placeholders or environment variables:
 
@@ -35,11 +35,13 @@ target\debug\auditaur observe --app dogfood --port-env web=VITE_PORT -- npm run 
 cd C:\path\to\auditaur
 $env:AUDITAUR_DATA_DIR = "$env:LOCALAPPDATA\auditaur"
 cargo run -p auditaur-cli -- apps --json
-cargo run -p auditaur-cli -- logs --db "<databasePath>" --session "<sessionId>" --json
-cargo run -p auditaur-cli -- errors --db "<databasePath>" --session "<sessionId>" --json
-cargo run -p auditaur-cli -- ipc --db "<databasePath>" --session "<sessionId>" --json
-cargo run -p auditaur-cli -- events --db "<databasePath>" --session "<sessionId>" --json
-cargo run -p auditaur-cli -- traces --db "<databasePath>" --session "<sessionId>" --json
+cargo run -p auditaur-cli -- logs --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- errors --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- ipc --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- events --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- traces --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- diagnose --session-file .auditaur\session.json --json
+cargo run -p auditaur-cli -- tail --session-file .auditaur\session.json --signal failures --replay
 ```
 
 For a repeatable local dogfood pass on Windows, run:
@@ -66,7 +68,7 @@ MCP clients should point at the built binary or the cargo command above. The too
 
 - SQLite session store with WAL and schema validation.
 - Discovery files under the local Auditaur data directory.
-- CLI reads for apps, health, sessions, logs, errors, IPC, events, traces, trace detail, related telemetry, stored window rows, timeline, explain, tail, and redacted bundles.
+- CLI reads for apps, health, sessions, logs, errors, IPC, events, traces, trace detail, related telemetry, stored window rows, timeline, explain, diagnose, failure-signal tailing, and redacted bundles.
 - Apple Simulator observe foundation for booting/selecting a destination, optional build/install/launch scaffolding, screenshots, logs, diagnostics counts, and agent-readable JSON reports.
 - MCP reads and agent summaries over stdio for the same data.
 - Tauri plugin collector for frontend batches, window startup/lifecycle state, Rust `tracing`, and Rust panic diagnostics.

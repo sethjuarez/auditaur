@@ -391,7 +391,10 @@ pub fn drill(options: DrillOptions) -> Result<()> {
 
     let inspect = polish::explain_json_value(
         &Some(PathBuf::from(&session.app.database_path)),
+        &None,
         Some(session.app.session_id.clone()),
+        None,
+        None,
         None,
         None,
         200,
@@ -426,7 +429,10 @@ pub fn inspect(options: InspectOptions) -> Result<()> {
     ensure_live_session(&session)?;
     let explain = polish::explain_json_value(
         &Some(PathBuf::from(&session.app.database_path)),
+        &None,
         Some(session.app.session_id.clone()),
+        None,
+        None,
         None,
         None,
         options.limit,

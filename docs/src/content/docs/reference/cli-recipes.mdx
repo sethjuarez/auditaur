@@ -23,9 +23,10 @@ Use `auditaur drill <name>` when the config defines multiple drills. `start` wri
 ```powershell
 auditaur init skill
 auditaur init extension
+auditaur init diagnostics
 ```
 
-`init skill` installs the Auditaur debugging workflow for agents. `init extension` installs the Copilot canvas extension that can render drill human gates as action cards. Use `--path <repo-root>` to target another repository.
+`init skill` installs the Auditaur debugging workflow for agents. `init extension` installs the Copilot canvas extension that can render drill human gates as action cards. `init diagnostics` writes optional versioned `.auditaur\diagnostics.json` and `.auditaur\diagnostics.md` files with generic failure-signal and checkpoint guidance; use `--dry-run` before writing or `--force` to overwrite. Use `--path <repo-root>` to target another repository.
 
 ## Inspect the latest active app
 
@@ -40,6 +41,7 @@ Use this before deeper debugging. `apps` tells you what Auditaur discovered; `he
 ## Triage a fresh failure
 
 ```powershell
+auditaur diagnose --session-file .auditaur\session.json --json
 auditaur errors --json
 auditaur exceptions --json
 auditaur traces --failed --json
@@ -48,6 +50,16 @@ auditaur events --json
 ```
 
 Start with grouped exceptions and failed IPC. Move to traces when you need causality.
+
+## Focus evidence around one generic anchor
+
+```powershell
+auditaur timeline --session-file .auditaur\session.json --anchor error:latest --window 10s --json
+auditaur related --session-file .auditaur\session.json --anchor ipc:<command> --anchor-window 10s --json
+auditaur explain --session-file .auditaur\session.json --anchor trace:<traceId>
+```
+
+Anchors keep the product generic: use `trace:<id>`, `ipc:<command-or-latest>`, `error:latest`, `event:<name>`, `checkpoint:<name>`, or `time:<rfc3339-or-unix-nanos>` instead of adding app-specific lenses.
 
 ## Explain one failing trace
 
@@ -74,7 +86,7 @@ Use attach mode when the developer owns the app process. Default readiness means
 auditaur observe --app my-tauri-app -- npm run tauri dev
 ```
 
-Use `observe` when an agent or script owns startup but the app repo does not have `.auditaur\config.json`. It starts the normal dev command as argv, so package-manager and tool shims such as `npm`, `pnpm`, `yarn`, and `cargo tauri` do not need manual PowerShell/bash wrapping unless you want shell syntax. `observe` ignores matching sessions that existed before spawn, waits for the newly started Auditaur session, writes `.auditaur\session.json` by default, and prints pinned follow-up commands for status, tail/logs, drive inspection when available, and stop. Prefer those exact selectors over `--active` or `--latest` in later automation.
+Use `observe` when an agent or script owns startup but the app repo does not have `.auditaur\config.json`. It starts the normal dev command as argv, so package-manager and tool shims such as `npm`, `pnpm`, `yarn`, and `cargo tauri` do not need manual PowerShell/bash wrapping unless you want shell syntax. `observe` ignores matching sessions that existed before spawn, waits for the newly started Auditaur session, writes `.auditaur\session.json` by default, and prints pinned follow-up commands for status, tail/logs, drive inspection when available, and stop. Prefer `--session-file .auditaur\session.json` for read commands over `--active`, `--latest`, or copied `--db`/`--session` selectors in later automation.
 
 When multiple apps or agents may start dev servers concurrently, reserve named ports and pass them through placeholders or environment variables:
 
@@ -129,6 +141,14 @@ auditaur exceptions --fingerprint <id> --markdown --output issue.md
 ```
 
 Review and redact the generated Markdown before posting it outside the machine.
+
+## Live-tail only failure signals
+
+```powershell
+auditaur tail --session-file .auditaur\session.json --signal failures --replay
+```
+
+`--signal failures` is opt-in and filters the normal timeline stream to frontend errors, failed IPC calls, failed spans, and error logs.
 
 ## Produce a bounded handoff bundle
 
