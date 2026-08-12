@@ -11,37 +11,27 @@ To add Auditaur to an existing app instead, start with [Integration Happy Path](
 cd examples\dogfood
 npm install
 npm run build:api
-npm run tauri dev
+auditaur observe --app dogfood -- npm run tauri dev
 ```
 
 Click the buttons to emit a console log, throw a frontend error, call successful and failing Tauri commands, and emit/listen to events.
 
-While the app is running, copy `databasePath` from the latest discovery file:
+`observe` starts the normal Tauri dev command, waits for core Auditaur readiness, writes `.auditaur\session.json`, and leaves the app running. Use the pinned follow-up commands it prints instead of `--latest` when multiple stale sessions exist. Core readiness does not require frontend telemetry; add `--require-frontend` only when your check must wait for WebView telemetry, which may need a click or other interaction.
 
-| Platform | Discovery directory |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\auditaur\apps` |
-| macOS | `~/Library/Application Support/auditaur/apps` |
-| Linux | `~/.local/share/auditaur/apps` |
-
-Then inspect the session:
+Inspect the session:
 
 ```powershell
-cargo run -p auditaur-cli -- apps --json
-cargo run -p auditaur-cli -- logs --json
-cargo run -p auditaur-cli -- errors --json
-cargo run -p auditaur-cli -- traces --json
-cargo run -p auditaur-cli -- ipc --json
-cargo run -p auditaur-cli -- events --json
+auditaur logs --db "<databasePath>" --session "<sessionId>" --json
+auditaur errors --db "<databasePath>" --session "<sessionId>" --json
+auditaur traces --db "<databasePath>" --session "<sessionId>" --json
+auditaur ipc --db "<databasePath>" --session "<sessionId>" --json
+auditaur events --db "<databasePath>" --session "<sessionId>" --json
 ```
 
-You can also pass a database path explicitly:
+Stop the observed app when you are done:
 
 ```powershell
-cargo run -p auditaur-cli -- sessions --db "<databasePath>" --json
-cargo run -p auditaur-cli -- logs --db "<databasePath>" --json
-cargo run -p auditaur-cli -- errors --db "<databasePath>" --json
-cargo run -p auditaur-cli -- traces --db "<databasePath>" --json
+auditaur stop --session-file .auditaur\session.json
 ```
 
 Use `cargo run -p auditaur-cli -- mcp` to expose the same database-backed tools to an MCP client.

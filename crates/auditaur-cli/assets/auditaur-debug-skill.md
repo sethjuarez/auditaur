@@ -8,6 +8,12 @@ license: MIT
 
 Use Auditaur as the first diagnostic surface for Tauri app debugging. Prefer machine-readable JSON when acting as an agent. The canonical mental model is: Auditaur observes the app; it does not replace the app's normal dev command.
 
+When starting from an unfamiliar repo or CLI version, ask Auditaur for the current agent contract:
+
+```bash
+auditaur agent guide --json
+```
+
 ## Intent map
 
 Translate common user phrases to the appropriate Auditaur workflow:
@@ -15,7 +21,7 @@ Translate common user phrases to the appropriate Auditaur workflow:
 | User phrase | Agent interpretation |
 | --- | --- |
 | "observe the app" | Attach to the already-running app and watch readiness. |
-| "start with Auditaur" / "Auditaur start the app" | Run `auditaur start` when `.auditaur/config.json` exists; otherwise start the normal app command under Auditaur observation with `debug run -- <normal command>`. |
+| "start with Auditaur" / "Auditaur start the app" | Run `auditaur start` when `.auditaur/config.json` exists; otherwise start the normal app command under Auditaur observation with `observe -- <normal command>`. |
 | "debug the app with Auditaur" | Check readiness first, then inspect logs/timeline/traces/IPC. |
 | "drive the app" / "click in the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
 | "run a drill" / "smoke test the app" | Run `auditaur drill` for the configured default drill, or `auditaur drill <name>` for a named drill. |
@@ -48,7 +54,7 @@ For a running app, watch until core telemetry is ready:
 auditaur debug --app <app-name> --active --json watch --until-ready --timeout-seconds 120
 ```
 
-If the task requires frontend telemetry, add `--require-frontend`. If the task requires WebView selector actions, use the Auditaur in-app drive bridge: enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session and add `--require-drive-bridge` to readiness watches.
+If the task requires frontend telemetry, add `--require-frontend`. This is stricter than default readiness and may wait until a Tauri WebView action emits frontend logs, errors, IPC, events, or spans. If the task requires WebView selector actions, use the Auditaur in-app drive bridge: enable `initAuditaur({ driveBridge: true })` in exactly one debug/test WebView per Auditaur session and add `--require-drive-bridge` to readiness watches.
 
 ```bash
 npm run tauri dev
@@ -83,13 +89,29 @@ If the agent should start the app, wrap the existing command:
 auditaur start
 ```
 
-`auditaur start` uses `.auditaur/config.json`, reports readiness, writes `.auditaur/session.json`, and intentionally leaves the app running after it becomes ready. If the config declares named ports, `start` reserves random local ports, expands `{{port:name}}` placeholders in the command, sets configured port environment variables, and records the chosen ports in the session file and JSON output. If no config exists yet, use the lower-level form:
+`auditaur start` uses `.auditaur/config.json`, reports readiness, writes `.auditaur/session.json`, and intentionally leaves the app running after it becomes ready. If the config declares named ports, `start` reserves random local ports, expands `{{port:name}}` placeholders in the command, sets configured port environment variables, and records the chosen ports in the session file and JSON output. If no config exists yet, use the no-config form:
 
 ```bash
-auditaur debug --app <app-name> --require-frontend --json run --timeout-seconds 180 --write-session .auditaur/session.json -- npm run tauri dev
+auditaur observe --app <app-name> -- npm run tauri dev
 ```
 
-`debug run` reports readiness and intentionally leaves the app running after it becomes ready. When `--app` is supplied, it ignores matching discovery records that existed before spawn, waits for the new Auditaur session, and pins readiness to that exact session/database/pid. Use `--write-session <path>` for agent-owned startup so later commands can read `sessionId`, `instanceId`, `pid`, `databasePath`, and the generated selector argument arrays instead of guessing with `--active` or `--latest`. Clean up the spawned app process with `auditaur stop` when the validation is done.
+`observe` reports core readiness and intentionally leaves the app running after it becomes ready. It starts the command directly as argv, so package-manager and tool shims such as `npm`, `pnpm`, `yarn`, and `cargo tauri` should work naturally across Windows/macOS/Linux without manually wrapping in PowerShell/bash unless shell syntax is needed. When `--app` is supplied, it ignores matching discovery records that existed before spawn, waits for the new Auditaur session, and writes `.auditaur/session.json` with `sessionId`, `instanceId`, `pid`, `databasePath`, and generated selector argument arrays instead of guessing with `--active` or `--latest`. Clean up the spawned app process with `auditaur stop --session-file .auditaur/session.json` when the validation is done.
+
+Use `--require-frontend` only when the task explicitly needs frontend telemetry readiness:
+
+```bash
+auditaur observe --app <app-name> --require-frontend -- npm run tauri dev
+```
+
+When multiple apps or agents may run concurrently, reserve named ports and wire them into the dev command:
+
+```bash
+auditaur observe --app <app-name> --port web -- npm run dev -- --port {{port:web}}
+auditaur observe --app <app-name> --port-env web=VITE_PORT -- npm run tauri dev
+auditaur observe --app <app-name> --port web=5177 -- npm run dev -- --port {{port:web}}
+```
+
+Prefer random named ports (`--port web` or `--port-env web=VITE_PORT`) for agent-owned runs. Use explicit ports only when required. Auditaur records chosen ports in `.auditaur/session.json`, but the app's Vite/Tauri setup must consume the placeholder or environment variable.
 
 ## Interpreting readiness
 

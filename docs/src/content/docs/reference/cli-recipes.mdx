@@ -63,18 +63,36 @@ Use `trace` for structured detail, `timeline` for chronological context, and `ex
 
 ```powershell
 npm run tauri dev
-auditaur debug --app my-tauri-app --active --require-frontend --json watch --until-ready
+auditaur debug --app my-tauri-app --active --json watch --until-ready
 ```
 
-Use attach mode when the developer owns the app process. Add `--require-drive-bridge` when selector actions must be available before the run is considered ready.
+Use attach mode when the developer owns the app process. Default readiness means the Auditaur session, telemetry database, window records, and backend/plugin telemetry are ready. Add `--require-frontend` only when frontend telemetry is required; Tauri WebViews may not emit frontend telemetry until a user interaction or app code path runs. Add `--require-drive-bridge` when selector actions must be available before the run is considered ready.
 
-## Start the app under observation
+## Observe a dev app with no Auditaur config
 
 ```powershell
-auditaur debug --app my-tauri-app --require-frontend --require-drive-bridge --json run --timeout-seconds 180 --write-session .auditaur\session.json -- npm run tauri dev
+auditaur observe --app my-tauri-app -- npm run tauri dev
 ```
 
-Use wrapper mode when an agent or script owns startup but should leave the app running after readiness for inspection. With `--app`, `debug run` ignores matching sessions that existed before spawn, waits for the newly started Auditaur session, and writes `.auditaur\session.json` with exact `sessionId`, `instanceId`, `pid`, `databasePath`, and selector arguments for follow-up commands. Prefer those exact selectors over `--active` or `--latest` in later automation.
+Use `observe` when an agent or script owns startup but the app repo does not have `.auditaur\config.json`. It starts the normal dev command as argv, so package-manager and tool shims such as `npm`, `pnpm`, `yarn`, and `cargo tauri` do not need manual PowerShell/bash wrapping unless you want shell syntax. `observe` ignores matching sessions that existed before spawn, waits for the newly started Auditaur session, writes `.auditaur\session.json` by default, and prints pinned follow-up commands for status, tail/logs, drive inspection when available, and stop. Prefer those exact selectors over `--active` or `--latest` in later automation.
+
+When multiple apps or agents may start dev servers concurrently, reserve named ports and pass them through placeholders or environment variables:
+
+```powershell
+auditaur observe --app my-tauri-app --port web -- npm run dev -- --port {{port:web}}
+auditaur observe --app my-tauri-app --port-env web=VITE_PORT -- npm run tauri dev
+auditaur observe --app my-tauri-app --port web=5177 -- npm run dev -- --port {{port:web}}
+```
+
+`--port web` chooses an available random local port and records it in `.auditaur\session.json` under `ports.web`. `--port-env web=VITE_PORT` also exports the chosen value to the child command. Use `--port web=5177` only when a specific port is required and should fail fast if it is already taken. The app's Vite/Tauri setup must consume the placeholder or environment variable; Auditaur cannot change a hard-coded dev server port by itself.
+
+For stricter frontend readiness:
+
+```powershell
+auditaur observe --app my-tauri-app --require-frontend -- npm run tauri dev
+```
+
+`--require-frontend` may wait until a WebView action emits frontend logs, errors, IPC, events, or spans.
 
 ## Run a pass/fail confidence drill
 

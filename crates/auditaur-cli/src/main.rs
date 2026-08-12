@@ -12,7 +12,7 @@ use std::path::PathBuf;
     name = "auditaur",
     version,
     about = "Runtime observability for Tauri apps and AI agents.",
-    after_help = "Bootstrap commands:\n  init skill [--path <repo-root>] [--agents-path] [--force] [--json]  Install the Auditaur debug agent skill\n  init extension [--path <repo-root>] [--force] [--json]  Install the Auditaur gate canvas extension"
+    after_help = "Agent commands:\n  agent guide [--json]  Print the recommended Auditaur workflow for coding agents\n  observe --app <name> -- <dev command>  Start a dev app under no-config observation\n\nBootstrap commands:\n  init skill [--path <repo-root>] [--agents-path] [--force] [--json]  Install the Auditaur debug agent skill\n  init extension [--path <repo-root>] [--force] [--json]  Install the Auditaur gate canvas extension"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -41,6 +41,11 @@ enum Command {
         #[command(subcommand)]
         command: AppleCommand,
     },
+    /// Agent-oriented discovery commands and workflow guidance.
+    Agent {
+        #[command(subcommand)]
+        command: Option<AgentCommand>,
+    },
     Start {
         #[arg(long, default_value_os_t = commands::workflow::default_config_path())]
         config: PathBuf,
@@ -49,6 +54,40 @@ enum Command {
         #[arg(long)]
         json: bool,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// Start a dev app under Auditaur observation without requiring .auditaur/config.json.
+    Observe {
+        #[arg(long)]
+        app: String,
+        #[arg(long, default_value_os_t = commands::workflow::default_session_path())]
+        write_session: PathBuf,
+        #[arg(long, default_value_t = 180)]
+        timeout_seconds: u64,
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(
+            long,
+            value_name = "NAME[=PORT]",
+            help = "Reserve a named port, optionally fixed to PORT; use {{port:NAME}} in the command"
+        )]
+        port: Vec<String>,
+        #[arg(
+            long,
+            value_name = "NAME=ENV",
+            help = "Export a named observe port to ENV; creates the named random port if needed"
+        )]
+        port_env: Vec<String>,
+        #[arg(
+            long,
+            help = "Require frontend telemetry before readiness; Tauri WebViews may need user interaction before this appears."
+        )]
+        require_frontend: bool,
+        #[arg(long)]
+        require_drive_bridge: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
     Debug {
@@ -379,6 +418,16 @@ enum AppleCommand {
     Status {
         #[arg(long)]
         destination: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentCommand {
+    /// Print the recommended Auditaur workflow for coding agents.
+    #[command(alias = "start-here")]
+    Guide {
         #[arg(long)]
         json: bool,
     },
@@ -787,6 +836,11 @@ fn inner_main() -> Result<()> {
                 commands::apple::status(commands::apple::StatusOptions { destination, json })
             }
         },
+        Command::Agent { command } => {
+            match command.unwrap_or(AgentCommand::Guide { json: false }) {
+                AgentCommand::Guide { json } => commands::agent::guide(json),
+            }
+        }
         Command::Start {
             config,
             write_session,
@@ -795,6 +849,29 @@ fn inner_main() -> Result<()> {
         } => commands::workflow::start(commands::workflow::StartOptions {
             config,
             write_session,
+            json,
+            command,
+        }),
+        Command::Observe {
+            app,
+            write_session,
+            timeout_seconds,
+            interval_ms,
+            port,
+            port_env,
+            require_frontend,
+            require_drive_bridge,
+            json,
+            command,
+        } => commands::workflow::observe(commands::workflow::ObserveOptions {
+            app,
+            write_session,
+            require_frontend,
+            require_drive_bridge,
+            timeout_seconds,
+            interval_ms,
+            ports: port,
+            port_env,
             json,
             command,
         }),
