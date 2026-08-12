@@ -963,6 +963,16 @@ fn init_diagnostics_installs_versioned_config_and_guidance() {
         .unwrap()
         .iter()
         .any(|item| item == "tokens"));
+    assert!(config["privacy"]["doNotRecord"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == "URLs with secrets"));
+    assert!(config["privacy"]["doNotRecord"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == "provider frames"));
     let guide = fs::read_to_string(&guide_path).unwrap();
     assert!(guide.contains("auditaur diagnose --session-file .auditaur/session.json"));
     assert!(guide.contains("<domain_or_operation>.<phase>"));
