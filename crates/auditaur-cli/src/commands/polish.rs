@@ -4,9 +4,7 @@ use auditaur_core::{
         FrontendError, LogRecord, SpanRecord, TauriEventRecord, TauriIpcCall, TauriWindowState,
         TelemetrySource,
     },
-    storage::{
-        FrontendErrorQuery, RelatedTelemetry, RelatedTelemetryQuery, TauriEventQuery, TauriIpcQuery,
-    },
+    storage::{RelatedTelemetry, RelatedTelemetryQuery, TauriEventQuery, TauriIpcQuery},
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -519,22 +517,27 @@ fn resolve_anchor(
                 ))
             }
             "error" => {
-                let errors = store.list_frontend_errors(&FrontendErrorQuery {
-                    session_id: session,
-                    trace_id: None,
-                    limit: Some(usize::MAX),
-                })?;
-                let error = errors
-                    .iter()
-                    .filter(|error| value == "latest" || error.message.contains(value))
-                    .max_by_key(|error| error.timestamp_unix_nanos)
+                let related = related_from_store(
+                    store,
+                    session.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    usize::MAX,
+                )?;
+                let anchor = timeline_entries(related, usize::MAX)
+                    .into_iter()
+                    .filter(is_failure_timeline_entry)
+                    .filter(|entry| value == "latest" || entry.summary.contains(value))
+                    .max_by_key(|entry| entry.timestamp_unix_nanos)
                     .ok_or_else(|| anyhow!("No error anchor `{raw}` found in selected telemetry."))?;
-                metadata.timestamp_unix_nanos = Some(error.timestamp_unix_nanos);
-                metadata.trace_id = error.trace_id.clone();
+                metadata.timestamp_unix_nanos = Some(anchor.timestamp_unix_nanos);
+                metadata.trace_id = anchor.trace_id.clone();
                 Ok(anchor_window_result(
                     metadata,
-                    error.trace_id.clone(),
-                    error.timestamp_unix_nanos,
+                    anchor.trace_id.clone(),
+                    anchor.timestamp_unix_nanos,
                     window_unix_nanos,
                 ))
             }

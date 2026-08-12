@@ -214,6 +214,25 @@ fn reads_fixture_database_as_json() {
 fn generic_diagnostics_support_anchors_diagnose_and_failure_tail() {
     let db = fixture_database();
     let db_arg = db.path().to_str().unwrap();
+    let store = SqliteStore::open(db.path()).unwrap();
+    store
+        .insert_log(&LogRecord {
+            session_id: "session-fixture".to_string(),
+            timestamp_unix_nanos: 190,
+            observed_timestamp_unix_nanos: Some(191),
+            severity_text: Some("ERROR".to_string()),
+            severity_number: Some(17),
+            body: Some("backend exploded".to_string()),
+            body_json: None,
+            trace_id: None,
+            span_id: None,
+            scope_name: Some("fixture".to_string()),
+            scope_version: Some("1.0.0".to_string()),
+            attributes: json!({ "fixture": true }),
+            source: TelemetrySource::Backend,
+        })
+        .unwrap();
+    drop(store);
 
     let anchored_timeline = run_json([
         "timeline",
@@ -249,11 +268,12 @@ fn generic_diagnostics_support_anchors_diagnose_and_failure_tail() {
         "--json",
     ]);
     assert_eq!(anchored_related["anchor"]["kind"], "error");
-    assert!(anchored_related["related"]["frontendErrors"]
+    assert_eq!(anchored_related["anchor"]["timestampUnixNanos"], 190);
+    assert!(anchored_related["related"]["logs"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|error| error["message"] == "fixture panic"));
+        .any(|log| log["body"] == "backend exploded"));
 
     let anchored_explain = run_json([
         "explain",
@@ -408,6 +428,7 @@ fn read_commands_accept_postmortem_session_file() {
         "--json",
     ]);
     assert!(tail.contains("\"kind\":\"ipc\""));
+    assert!(tail.contains("\"kind\":\"log\""));
 }
 
 #[test]
@@ -945,6 +966,16 @@ fn init_diagnostics_installs_versioned_config_and_guidance() {
     let guide = fs::read_to_string(&guide_path).unwrap();
     assert!(guide.contains("auditaur diagnose --session-file .auditaur/session.json"));
     assert!(guide.contains("<domain_or_operation>.<phase>"));
+    assert!(guide.contains("retroactively redact raw application logs"));
+
+    let dry_run_existing = run_stdout([
+        "init",
+        "diagnostics",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert!(dry_run_existing.contains("exists; would leave unchanged"));
 
     let failure = run_failure([
         "init",
