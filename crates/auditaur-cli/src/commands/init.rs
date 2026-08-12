@@ -33,6 +33,8 @@ const DIAGNOSTICS_CONFIG: &str = r#"{
       "authorization headers",
       "cookies",
       "passwords",
+      "URLs with secrets",
+      "provider frames",
       "raw audio or video",
       "full prompts",
       "transcripts",
