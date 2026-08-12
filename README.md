@@ -13,24 +13,33 @@ Build the CLI and run the dogfood app:
 ```powershell
 cd C:\path\to\auditaur
 cargo build -p auditaur-cli
+target\debug\auditaur agent guide
+target\debug\auditaur agent guide --json
 
 cd examples\dogfood
 npm install
 npm run build:api
-npm run tauri dev
+..\..\target\debug\auditaur observe --app dogfood -- npm run tauri dev
 ```
 
-Click every dogfood button, then inspect telemetry from another shell:
+`observe` starts the normal dev command, waits for core Auditaur readiness, writes `.auditaur\session.json`, prints pinned follow-up commands, and leaves the app running. Click every dogfood button, then inspect telemetry from another shell using the printed `--db` and `--session` selectors:
+
+For concurrent app runs, let Auditaur reserve ports and pass them through command placeholders or environment variables:
+
+```powershell
+target\debug\auditaur observe --app dogfood --port web -- npm run dev -- --port {{port:web}}
+target\debug\auditaur observe --app dogfood --port-env web=VITE_PORT -- npm run tauri dev
+```
 
 ```powershell
 cd C:\path\to\auditaur
 $env:AUDITAUR_DATA_DIR = "$env:LOCALAPPDATA\auditaur"
 cargo run -p auditaur-cli -- apps --json
-cargo run -p auditaur-cli -- logs --json
-cargo run -p auditaur-cli -- errors --json
-cargo run -p auditaur-cli -- ipc --json
-cargo run -p auditaur-cli -- events --json
-cargo run -p auditaur-cli -- traces --json
+cargo run -p auditaur-cli -- logs --db "<databasePath>" --session "<sessionId>" --json
+cargo run -p auditaur-cli -- errors --db "<databasePath>" --session "<sessionId>" --json
+cargo run -p auditaur-cli -- ipc --db "<databasePath>" --session "<sessionId>" --json
+cargo run -p auditaur-cli -- events --db "<databasePath>" --session "<sessionId>" --json
+cargo run -p auditaur-cli -- traces --db "<databasePath>" --session "<sessionId>" --json
 ```
 
 For a repeatable local dogfood pass on Windows, run:
@@ -42,7 +51,7 @@ For a repeatable local dogfood pass on Windows, run:
 If more than one app session is active, copy `databasePath` from `apps --json` and pass it explicitly:
 
 ```powershell
-cargo run -p auditaur-cli -- trace <traceId> --db "<databasePath>" --json
+cargo run -p auditaur-cli -- trace <traceId> --db "<databasePath>" --session "<sessionId>" --json
 ```
 
 Run the MCP server:

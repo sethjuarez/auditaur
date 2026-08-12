@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
-    fs,
-    io::{Read, Write},
+    env, fs,
+    io::{Read, Seek, SeekFrom, Write},
     net::TcpStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -137,6 +137,18 @@ struct DebugProcessStatus {
     pid: Option<u32>,
     exit_code: Option<i32>,
     running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stdout_tail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stderr_tail: Option<String>,
+}
+
+impl DebugProcessStatus {
+    fn with_output(mut self, output: &ChildOutputTail) -> Self {
+        self.stdout_tail = output.stdout.clone();
+        self.stderr_tail = output.stderr.clone();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -152,6 +164,93 @@ pub(crate) enum DebugRunOutput {
     Human,
     JsonLines,
     Quiet,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ChildOutputTail {
+    stdout: Option<String>,
+    stderr: Option<String>,
+}
+
+struct CapturedChildOutput {
+    stdout: Option<fs::File>,
+    stderr: Option<fs::File>,
+}
+
+impl CapturedChildOutput {
+    fn prepare(enabled: bool) -> Result<Self> {
+        if !enabled {
+            return Ok(Self {
+                stdout: None,
+                stderr: None,
+            });
+        }
+        Ok(Self {
+            stdout: Some(tempfile::tempfile().context("failed to create child stdout capture")?),
+            stderr: Some(tempfile::tempfile().context("failed to create child stderr capture")?),
+        })
+    }
+
+    fn stdout_stdio(&self) -> Result<Stdio> {
+        output_file_stdio(&self.stdout)
+    }
+
+    fn stderr_stdio(&self) -> Result<Stdio> {
+        output_file_stdio(&self.stderr)
+    }
+
+    fn collect(&mut self) -> ChildOutputTail {
+        ChildOutputTail {
+            stdout: self
+                .stdout
+                .take()
+                .and_then(read_file_tail)
+                .filter(|output| !output.is_empty()),
+            stderr: self
+                .stderr
+                .take()
+                .and_then(read_file_tail)
+                .filter(|output| !output.is_empty()),
+        }
+    }
+}
+
+fn output_file_stdio(file: &Option<fs::File>) -> Result<Stdio> {
+    let file = file
+        .as_ref()
+        .ok_or_else(|| anyhow!("child output capture was not initialized"))?;
+    Ok(Stdio::from(
+        file.try_clone()
+            .context("failed to clone child output capture")?,
+    ))
+}
+
+fn read_file_tail(mut file: fs::File) -> Option<String> {
+    const LIMIT: u64 = 32 * 1024;
+    let len = file.metadata().ok()?.len();
+    if len > LIMIT {
+        file.seek(SeekFrom::Start(len - LIMIT)).ok()?;
+    } else {
+        file.seek(SeekFrom::Start(0)).ok()?;
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).trim().to_string())
+}
+
+fn format_child_output_for_error(output: &ChildOutputTail) -> String {
+    let mut details = Vec::new();
+    if let Some(stdout) = &output.stdout {
+        details.push(format!("stdout tail:\n{stdout}"));
+    }
+    if let Some(stderr) = &output.stderr {
+        details.push(format!("stderr tail:\n{stderr}"));
+    }
+    if details.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", details.join("\n\n"))
+    }
 }
 
 pub fn status(selector: DebugSelector, json: bool) -> Result<()> {
@@ -215,6 +314,7 @@ pub fn run(
         write_session,
         environment,
         command,
+        "Auditaur debug session ready.",
     )
 }
 
@@ -226,17 +326,20 @@ pub(crate) fn run_with_output(
     write_session: Option<PathBuf>,
     environment: Vec<(String, String)>,
     command: Vec<String>,
+    handoff_title: &str,
 ) -> Result<DebugRunResult> {
     if command.is_empty() {
         return Err(anyhow!(
             "`auditaur debug run` requires a command after `--`."
         ));
     }
-    let mut child_command = Command::new(&command[0]);
-    child_command.args(&command[1..]);
+    let mut child_command = command_from_argv(&command);
     child_command.envs(environment);
+    let mut captured_output = CapturedChildOutput::prepare(output != DebugRunOutput::Human)?;
     if output != DebugRunOutput::Human {
-        child_command.stdout(Stdio::null()).stderr(Stdio::null());
+        child_command
+            .stdout(captured_output.stdout_stdio()?)
+            .stderr(captured_output.stderr_stdio()?);
         #[cfg(windows)]
         child_command.creation_flags(0x0800_0000);
     } else {
@@ -286,16 +389,20 @@ pub(crate) fn run_with_output(
                     pinned_app = Some(app);
                 }
                 SpawnedAppOutcome::Exited(status) => {
+                    let child_output = captured_output.collect();
                     return Err(anyhow!(
-                        "debug command exited before a new Auditaur session was discovered with status {status}"
+                        "debug command exited before a new Auditaur session was discovered with status {status}{}",
+                        format_child_output_for_error(&child_output)
                     ));
                 }
                 SpawnedAppOutcome::TimedOut => {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let child_output = captured_output.collect();
                     return Err(anyhow!(
-                        "Timed out after {}s waiting for a new Auditaur session after startup.",
-                        timeout_seconds.unwrap()
+                        "Timed out after {}s waiting for a new Auditaur session after startup.{}",
+                        timeout_seconds.unwrap(),
+                        format_child_output_for_error(&child_output)
                     ));
                 }
             }
@@ -308,7 +415,11 @@ pub(crate) fn run_with_output(
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(error.context("debug readiness snapshot failed after starting command"));
+                let child_output = captured_output.collect();
+                return Err(error.context(format!(
+                    "debug readiness snapshot failed after starting command{}",
+                    format_child_output_for_error(&child_output)
+                )));
             }
         };
         if output == DebugRunOutput::JsonLines {
@@ -326,46 +437,197 @@ pub(crate) fn run_with_output(
                 pid: Some(pid),
                 exit_code: status.code(),
                 running: false,
+                stdout_tail: None,
+                stderr_tail: None,
             };
-            let result =
-                debug_run_result(final_status, process, pinned_app.as_ref(), &write_session);
+            let child_output = captured_output.collect();
+            let result = debug_run_result(
+                final_status,
+                process.with_output(&child_output),
+                pinned_app.as_ref(),
+                &write_session,
+            );
             if output == DebugRunOutput::JsonLines {
                 println!("{}", serde_json::to_string(&result)?);
             }
             return Err(anyhow!(
-                "debug command exited before Auditaur became ready with status {status}"
+                "debug command exited before Auditaur became ready with status {status}{}",
+                format_child_output_for_error(&child_output)
             ));
         }
         if timeout_seconds.is_some_and(|seconds| started.elapsed() >= Duration::from_secs(seconds))
         {
             let _ = child.kill();
             let _ = child.wait();
+            let child_output = captured_output.collect();
             return Err(anyhow!(
-                "Timed out after {}s waiting for Auditaur debug readiness.",
-                timeout_seconds.unwrap()
+                "Timed out after {}s waiting for Auditaur debug readiness.{}",
+                timeout_seconds.unwrap(),
+                format_child_output_for_error(&child_output)
             ));
         }
         thread::sleep(interval);
     }
 
     let child_status = child.try_wait()?;
+    if child_status.is_some() {
+        let _ = captured_output.collect();
+    }
     let process = DebugProcessStatus {
         command,
         pid: Some(pid),
         exit_code: child_status.and_then(|status| status.code()),
         running: child_status.is_none(),
+        stdout_tail: None,
+        stderr_tail: None,
     };
     let result = debug_run_result(final_status, process, pinned_app.as_ref(), &write_session);
     write_session_file(write_session.as_deref(), &result)?;
     if output == DebugRunOutput::JsonLines {
         println!("{}", serde_json::to_string(&result)?);
     } else if output == DebugRunOutput::Human {
-        println!("Auditaur debug session ready.");
-        if let Some(path) = &write_session {
-            println!("Session file: {}", path.display());
-        }
+        print_run_handoff(handoff_title, &result);
     }
     Ok(result)
+}
+
+fn command_from_argv(command: &[String]) -> Command {
+    let program = resolve_program(&command[0]).unwrap_or_else(|| PathBuf::from(&command[0]));
+    let mut child_command = Command::new(program);
+    child_command.args(&command[1..]);
+    child_command
+}
+
+fn resolve_program(program: &str) -> Option<PathBuf> {
+    #[cfg(not(windows))]
+    {
+        let _ = program;
+        return None;
+    }
+
+    #[cfg(windows)]
+    {
+        let path = Path::new(program);
+        if has_path_separator(program) || path.is_absolute() {
+            return executable_candidates(path)
+                .into_iter()
+                .find(|candidate| candidate.is_file());
+        }
+
+        let path_var = env::var_os("PATH")?;
+        env::split_paths(&path_var)
+            .flat_map(|dir| executable_candidates(&dir.join(program)))
+            .find(|candidate| candidate.is_file())
+    }
+}
+
+fn has_path_separator(program: &str) -> bool {
+    program.contains('/') || program.contains('\\')
+}
+
+fn executable_candidates(path: &Path) -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        if path.extension().is_none() {
+            let pathext = env::var_os("PATHEXT")
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+            let mut candidates = pathext
+                .split(';')
+                .filter(|extension| !extension.trim().is_empty())
+                .map(|extension| {
+                    let extension = extension.trim().trim_start_matches('.');
+                    path.with_extension(extension)
+                })
+                .collect::<Vec<_>>();
+            candidates.push(path.to_path_buf());
+            return candidates;
+        }
+    }
+    vec![path.to_path_buf()]
+}
+
+pub(crate) fn print_run_handoff(title: &str, result: &DebugRunResult) {
+    println!("{title}");
+    if let Some(path) = &result.session_file {
+        println!("Session file: {path}");
+    }
+    if result.process.running {
+        if let Some(pid) = result.process.pid {
+            println!("Observed app is still running (pid {pid}).");
+        } else {
+            println!("Observed app is still running.");
+        }
+    } else {
+        println!("Observed app process exited after readiness.");
+    }
+
+    if result.app.is_some() {
+        println!("Follow-up commands:");
+        println!(
+            "  {}",
+            command_line("auditaur", ["debug"], &result.selectors.debug, ["status"])
+        );
+        println!(
+            "  {}",
+            command_line("auditaur", ["tail"], &result.selectors.read, ["--replay"])
+        );
+        println!(
+            "  {}",
+            command_line(
+                "auditaur",
+                ["logs"],
+                &result.selectors.read,
+                std::iter::empty::<&str>(),
+            )
+        );
+        if result.app.as_ref().is_some_and(|app| {
+            app.capabilities
+                .iter()
+                .any(|capability| capability == "drive_bridge")
+        }) {
+            println!(
+                "  {}",
+                command_line("auditaur", ["drive"], &result.selectors.drive, ["inspect"])
+            );
+        } else {
+            println!(
+                "  auditaur drive ... inspect   # after enabling the Tauri-native drive bridge"
+            );
+        }
+    }
+    if let Some(path) = &result.session_file {
+        println!(
+            "  {}",
+            command_line("auditaur", ["stop"], &[], ["--session-file", path])
+        );
+    }
+}
+
+fn command_line<'a>(
+    program: &str,
+    prefix: impl IntoIterator<Item = &'a str>,
+    selector: &[String],
+    suffix: impl IntoIterator<Item = &'a str>,
+) -> String {
+    std::iter::once(program.to_string())
+        .chain(prefix.into_iter().map(str::to_string))
+        .chain(selector.iter().cloned())
+        .chain(suffix.into_iter().map(str::to_string))
+        .map(|arg| quote_arg(&arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_arg(arg: &str) -> String {
+    if arg.chars().all(|character| {
+        character.is_ascii_alphanumeric()
+            || matches!(character, '-' | '_' | '.' | '/' | '\\' | ':' | '=')
+    }) {
+        arg.to_string()
+    } else {
+        format!("\"{}\"", arg.replace('"', "\\\""))
+    }
 }
 
 enum SpawnedAppOutcome {
@@ -1222,6 +1484,8 @@ mod tests {
             pid: Some(123),
             exit_code: None,
             running: true,
+            stdout_tail: None,
+            stderr_tail: None,
         };
         let app = DiscoveredApp {
             instance_id: "instance-fixture".to_string(),
@@ -1255,6 +1519,63 @@ mod tests {
         assert_eq!(written["app"]["instanceId"], "instance-fixture");
         assert_eq!(written["selectors"]["read"][3], "session-fixture");
         assert_eq!(written["process"]["running"], true);
+    }
+
+    #[test]
+    fn handoff_command_lines_use_pinned_selectors() {
+        let app = DebugRunApp {
+            service_name: "fixture".to_string(),
+            session_id: "session fixture".to_string(),
+            instance_id: "instance-fixture".to_string(),
+            pid: 42,
+            database_path: "C:\\tmp\\telemetry.sqlite".to_string(),
+            capabilities: vec!["drive_bridge".to_string()],
+            pinned_by: "newDiscoveryAfterSpawn".to_string(),
+        };
+        let selectors = DebugRunSelectors::from_app(&app);
+
+        let status = command_line("auditaur", ["debug"], &selectors.debug, ["status"]);
+        let tail = command_line("auditaur", ["tail"], &selectors.read, ["--replay"]);
+
+        assert!(status.contains("--session-id \"session fixture\""));
+        assert!(status.contains("--instance-id instance-fixture"));
+        assert!(status.contains("--pid 42"));
+        assert!(tail.contains("--session \"session fixture\""));
+        assert!(!status.contains("--latest"));
+    }
+
+    #[test]
+    fn process_status_can_include_captured_child_output() {
+        let output = ChildOutputTail {
+            stdout: Some("compile stdout".to_string()),
+            stderr: Some("compile stderr".to_string()),
+        };
+        let process = DebugProcessStatus {
+            command: vec!["npm".to_string()],
+            pid: Some(123),
+            exit_code: Some(1),
+            running: false,
+            stdout_tail: None,
+            stderr_tail: None,
+        }
+        .with_output(&output);
+        let serialized = serde_json::to_value(&process).unwrap();
+
+        assert_eq!(serialized["stdoutTail"], "compile stdout");
+        assert_eq!(serialized["stderrTail"], "compile stderr");
+        assert!(format_child_output_for_error(&output).contains("compile stderr"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_executable_candidates_include_command_shims() {
+        let candidates = executable_candidates(Path::new("npm"));
+
+        assert!(candidates.iter().any(|candidate| {
+            candidate
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("npm.cmd"))
+        }));
     }
 }
 

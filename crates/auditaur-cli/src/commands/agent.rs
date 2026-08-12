@@ -17,6 +17,113 @@ use crate::{
     output::table_cell,
 };
 
+pub fn guide(json: bool) -> Result<()> {
+    let guide = AgentGuide::default();
+    read::print_json_or_table(json, &guide, || {
+        println!("{}", guide.title);
+        println!("{}", guide.summary);
+        println!();
+        println!("Core readiness: {}", guide.core_readiness);
+        println!("Frontend readiness: {}", guide.frontend_readiness);
+        println!();
+        println!("Workflows:");
+        for workflow in &guide.workflows {
+            println!("- {}: {}", workflow.name, workflow.when_to_use);
+            for command in &workflow.commands {
+                println!("    {command}");
+            }
+        }
+        println!();
+        println!("Rules:");
+        for rule in &guide.rules {
+            println!("- {rule}");
+        }
+        println!();
+        println!("Docs: {}", guide.docs);
+        Ok(())
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentGuide {
+    title: String,
+    summary: String,
+    docs: String,
+    core_readiness: String,
+    frontend_readiness: String,
+    workflows: Vec<AgentWorkflow>,
+    rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentWorkflow {
+    name: String,
+    when_to_use: String,
+    commands: Vec<String>,
+}
+
+impl Default for AgentGuide {
+    fn default() -> Self {
+        Self {
+            title: "Auditaur Agent Debugging Guide".to_string(),
+            summary: "Use Auditaur as the first diagnostic surface for Tauri apps. Auditaur observes the app; it does not replace the app's normal dev command.".to_string(),
+            docs: "docs/getting-started/agent-guide.mdx".to_string(),
+            core_readiness: "Default readiness means app/session discovery, telemetry database, session row, Tauri window telemetry, and backend/plugin telemetry are ready when available.".to_string(),
+            frontend_readiness: "Use --require-frontend only when frontend telemetry is required; Tauri WebViews may not emit frontend telemetry until a user interaction or app path runs.".to_string(),
+            workflows: vec![
+                AgentWorkflow {
+                    name: "No-config observe".to_string(),
+                    when_to_use: "Start a dev app under observation when .auditaur/config.json is not present.".to_string(),
+                    commands: vec![
+                        "auditaur observe --app <app-name> -- <dev command>".to_string(),
+                        "auditaur observe --app <app-name> --require-frontend -- <dev command>".to_string(),
+                        "auditaur observe --app <app-name> --port web -- <dev command using {{port:web}}>".to_string(),
+                        "auditaur observe --app <app-name> --port-env web=VITE_PORT -- <dev command>".to_string(),
+                    ],
+                },
+                AgentWorkflow {
+                    name: "Configured loop".to_string(),
+                    when_to_use: "Use when the repo has .auditaur/config.json.".to_string(),
+                    commands: vec![
+                        "auditaur start".to_string(),
+                        "auditaur drill".to_string(),
+                        "auditaur inspect".to_string(),
+                        "auditaur stop".to_string(),
+                    ],
+                },
+                AgentWorkflow {
+                    name: "Attach to running app".to_string(),
+                    when_to_use: "Use when the developer, IDE, or another terminal already owns app startup.".to_string(),
+                    commands: vec![
+                        "auditaur debug --app <app-name> --active --json watch --until-ready".to_string(),
+                        "auditaur debug --app <app-name> --active --require-drive-bridge --json watch --until-ready".to_string(),
+                    ],
+                },
+                AgentWorkflow {
+                    name: "Pinned follow-up".to_string(),
+                    when_to_use: "Use after observe/start writes .auditaur/session.json; prefer pinned selectors over --latest.".to_string(),
+                    commands: vec![
+                        "auditaur debug --db <databasePath> --session-id <sessionId> --instance-id <instanceId> --pid <pid> status".to_string(),
+                        "auditaur tail --db <databasePath> --session <sessionId> --replay".to_string(),
+                        "auditaur logs --db <databasePath> --session <sessionId>".to_string(),
+                        "auditaur drive --session-id <sessionId> --instance-id <instanceId> --pid <pid> inspect".to_string(),
+                        "auditaur stop --session-file .auditaur/session.json".to_string(),
+                    ],
+                },
+            ],
+            rules: vec![
+                "Preserve the app's normal startup command.".to_string(),
+                "For concurrent dev app runs, prefer observe named ports and wire them through {{port:name}} placeholders or --port-env.".to_string(),
+                "Do not rely on --latest when stale sessions may exist; use the session file selectors.".to_string(),
+                "Use --require-drive-bridge only when selector actions must be ready.".to_string(),
+                "If a manual approval is required, use a drill human gate instead of synthesizing trust-sensitive state.".to_string(),
+            ],
+        }
+    }
+}
+
 pub fn runs(
     db: &Option<PathBuf>,
     app: Option<String>,
@@ -43,6 +150,7 @@ pub fn runs(
         if cutoff.is_some_and(|cutoff| span.start_time_unix_nanos < cutoff) {
             continue;
         }
+
         if let Some(run_id) = agentive_run_id(&span.attributes) {
             grouped.entry(run_id).or_default().push(span);
         }

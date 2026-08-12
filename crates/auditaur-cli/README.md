@@ -14,6 +14,8 @@ cargo install auditaur-cli
 
 ```powershell
 auditaur doctor
+auditaur agent guide --json
+auditaur observe --app my-tauri-app -- npm run tauri dev
 auditaur apps --json
 auditaur logs --json
 auditaur traces --json
@@ -32,6 +34,12 @@ auditaur mcp
 
 Auditaur discovers active local Tauri app sessions through per-app discovery files and reads telemetry from the associated SQLite session database. Pass `--db <path>` when you want to inspect a specific database.
 
+Use `auditaur observe --app <name> -- <dev command>` for no-config Tauri/dev-app observation. It starts the normal command as argv, waits for core readiness, writes `.auditaur\session.json` by default, prints pinned selectors for follow-up commands, and leaves the observed app running until `auditaur stop --session-file .auditaur\session.json`.
+
+For concurrent agent runs, use named ports: `auditaur observe --app <name> --port web -- npm run dev -- --port {{port:web}}` or export one with `--port-env web=VITE_PORT`. Chosen ports are recorded in the session file.
+
 ## MCP
 
 Run `auditaur mcp` to expose read-only telemetry tools over stdio for MCP clients and coding agents.
+
+Run `auditaur agent guide` for the concise agent workflow, or `auditaur agent guide --json` for a machine-readable guide.

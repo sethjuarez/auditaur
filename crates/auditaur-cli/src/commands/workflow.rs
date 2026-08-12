@@ -24,6 +24,20 @@ pub struct StartOptions {
 }
 
 #[derive(Debug)]
+pub struct ObserveOptions {
+    pub app: String,
+    pub write_session: PathBuf,
+    pub require_frontend: bool,
+    pub require_drive_bridge: bool,
+    pub timeout_seconds: u64,
+    pub interval_ms: u64,
+    pub ports: Vec<String>,
+    pub port_env: Vec<String>,
+    pub json: bool,
+    pub command: Vec<String>,
+}
+
+#[derive(Debug)]
 pub struct DrillOptions {
     pub config: PathBuf,
     pub session_file: PathBuf,
@@ -246,6 +260,46 @@ pub fn start(options: StartOptions) -> Result<()> {
         Some(options.write_session.clone()),
         environment,
         command,
+        "Auditaur start session ready.",
+    )?;
+    write_ports_to_session_file(&options.write_session, &ports)?;
+    if options.json {
+        let mut value = serde_json::to_value(&result)?;
+        if !ports.is_empty() {
+            value["ports"] = json!(ports);
+        }
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    }
+    Ok(())
+}
+
+pub fn observe(options: ObserveOptions) -> Result<()> {
+    let (ports, environment) = observe_ports(&options.ports, &options.port_env)?;
+    let command = expand_argv(options.command, &ports)?;
+    let result = debug::run_with_output(
+        debug::DebugSelector {
+            db: None,
+            app: Some(options.app),
+            session_id: None,
+            instance_id: None,
+            pid: None,
+            latest: false,
+            active: false,
+            cdp_port: None,
+            require_frontend: options.require_frontend,
+            require_drive_bridge: options.require_drive_bridge,
+        },
+        options.interval_ms,
+        Some(options.timeout_seconds),
+        if options.json {
+            debug::DebugRunOutput::Quiet
+        } else {
+            debug::DebugRunOutput::Human
+        },
+        Some(options.write_session.clone()),
+        environment,
+        command,
+        "Auditaur observe session ready.",
     )?;
     write_ports_to_session_file(&options.write_session, &ports)?;
     if options.json {
@@ -490,6 +544,119 @@ fn allocate_ports(config: &BTreeMap<String, PortConfig>) -> Result<BTreeMap<Stri
             Ok((name.clone(), port))
         })
         .collect()
+}
+
+fn observe_ports(
+    port_specs: &[String],
+    env_specs: &[String],
+) -> Result<(BTreeMap<String, u16>, Vec<(String, String)>)> {
+    let mut requested = BTreeMap::new();
+    for spec in port_specs {
+        let (name, port) = parse_observe_port(spec)?;
+        if requested.insert(name.clone(), port).is_some() {
+            return Err(anyhow!("duplicate observe port `{name}`"));
+        }
+    }
+
+    let env = parse_observe_port_env(env_specs)?;
+    for name in env.keys() {
+        requested.entry(name.clone()).or_insert(None);
+    }
+
+    let ports = requested
+        .iter()
+        .map(|(name, port)| {
+            let port = match port {
+                Some(port) => reserve_specific_port(*port).with_context(|| {
+                    format!("port `{name}` requested {port}, but it is not available")
+                })?,
+                None => reserve_random_port()
+                    .with_context(|| format!("failed to reserve random port for `{name}`"))?,
+            };
+            Ok((name.clone(), port))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let environment = env
+        .into_iter()
+        .filter_map(|(name, env)| {
+            let port = ports.get(&name)?;
+            Some((env, port.to_string()))
+        })
+        .collect();
+    Ok((ports, environment))
+}
+
+fn parse_observe_port(spec: &str) -> Result<(String, Option<u16>)> {
+    let (name, port) = match spec.split_once('=') {
+        Some((name, port)) => (name, Some(parse_port(port)?)),
+        None => (spec, None),
+    };
+    let name = validate_port_name(name)?;
+    Ok((name, port))
+}
+
+fn parse_observe_port_env(spec: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut env = BTreeMap::new();
+    for spec in spec {
+        let (name, env_name) = spec
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--port-env expects NAME=ENV"))?;
+        let name = validate_port_name(name)?;
+        if env_name.trim().is_empty() {
+            return Err(anyhow!(
+                "--port-env for `{name}` must include an environment variable name"
+            ));
+        }
+        if env.insert(name.clone(), env_name.to_string()).is_some() {
+            return Err(anyhow!("duplicate observe port environment for `{name}`"));
+        }
+    }
+    Ok(env)
+}
+
+fn validate_port_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(anyhow!("observe port name must not be empty"));
+    }
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(anyhow!(
+            "observe port name `{name}` must contain only ASCII letters, numbers, '-' or '_'"
+        ));
+    }
+    Ok(name.to_string())
+}
+
+fn parse_port(port: &str) -> Result<u16> {
+    let port = port
+        .parse::<u16>()
+        .with_context(|| format!("invalid port `{port}`"))?;
+    if port == 0 {
+        return Err(anyhow!(
+            "port 0 is not valid; omit =PORT to reserve a random port"
+        ));
+    }
+    Ok(port)
+}
+
+fn reserve_specific_port(port: u16) -> Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .with_context(|| format!("failed to reserve port {port}"))?;
+    drop(listener);
+    Ok(port)
+}
+
+fn reserve_random_port() -> Result<u16> {
+    let listener = TcpListener::bind("127.0.0.1:0").context("failed to reserve random port")?;
+    let port = listener
+        .local_addr()
+        .context("failed to read reserved port")?
+        .port();
+    drop(listener);
+    Ok(port)
 }
 
 fn port_environment(
@@ -879,6 +1046,46 @@ mod tests {
             environment,
             vec![("AUDITAUR_WEB_PORT".to_string(), "4242".to_string())]
         );
+    }
+
+    #[test]
+    fn observe_ports_allocate_random_ports_and_environment() {
+        let (ports, environment) = observe_ports(
+            &["web".to_string()],
+            &["web=VITE_PORT".to_string(), "api=API_PORT".to_string()],
+        )
+        .unwrap();
+
+        assert!(ports.get("web").is_some_and(|port| *port > 0));
+        assert!(ports.get("api").is_some_and(|port| *port > 0));
+        assert_eq!(
+            environment,
+            vec![
+                ("API_PORT".to_string(), ports["api"].to_string()),
+                ("VITE_PORT".to_string(), ports["web"].to_string())
+            ]
+        );
+        let command = expand_argv(
+            vec![
+                "npm".to_string(),
+                "run".to_string(),
+                "dev".to_string(),
+                "--".to_string(),
+                "--port".to_string(),
+                "{{port:web}}".to_string(),
+            ],
+            &ports,
+        )
+        .unwrap();
+        assert_eq!(command.last().unwrap(), &ports["web"].to_string());
+    }
+
+    #[test]
+    fn observe_ports_accept_explicit_port_values() {
+        let random = reserve_random_port().unwrap();
+        let (ports, _) = observe_ports(&[format!("web={random}")], &[]).unwrap();
+
+        assert_eq!(ports["web"], random);
     }
 
     #[test]

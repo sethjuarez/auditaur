@@ -1,9 +1,18 @@
 ---
-title: Agent Start Here
+title: Agent Debugging Guide
 description: A concise workflow for coding agents debugging Auditaur-enabled Tauri apps.
 ---
 
 Use Auditaur data before asking a developer to paste logs, screenshots, browser console output, or terminal output.
+
+Agents can discover this workflow directly from the CLI:
+
+```powershell
+auditaur agent guide
+auditaur agent guide --json
+```
+
+Use the JSON form when an agent needs a compact machine-readable contract for no-config observe, configured start/drill/inspect/stop, attach mode, pinned follow-up selectors, and readiness rules.
 
 ## Agent mental model
 
@@ -12,7 +21,7 @@ Auditaur observes the app. It does not replace the app's normal dev command. For
 | User phrase | Do this |
 | --- | --- |
 | "observe the app" | Attach to the already-running app and watch readiness. |
-| "start with Auditaur" | Run `auditaur start`, or use `debug run -- <normal command>` when no config exists yet. |
+| "start with Auditaur" | Run `auditaur start`, or use `auditaur observe --app <name> -- <normal command>` when no config exists yet. |
 | "Auditaur start the app" | Treat this as "start the app under observation"; preserve the normal startup command from config. |
 | "debug with Auditaur" | Check readiness first, then inspect logs, errors, timeline, traces, IPC, and events. |
 | "drive the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
@@ -110,16 +119,28 @@ Use attach mode as the default: start the app through the developer's normal wor
 
 ```powershell
 npm run tauri dev
-auditaur debug --app my-app --active --require-drive-bridge --json watch --until-ready
+auditaur debug --app my-app --active --json watch --until-ready
 ```
 
-Use wrapper mode when an agent or smoke script should own a repeatable validation run:
+Default readiness means the Auditaur session, telemetry database, window records, and backend/plugin telemetry are ready. Add `--require-frontend` only when frontend telemetry is part of the check; Tauri WebViews may need a user interaction before frontend telemetry appears. Add `--require-drive-bridge` when selector actions must be ready.
+
+Use no-config observe mode when an agent or smoke script should own a repeatable validation run without requiring `.auditaur/config.json`:
 
 ```powershell
-auditaur debug --app my-app --active --require-drive-bridge --json run --timeout-seconds 180 -- npm run tauri dev
+auditaur observe --app my-app -- npm run tauri dev
 ```
 
-Wrapper mode starts the same app command you would have run manually; Auditaur does not replace Tauri startup. It watches readiness and leaves the app running after readiness so the agent can drive, inspect, or clean it up.
+Observe mode starts the same app command you would have run manually; Auditaur does not replace Tauri startup. It watches core readiness, writes `.auditaur/session.json` with pinned selectors, prints status/tail/logs/drive/stop follow-up commands, and leaves the app running after readiness so the agent can drive, inspect, or clean it up. Commands such as `npm`, `pnpm`, `yarn`, and `cargo tauri` are launched directly across platforms; wrap in PowerShell/bash only when you need shell syntax.
+
+For concurrent agent sessions, avoid fixed frontend/dev-server ports. Reserve a named port and wire it into the app command:
+
+```powershell
+auditaur observe --app my-app --port web -- npm run dev -- --port {{port:web}}
+auditaur observe --app my-app --port-env web=VITE_PORT -- npm run tauri dev
+auditaur observe --app my-app --port web=5177 -- npm run dev -- --port {{port:web}}
+```
+
+Use random named ports (`--port web` or `--port-env web=VITE_PORT`) by default. Use explicit values like `--port web=5177` only when the app or test requires a known port. The selected ports are written to `.auditaur/session.json` so later tools and agents can reuse them without guessing.
 
 Use drill mode when the run should finish as a pass/fail confidence check and clean up the app automatically:
 

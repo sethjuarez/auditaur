@@ -351,7 +351,71 @@ fn debug_run_help_exposes_session_file_option() {
 }
 
 #[test]
+fn debug_run_json_failure_includes_child_output_tail() {
+    let temp = TempDir::new().unwrap();
+    #[cfg(windows)]
+    let script = {
+        let script = temp.path().join("fail.cmd");
+        fs::write(
+            &script,
+            "@echo compile failed from child 1>&2\r\nexit /b 7\r\n",
+        )
+        .unwrap();
+        script
+    };
+    #[cfg(not(windows))]
+    let script = {
+        use std::os::unix::fs::PermissionsExt;
+        let script = temp.path().join("fail.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\necho compile failed from child >&2\nexit 7\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+    command.args([
+        "debug",
+        "--app",
+        "fixture",
+        "--json",
+        "run",
+        "--timeout-seconds",
+        "5",
+        "--",
+    ]);
+    command.arg(script);
+    let failure = run_failure_command(&mut command);
+
+    assert!(failure.contains("stderr tail"));
+    assert!(failure.contains("compile failed from child"));
+}
+
+#[test]
 fn simplified_agent_commands_are_discoverable() {
+    let agent_help = run_stdout(["agent", "--help"]);
+    assert!(agent_help.contains("guide"));
+    let guide = run_stdout(["agent", "guide"]);
+    assert!(guide.contains("auditaur observe --app <app-name>"));
+    assert!(guide.contains("Core readiness"));
+    let guide_json = run_json(["agent", "guide", "--json"]);
+    assert_eq!(guide_json["title"], "Auditaur Agent Debugging Guide");
+    assert!(guide_json["workflows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|workflow| workflow["name"] == "No-config observe"));
+    let alias_json = run_json(["agent", "start-here", "--json"]);
+    assert_eq!(alias_json["title"], guide_json["title"]);
+    let observe = run_stdout(["observe", "--help"]);
+    assert!(observe.contains("--app"));
+    assert!(observe.contains("--write-session"));
+    assert!(observe.contains("--port"));
+    assert!(observe.contains("--port-env"));
+    assert!(observe.contains("--require-frontend"));
+    assert!(observe.contains("Require frontend telemetry"));
     assert!(run_stdout(["start", "--help"]).contains("--write-session"));
     assert!(run_stdout(["drill", "--help"]).contains("--session-file"));
     assert!(run_stdout(["inspect", "--help"]).contains("--session-file"));
