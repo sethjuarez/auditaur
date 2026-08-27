@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-macros-v0.4.6...tauri-plugin-auditaur-macros-v0.4.7) - 2026-08-27
+
+### Fixed
+
+- *(macros)* treat Result-suffixed type aliases as Result in auditaur_command diagnostic ([#72](https://github.com/sethjuarez/auditaur/pull/72))
+
 ## [0.4.6](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-macros-v0.4.5...tauri-plugin-auditaur-macros-v0.4.6) - 2026-08-27
 
 ### Added
