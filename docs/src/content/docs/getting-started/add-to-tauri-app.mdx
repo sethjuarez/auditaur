@@ -152,6 +152,14 @@ fn load_user_legacy(
 
 For `instrument_ipc`, the optional parameter must be named `auditaur_trace_context`.
 
+Because `auditaur_command` injects a borrowed `tauri::ipc::Request<'_>` argument, it can only wrap an
+infallible async getter (e.g. `async fn get_status() -> Status`) if you first give it a `Result`
+return — Tauri requires every async command with a reference input to return `Result`. To keep the
+bare return on an async getter, use the `#[tauri::command]` + `#[instrument_ipc(...)]` form above with
+an `auditaur_trace_context: Option<IpcTraceContext>` parameter; the trace still continues via the
+`auditaurTraceContext` payload arg. Applying `auditaur_command` to such a getter now fails with a
+clear compile error explaining these two options.
+
 ## 7. Verify with doctor and read commands
 
 Run these while the app is open in `tauri dev`:
