@@ -82,6 +82,14 @@ fn expand_auditaur_command(attr: TokenStream2, item: TokenStream2) -> TokenStrea
         )
         .to_compile_error();
     }
+    if function.sig.asyncness.is_some() && !return_type_is_result(&function.sig.output) {
+        let message = "`#[tauri_plugin_auditaur::auditaur_command]` injects a borrowed `tauri::ipc::Request<'_>` argument, and async Tauri commands that take a reference input must return `Result`; change the return type to `Result<T, E>`, or use `#[tauri::command]` with `#[tauri_plugin_auditaur::instrument_ipc(...)]` and an `auditaur_trace_context: Option<IpcTraceContext>` argument to keep the bare return";
+        let error = match &function.sig.output {
+            syn::ReturnType::Type(_, _) => syn::Error::new_spanned(&function.sig.output, message),
+            syn::ReturnType::Default => syn::Error::new_spanned(&function.sig.ident, message),
+        };
+        return error.to_compile_error();
+    }
     let request_ident = unique_argument_ident(&function, "auditaur_request");
     let request_arg: FnArg = syn::parse_quote! {
         #request_ident: #tauri_crate::ipc::Request<'_>
@@ -186,6 +194,35 @@ fn function_has_argument(function: &ItemFn, name: &str) -> bool {
                 if matches!(pat_type.pat.as_ref(), Pat::Ident(ident) if ident.ident == name)
         )
     })
+}
+
+/// Best-effort check for whether a return type is a `Result`.
+///
+/// Matches on the last path segment being named `Result`, so `Result<..>`,
+/// `anyhow::Result<..>`, and `crate::x::Result<..>` all pass. A bare/unit return
+/// (`ReturnType::Default`) is treated as not a `Result`. Non-path shapes
+/// (e.g. `impl Trait`, tuples) are treated as `Result` to prefer a false-negative
+/// (allow) over a false-positive (wrongly rejecting a valid command).
+///
+/// Limitation: a `Result` type alias that is not literally named `Result`
+/// (e.g. `-> CmdResult`) is not recognized and would be flagged.
+fn return_type_is_result(output: &syn::ReturnType) -> bool {
+    match output {
+        syn::ReturnType::Default => false,
+        syn::ReturnType::Type(_, ty) => type_ends_with_result(ty),
+    }
+}
+
+fn type_ends_with_result(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Path(type_path) => type_path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident == "Result")
+            .unwrap_or(false),
+        _ => true,
+    }
 }
 
 fn token_stream_mentions(tokens: &TokenStream2, needle: &str) -> bool {
@@ -334,5 +371,71 @@ mod tests {
         .to_string();
 
         assert!(expanded.contains("reserves the `auditaur_trace_context` argument"));
+    }
+
+    #[test]
+    fn auditaur_command_rejects_async_non_result_return() {
+        let expanded = expand_auditaur_command(
+            quote!(),
+            quote! {
+                async fn copilot_auth_status() -> CopilotAuthStatus {
+                    CopilotAuthStatus::default()
+                }
+            },
+        )
+        .to_string();
+
+        assert!(expanded.contains("compile_error"));
+        assert!(expanded.contains("must return `Result`"));
+        assert!(expanded.contains("instrument_ipc"));
+        assert!(!expanded.contains("tauri :: ipc :: Request"));
+    }
+
+    #[test]
+    fn auditaur_command_rejects_async_unit_return() {
+        let expanded = expand_auditaur_command(
+            quote!(),
+            quote! {
+                async fn emit_ping() {}
+            },
+        )
+        .to_string();
+
+        assert!(expanded.contains("compile_error"));
+        assert!(expanded.contains("must return `Result`"));
+    }
+
+    #[test]
+    fn auditaur_command_allows_async_result_return() {
+        let expanded = expand_auditaur_command(
+            quote!(),
+            quote! {
+                async fn load_user(id: String) -> anyhow::Result<String> {
+                    Ok(id)
+                }
+            },
+        )
+        .to_string();
+
+        assert!(!expanded.contains("compile_error"));
+        assert!(expanded.contains("tauri :: command"));
+        assert!(expanded.contains("tauri :: ipc :: Request < '_ >"));
+    }
+
+    #[test]
+    fn auditaur_command_allows_sync_non_result_return() {
+        let expanded = expand_auditaur_command(
+            quote!(),
+            quote! {
+                fn app_name() -> String {
+                    "auditaur".to_string()
+                }
+            },
+        )
+        .to_string();
+
+        assert!(!expanded.contains("compile_error"));
+        assert!(expanded.contains("tauri :: command"));
+        assert!(expanded.contains("tauri :: ipc :: Request < '_ >"));
     }
 }
