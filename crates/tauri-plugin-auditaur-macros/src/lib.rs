@@ -198,14 +198,19 @@ fn function_has_argument(function: &ItemFn, name: &str) -> bool {
 
 /// Best-effort check for whether a return type is a `Result`.
 ///
-/// Matches on the last path segment being named `Result`, so `Result<..>`,
-/// `anyhow::Result<..>`, and `crate::x::Result<..>` all pass. A bare/unit return
-/// (`ReturnType::Default`) is treated as not a `Result`. Non-path shapes
-/// (e.g. `impl Trait`, tuples) are treated as `Result` to prefer a false-negative
-/// (allow) over a false-positive (wrongly rejecting a valid command).
+/// Matches when the last path segment's identifier ends with `Result`, so
+/// `Result<..>`, `anyhow::Result<..>`, `crate::x::Result<..>`, and `Result`
+/// type aliases such as `TauriCommandResult<..>`, `CmdResult<..>`, or
+/// `IoResult<..>` all pass. A bare/unit return (`ReturnType::Default`) is
+/// treated as not a `Result`. Non-path shapes (e.g. `impl Trait`, tuples) are
+/// treated as `Result` so the guard prefers a false-negative (allow) over a
+/// false-positive (wrongly rejecting a valid command) — a friendly diagnostic
+/// must never turn currently-valid code into a compile error.
 ///
-/// Limitation: a `Result` type alias that is not literally named `Result`
-/// (e.g. `-> CmdResult`) is not recognized and would be flagged.
+/// Limitation: a `Result` type alias whose name does not end in `Result`
+/// (e.g. `type Outcome<T> = Result<T, E>;`) is not recognized, so an infallible
+/// async command using such an alias would fall back to Tauri's opaque error
+/// instead of this friendly one. That is the acceptable (false-negative) side.
 fn return_type_is_result(output: &syn::ReturnType) -> bool {
     match output {
         syn::ReturnType::Default => false,
@@ -219,7 +224,7 @@ fn type_ends_with_result(ty: &syn::Type) -> bool {
             .path
             .segments
             .last()
-            .map(|segment| segment.ident == "Result")
+            .map(|segment| segment.ident.to_string().ends_with("Result"))
             .unwrap_or(false),
         _ => true,
     }
@@ -420,6 +425,32 @@ mod tests {
         assert!(!expanded.contains("compile_error"));
         assert!(expanded.contains("tauri :: command"));
         assert!(expanded.contains("tauri :: ipc :: Request < '_ >"));
+    }
+
+    #[test]
+    fn auditaur_command_allows_async_result_type_alias_return() {
+        for return_type in [
+            "TauriCommandResult<String>",
+            "CmdResult<String>",
+            "IoResult<()>",
+        ] {
+            let ret: proc_macro2::TokenStream = return_type.parse().unwrap();
+            let expanded = expand_auditaur_command(
+                quote!(),
+                quote! {
+                    async fn load_user(id: String) -> #ret {
+                        Ok(id)
+                    }
+                },
+            )
+            .to_string();
+
+            assert!(
+                !expanded.contains("compile_error"),
+                "alias `{return_type}` was wrongly flagged: {expanded}"
+            );
+            assert!(expanded.contains("tauri :: command"));
+        }
     }
 
     #[test]
