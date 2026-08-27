@@ -85,9 +85,7 @@ fn expand_auditaur_command(attr: TokenStream2, item: TokenStream2) -> TokenStrea
     if function.sig.asyncness.is_some() && !return_type_is_result(&function.sig.output) {
         let message = "`#[tauri_plugin_auditaur::auditaur_command]` injects a borrowed `tauri::ipc::Request<'_>` argument, and async Tauri commands that take a reference input must return `Result`; change the return type to `Result<T, E>`, or use `#[tauri::command]` with `#[tauri_plugin_auditaur::instrument_ipc(...)]` and an `auditaur_trace_context: Option<IpcTraceContext>` argument to keep the bare return";
         let error = match &function.sig.output {
-            syn::ReturnType::Type(_, _) => {
-                syn::Error::new_spanned(&function.sig.output, message)
-            }
+            syn::ReturnType::Type(_, _) => syn::Error::new_spanned(&function.sig.output, message),
             syn::ReturnType::Default => syn::Error::new_spanned(&function.sig.ident, message),
         };
         return error.to_compile_error();
