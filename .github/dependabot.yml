@@ -1,0 +1,35 @@
+# Keep the Tauri toolchain we build and test against current.
+# Published minimums (Cargo.toml / package.json ranges) are raised manually only when needed.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - "/"
+      - "/examples/dogfood/src-tauri"
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: "tauri*"
+      - dependency-name: "wry"
+      - dependency-name: "tao"
+    versioning-strategy: lockfile-only
+    groups:
+      tauri:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directories:
+      - "/packages/api"
+      - "/examples/dogfood"
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: "@tauri-apps/*"
+    versioning-strategy: lockfile-only
+    groups:
+      tauri:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
