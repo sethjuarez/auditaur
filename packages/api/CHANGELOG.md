@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/sethjuarez/auditaur/compare/api-v0.6.0...api-v0.6.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* dispatch drive bridge requests exactly once; build against Tauri 2.12 ([#77](https://github.com/sethjuarez/auditaur/issues/77)) ([f610cc5](https://github.com/sethjuarez/auditaur/commit/f610cc5af26c21ed29b362361d0025e8aa580ca3))
+
 ## [0.6.0](https://github.com/sethjuarez/auditaur/compare/api-v0.5.1...api-v0.6.0) (2026-07-03)
 
 
