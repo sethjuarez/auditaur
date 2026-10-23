@@ -483,6 +483,27 @@ describe('drive bridge single-flight polling', () => {
     expect(calls).toBe(2);
   });
 
+  it('serializes polls across bridges that share a gate', async () => {
+    const gate = { inFlight: false };
+    let active = 0;
+    let maxActive = 0;
+    const poll = async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return false;
+    };
+    const first = createSingleFlightPoller(poll, gate);
+    const second = createSingleFlightPoller(poll, gate);
+
+    const pending = first();
+    expect(second()).toBeUndefined();
+    await pending;
+    await expect(second()).resolves.toBe(false);
+    expect(maxActive).toBe(1);
+  });
+
   it('releases the gate after a poll rejects', async () => {
     let fail = true;
     const tryPoll = createSingleFlightPoller(async () => {

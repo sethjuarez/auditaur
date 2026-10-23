@@ -71,8 +71,8 @@ export function startDriveBridge(
   let disposed = false;
   let stopRequestListener: (() => void) | undefined;
   const isDisposed = () => disposed;
-  // The timer loop and the wake event share one gate so a request is never polled concurrently.
-  const tryPoll = createSingleFlightPoller(() => pollOnce(exporter, windowLabel));
+  // The timer loop and the wake event share one page-wide gate so a request is never polled concurrently.
+  const tryPoll = createSingleFlightPoller(() => pollOnce(exporter, windowLabel), pageDrivePollGate);
 
   void register(windowLabel).catch(reportBridgeError);
   const heartbeatTimer = setInterval(() => {
@@ -127,28 +127,35 @@ async function pollOnce(exporter: AuditaurExporter, windowLabel: string | undefi
   return true;
 }
 
+export interface SingleFlightGate {
+  inFlight: boolean;
+}
+
+// Shared by every bridge in this page, so duplicate initAuditaur calls (StrictMode, HMR) never poll concurrently.
+const pageDrivePollGate: SingleFlightGate = { inFlight: false };
+
 /**
- * Wraps a poll so at most one invocation is in flight. Returns `undefined` when a poll is
- * already running. The gate is released when the underlying poll settles, not on timeout.
+ * Wraps a poll so at most one invocation per gate is in flight. Returns `undefined` when a poll
+ * is already running. The gate is released when the underlying poll settles, not on timeout.
  */
 export function createSingleFlightPoller(
   poll: () => Promise<boolean>,
+  gate: SingleFlightGate = { inFlight: false },
 ): () => Promise<boolean> | undefined {
-  let inFlight = false;
   return () => {
-    if (inFlight) {
+    if (gate.inFlight) {
       return undefined;
     }
-    inFlight = true;
+    gate.inFlight = true;
     let pending: Promise<boolean>;
     try {
       pending = poll();
     } catch (error) {
-      inFlight = false;
+      gate.inFlight = false;
       return Promise.reject(error);
     }
     return pending.finally(() => {
-      inFlight = false;
+      gate.inFlight = false;
     });
   };
 }
