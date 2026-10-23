@@ -59,8 +59,8 @@ Rust crates use release-plz:
 The frontend package uses release-please:
 
 1. `.github/workflows/release-api.yml` opens or updates a release PR for `packages\api`.
-2. Merging the release PR creates a GitHub release tagged for `@auditaur/api`.
-3. `.github/workflows/publish-api.yml` publishes matching `@auditaur/api-v*` releases to npm with provenance.
+2. After the release PR merges, run `release-api.yml` again. It creates the `api-v*` GitHub release and dispatches `publish-api.yml` at that tag.
+3. `.github/workflows/publish-api.yml` publishes the release to npm with provenance.
 4. The same workflow then publishes the built package to GitHub Packages as `@sethjuarez/auditaur-api` using the release workflow's `GITHUB_TOKEN`.
 5. Manual workflow dispatch defaults to `publish_target: github-packages`, so real manual mirror publishes do not publish to npmjs. Select `npmjs-and-github-packages` only when intentionally exercising the full release publish path.
 6. Before a real GitHub Packages publish, the workflow checks whether `@sethjuarez/auditaur-api@<version>` already exists and skips the mirror publish if it does.

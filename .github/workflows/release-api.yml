@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -16,7 +17,18 @@ jobs:
     name: Prepare API release PR
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - id: release
+        uses: googleapis/release-please-action@v4
         with:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
+      # Releases created with GITHUB_TOKEN don't trigger `release` workflows, but
+      # workflow_dispatch does. Dispatching keeps npm trusted publishing on publish-api.yml.
+      - name: Publish the new release
+        if: ${{ steps.release.outputs['packages/api--release_created'] == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs['packages/api--tag_name'] }}
+        run: >-
+          gh workflow run publish-api.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          -f dry_run=false -f publish_target=npmjs-and-github-packages
