@@ -219,8 +219,17 @@ try {
     Invoke-DriveJson -CommandArgs @("uncheck", "--selector", "#drive-checkbox", "--visible-only") | Out-Null
     Invoke-DriveJson -CommandArgs @("hover", "--selector", "#drive-hover-target", "--visible-only") | Out-Null
 
-    $evaluate = Invoke-DriveJson -CommandArgs @("evaluate", "--expression", "({input: document.querySelector('#drive-input')?.value, select: document.querySelector('#drive-select')?.value, checked: document.querySelector('#drive-checkbox')?.checked, output: document.querySelector('#output')?.textContent?.includes('Drive hover target hovered.')})")
+    # Toggle clicks are not idempotent, so a double-dispatched request would leave the state unchanged.
+    Write-Host "Checking each drive request dispatches exactly once..."
+    for ($toggle = 1; $toggle -le 30; $toggle++) {
+        Invoke-DriveJson -CommandArgs @("click", "--selector", "#drive-checkbox", "--visible-only") | Out-Null
+        $toggleState = Invoke-DriveJson -CommandArgs @("evaluate", "--expression", "document.querySelector('#drive-checkbox')?.checked")
+        Assert-Condition ($toggleState.payload.value -eq ($toggle % 2 -eq 1)) "drive click $toggle toggled the checkbox an unexpected number of times"
+    }
+
+    $evaluate = Invoke-DriveJson -CommandArgs @("evaluate", "--expression", "({input: document.querySelector('#drive-input')?.value, textarea: document.querySelector('#drive-textarea')?.value, select: document.querySelector('#drive-select')?.value, checked: document.querySelector('#drive-checkbox')?.checked, output: document.querySelector('#output')?.textContent?.includes('Drive hover target hovered.')})")
     Assert-Condition ($evaluate.payload.value.input -eq "filled by dogfood smoke") "drive evaluate observed an unexpected input value"
+    Assert-Condition (([regex]::Matches([string]$evaluate.payload.value.textarea, "typed by dogfood smoke")).Count -eq 1) "drive type was not applied exactly once: $($evaluate.payload.value.textarea)"
     Assert-Condition ($evaluate.payload.value.select -eq "charlie") "drive evaluate observed an unexpected select value"
     Assert-Condition ($evaluate.payload.value.checked -eq $false) "drive evaluate observed an unexpected checkbox value"
     Assert-Condition ($evaluate.payload.value.output -eq $true) "drive evaluate did not observe the hover output"
