@@ -26,8 +26,8 @@ uuid.workspace = true
 xcap = "0.9.6"
 
 [target.'cfg(windows)'.dependencies]
-webview2-com = "0.38.2"
-windows = { version = "0.61.3", features = [
+webview2-com = "0.39.1"
+windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
