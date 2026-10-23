@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashSet, VecDeque},
     fs,
     io::ErrorKind,
     panic,
@@ -35,6 +36,30 @@ use crate::error::AuditaurError;
 
 static PANIC_SINK: Mutex<Option<PanicSink>> = Mutex::new(None);
 static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+const RECENT_CLAIMED_REQUEST_LIMIT: usize = 256;
+
+/// Request ids recently handed to the frontend, so a request is never dispatched twice.
+#[derive(Default)]
+struct ClaimedDriveRequests {
+    order: VecDeque<String>,
+    ids: HashSet<String>,
+}
+
+impl ClaimedDriveRequests {
+    /// Returns `false` when the id was already claimed.
+    fn insert(&mut self, request_id: &str) -> bool {
+        if !self.ids.insert(request_id.to_string()) {
+            return false;
+        }
+        self.order.push_back(request_id.to_string());
+        while self.order.len() > RECENT_CLAIMED_REQUEST_LIMIT {
+            if let Some(evicted) = self.order.pop_front() {
+                self.ids.remove(&evicted);
+            }
+        }
+        true
+    }
+}
 
 #[derive(Clone)]
 struct PanicSink {
@@ -51,6 +76,7 @@ pub struct AuditaurState {
     heartbeat_alive: Option<Arc<AtomicBool>>,
     bridge_notifier_started: Arc<AtomicBool>,
     bridge_notifier_alive: Arc<AtomicBool>,
+    claimed_drive_requests: Mutex<ClaimedDriveRequests>,
     redact_defaults: bool,
     extra_redaction_keys: Vec<String>,
     retention_limits: RetentionLimits,
@@ -73,6 +99,7 @@ impl AuditaurState {
                 heartbeat_alive: None,
                 bridge_notifier_started: Arc::new(AtomicBool::new(false)),
                 bridge_notifier_alive: Arc::new(AtomicBool::new(false)),
+                claimed_drive_requests: Mutex::default(),
                 redact_defaults: config.redact_defaults,
                 extra_redaction_keys: config.extra_redaction_keys,
                 retention_limits: RetentionLimits::default(),
@@ -168,6 +195,7 @@ impl AuditaurState {
             heartbeat_alive: Some(heartbeat_alive),
             bridge_notifier_started,
             bridge_notifier_alive,
+            claimed_drive_requests: Mutex::default(),
             redact_defaults: config.redact_defaults,
             extra_redaction_keys: config.extra_redaction_keys,
             retention_limits: RetentionLimits {
@@ -350,6 +378,12 @@ impl AuditaurState {
         window_label: Option<String>,
     ) -> Result<Option<DriveBridgeRequest>, AuditaurError> {
         let bridge_dir = self.bridge_dir()?;
+        // Serialize claims: on Windows, std::fs::rename is handle-based, so two concurrent
+        // renames of the same source can both succeed and hand out one request twice.
+        let mut claimed = self
+            .claimed_drive_requests
+            .lock()
+            .map_err(|_| AuditaurError::new("Auditaur drive bridge claim lock was poisoned."))?;
         ensure_bridge_dirs(&bridge_dir)?;
         sweep_stale_bridge_files(&bridge_dir)?;
         let requests_dir = bridge_dir.join(DRIVE_BRIDGE_REQUESTS_DIR);
@@ -386,6 +420,13 @@ impl AuditaurState {
         }
         let request = fs::read(&in_flight_path)?;
         let request: DriveBridgeRequest = serde_json::from_slice(&request)?;
+        if !claimed.insert(&request.request_id) {
+            tracing::debug!(
+                request_id = request.request_id.as_str(),
+                "Auditaur drive bridge request was already dispatched; skipping duplicate"
+            );
+            return Ok(None);
+        }
         tracing::debug!(
             action = request.action.as_str(),
             request_id = request.request_id.as_str(),
@@ -992,6 +1033,101 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response.payload["exists"], true);
+    }
+
+    #[test]
+    fn drive_bridge_concurrent_polls_dispatch_request_exactly_once() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = bridge_test_state(&temp);
+        let bridge_dir = state.bridge_dir().unwrap();
+
+        for round in 0..20 {
+            let request_id = format!("request-{round}");
+            write_bridge_request(&bridge_dir, &request_id);
+            let barrier = std::sync::Barrier::new(8);
+            let claimed: Vec<String> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            state
+                                .poll_drive_bridge_request(Some("main".to_string()))
+                                .unwrap()
+                                .map(|request| request.request_id)
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .filter_map(|handle| handle.join().unwrap())
+                    .collect()
+            });
+            assert_eq!(claimed, vec![request_id], "round {round}");
+        }
+    }
+
+    #[test]
+    fn drive_bridge_never_redispatches_a_claimed_request_id() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = bridge_test_state(&temp);
+        let bridge_dir = state.bridge_dir().unwrap();
+
+        write_bridge_request(&bridge_dir, "request-dup");
+        let first = state
+            .poll_drive_bridge_request(Some("main".to_string()))
+            .unwrap();
+        assert_eq!(first.unwrap().request_id, "request-dup");
+
+        write_bridge_request(&bridge_dir, "request-dup");
+        assert!(state
+            .poll_drive_bridge_request(Some("main".to_string()))
+            .unwrap()
+            .is_none());
+    }
+
+    fn bridge_test_state(temp: &TempDir) -> AuditaurState {
+        let state = AuditaurState::initialize(
+            AuditaurConfig {
+                enabled: Some(true),
+                service_name: Some("bridge-test".to_string()),
+                data_dir: Some(temp.path().to_path_buf()),
+                ..AuditaurConfig::default()
+            },
+            123,
+            None,
+        )
+        .unwrap();
+        crate::tracing::clear_sink(state.session_id.as_deref().unwrap());
+        state
+            .register_drive_bridge(Some("main".to_string()))
+            .unwrap();
+        state
+    }
+
+    fn write_bridge_request(bridge_dir: &std::path::Path, request_id: &str) {
+        let request = DriveBridgeRequest {
+            schema_version: 1,
+            protocol_version: DRIVE_BRIDGE_PROTOCOL_VERSION,
+            request_id: request_id.to_string(),
+            action: "click".to_string(),
+            selector: Some("#toggle".to_string()),
+            value: None,
+            values: Vec::new(),
+            visible_only: true,
+            window_label: Some("main".to_string()),
+            test_id: None,
+            step_id: None,
+            created_at_unix_nanos: 1,
+        };
+        std::fs::write(
+            bridge_dir
+                .join(DRIVE_BRIDGE_REQUESTS_DIR)
+                .join(format!("{request_id}.json")),
+            serde_json::to_vec_pretty(&request).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
