@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.7...tauri-plugin-auditaur-v0.4.8) - 2026-10-23
+
+### Fixed
+
+- dispatch drive bridge requests exactly once; build against Tauri 2.12 ([#77](https://github.com/sethjuarez/auditaur/pull/77))
+
 ## [0.4.1](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.0...tauri-plugin-auditaur-v0.4.1) - 2026-07-03
 
 ### Other
