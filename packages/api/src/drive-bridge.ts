@@ -70,7 +70,9 @@ export function startDriveBridge(
   const windowLabel = bridgeConfig.windowLabel;
   let disposed = false;
   let stopRequestListener: (() => void) | undefined;
-  let requestWakePollRunning = false;
+  const isDisposed = () => disposed;
+  // The timer loop and the wake event share one gate so a request is never polled concurrently.
+  const tryPoll = createSingleFlightPoller(() => pollOnce(exporter, windowLabel));
 
   void register(windowLabel).catch(reportBridgeError);
   const heartbeatTimer = setInterval(() => {
@@ -78,17 +80,12 @@ export function startDriveBridge(
       void register(windowLabel).catch(reportBridgeError);
     }
   }, HEARTBEAT_INTERVAL_MS);
-  void pollLoop(exporter, windowLabel, () => disposed, pollIntervalMs);
+  void pollLoop(tryPoll, isDisposed, pollIntervalMs);
   void listen(REQUEST_EVENT, () => {
-    if (disposed || requestWakePollRunning) {
+    if (disposed) {
       return;
     }
-    requestWakePollRunning = true;
-    void drainPendingRequests(exporter, windowLabel, () => disposed)
-      .catch(reportBridgeError)
-      .finally(() => {
-        requestWakePollRunning = false;
-      });
+    void drainPendingRequests(tryPoll, isDisposed).catch(reportBridgeError);
   })
     .then((unlisten) => {
       if (disposed) {
@@ -130,17 +127,42 @@ async function pollOnce(exporter: AuditaurExporter, windowLabel: string | undefi
   return true;
 }
 
-async function drainPendingRequests(
-  exporter: AuditaurExporter,
-  windowLabel: string | undefined,
+/**
+ * Wraps a poll so at most one invocation is in flight. Returns `undefined` when a poll is
+ * already running. The gate is released when the underlying poll settles, not on timeout.
+ */
+export function createSingleFlightPoller(
+  poll: () => Promise<boolean>,
+): () => Promise<boolean> | undefined {
+  let inFlight = false;
+  return () => {
+    if (inFlight) {
+      return undefined;
+    }
+    inFlight = true;
+    let pending: Promise<boolean>;
+    try {
+      pending = poll();
+    } catch (error) {
+      inFlight = false;
+      return Promise.reject(error);
+    }
+    return pending.finally(() => {
+      inFlight = false;
+    });
+  };
+}
+
+export async function drainPendingRequests(
+  tryPoll: () => Promise<boolean> | undefined,
   isDisposed: () => boolean,
 ): Promise<void> {
   while (!isDisposed()) {
-    const handled = await withTimeout(
-      pollOnce(exporter, windowLabel),
-      POLL_TIMEOUT_MS,
-      'drive bridge wake poll timed out',
-    );
+    const pending = tryPoll();
+    if (!pending) {
+      return;
+    }
+    const handled = await withTimeout(pending, POLL_TIMEOUT_MS, 'drive bridge poll timed out');
     if (!handled) {
       return;
     }
@@ -148,14 +170,12 @@ async function drainPendingRequests(
 }
 
 async function pollLoop(
-  exporter: AuditaurExporter,
-  windowLabel: string | undefined,
+  tryPoll: () => Promise<boolean> | undefined,
   isDisposed: () => boolean,
   pollIntervalMs: number,
 ): Promise<void> {
   while (!isDisposed()) {
-    await withTimeout(pollOnce(exporter, windowLabel), POLL_TIMEOUT_MS, 'drive bridge poll timed out')
-      .catch(reportBridgeError);
+    await drainPendingRequests(tryPoll, isDisposed).catch(reportBridgeError);
     if (!isDisposed()) {
       await sleep(pollIntervalMs);
     }

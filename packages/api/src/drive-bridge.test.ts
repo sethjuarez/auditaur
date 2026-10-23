@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createSingleFlightPoller,
+  drainPendingRequests,
   executeDriveBridgeRequest,
   setDriveBridgeNativeScreenshotInvokerForTests,
 } from './drive-bridge';
@@ -447,5 +449,51 @@ describe('drive bridge selector operations', () => {
         protocolVersion: 2,
       }),
     ).rejects.toThrow('unsupported drive bridge protocol version: 2; expected 1');
+  });
+});
+
+describe('drive bridge single-flight polling', () => {
+  it('never runs two polls concurrently across timer and wake drains', async () => {
+    let active = 0;
+    let maxActive = 0;
+    let calls = 0;
+    const pending = ['req-1'];
+    const handled: string[] = [];
+    const tryPoll = createSingleFlightPoller(async () => {
+      calls += 1;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const request = pending.shift();
+      if (request) {
+        handled.push(request);
+      }
+      active -= 1;
+      return request !== undefined;
+    });
+
+    await Promise.all([
+      drainPendingRequests(tryPoll, () => false),
+      drainPendingRequests(tryPoll, () => false),
+      drainPendingRequests(tryPoll, () => false),
+    ]);
+
+    expect(maxActive).toBe(1);
+    expect(handled).toEqual(['req-1']);
+    expect(calls).toBe(2);
+  });
+
+  it('releases the gate after a poll rejects', async () => {
+    let fail = true;
+    const tryPoll = createSingleFlightPoller(async () => {
+      if (fail) {
+        fail = false;
+        throw new Error('boom');
+      }
+      return false;
+    });
+
+    await expect(tryPoll()).rejects.toThrow('boom');
+    await expect(tryPoll()).resolves.toBe(false);
   });
 });
