@@ -75,6 +75,9 @@ async function setView(patch) {
 }
 
 // Calls `reload` whenever the server says the view or data changed, e.g. because the agent acted.
+// A still capture (`?still`, see lib/browser.mjs) skips the stream: an open request would stop
+// headless virtual time, and a still image needs no live updates.
 function onServerChange(reload) {
+  if (new URLSearchParams(location.search).has("still")) return;
   new EventSource("/events").onmessage = () => reload();
 }

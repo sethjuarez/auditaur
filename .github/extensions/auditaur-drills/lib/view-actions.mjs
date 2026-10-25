@@ -6,7 +6,7 @@ import { viewSchema } from "./view-state.mjs";
 // `canvas.describe(state)` may add what the view resolves to (the step shown, the tests the filter
 // leaves visible, ...), so the agent sees what the user sees without a second call. It runs first
 // because resolving may rescope the view (see ViewState.scope).
-async function currentView(canvas, state) {
+export async function currentView(canvas, state) {
     const described = canvas.describe ? await canvas.describe(state) : {};
     return { ui: state.view.get(), ...described };
 }
@@ -33,9 +33,10 @@ export function viewActions(canvas) {
     ];
 }
 
-// Runs an action, then tells open pages to reload unless the action only reads.
-export async function runAction(action, state, input) {
-    const value = await action.handler(state, input);
+// Runs an action, then tells open pages to reload unless the action only reads. `panel` carries what
+// only the panel knows (its page `url`).
+export async function runAction(action, state, input, panel) {
+    const value = await action.handler(state, input, panel);
     if (!action.readOnly) state.view.changed();
     return value;
 }

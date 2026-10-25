@@ -10,6 +10,7 @@ import { DrillError } from "./lib/errors.mjs";
 import { Panels } from "./lib/panels.mjs";
 import { sweepOrphanLogs } from "./lib/processes.mjs";
 import { runAction, viewActions } from "./lib/view-actions.mjs";
+import { screenshotAction } from "./lib/screenshot-action.mjs";
 import explorer from "./canvases/explorer/index.mjs";
 import live from "./canvases/live/index.mjs";
 import trace from "./canvases/trace/index.mjs";
@@ -35,11 +36,13 @@ function toCanvas(canvas) {
         displayName: canvas.displayName,
         description: canvas.description,
         inputSchema: canvas.inputSchema,
-        actions: [...canvas.actions, ...viewActions(canvas)].map((action) => ({
+        actions: [...canvas.actions, ...viewActions(canvas), screenshotAction(canvas)].map((action) => ({
             name: action.name,
             description: action.description,
             ...(action.inputSchema && { inputSchema: action.inputSchema }),
-            handler: surfaced((ctx) => runAction(action, panels.state(ctx.instanceId), ctx.input ?? {})),
+            handler: surfaced((ctx) =>
+                runAction(action, panels.state(ctx.instanceId), ctx.input ?? {}, panels.panel(ctx.instanceId)),
+            ),
         })),
         open: surfaced(async (ctx) => {
             const panel = await panels.open(canvas, ctx.instanceId, ctx.input);

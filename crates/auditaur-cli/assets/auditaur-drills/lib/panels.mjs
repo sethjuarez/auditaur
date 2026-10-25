@@ -26,9 +26,19 @@ export class Panels {
     }
 
     state(instanceId) {
+        return this.#panel(instanceId).state;
+    }
+
+    // What actions may need beyond state: the panel's page `url`.
+    panel(instanceId) {
+        const { url } = this.#panel(instanceId);
+        return { url };
+    }
+
+    #panel(instanceId) {
         const panel = this.#open.get(instanceId);
         if (!panel) throw new DrillError("not_open", "this canvas instance is not open");
-        return panel.state;
+        return panel;
     }
 
     async close(instanceId) {
