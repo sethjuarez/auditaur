@@ -1,5 +1,4 @@
 const LABELS = { passed: "passed", failed: "failed", flaky: "flaky", interrupted: "interrupted", running: "running", skipped: "skipped", notRun: "not run" };
-const expanded = new Set();
 let view = null;
 let busy = false;
 let actionError = null;
@@ -24,7 +23,9 @@ async function post(path, body) {
 async function load(refresh) {
   clearTimeout(timer);
   try {
-    view = await getJson("/state" + (refresh ? "?refresh" : ""));
+    const next = await fetchState(refresh ? "?refresh" : "");
+    if (!next) return;
+    view = next;
   } catch (error) {
     view = { ...(view ?? { suites: [], runs: [], invalid: [] }), listError: "Canvas server unreachable: " + error.message };
   }
@@ -32,15 +33,9 @@ async function load(refresh) {
   timer = setTimeout(load, running() ? 1000 : 5000);
 }
 
-function matches(test, query) {
-  if (!query) return true;
-  const haystack = (test.title + " " + test.tags.map((tag) => "@" + tag).join(" ")).toLowerCase();
-  return query.toLowerCase().split(/\s+/).every((word) => haystack.includes(word));
-}
-
 function testRow(test, disabled) {
   const result = test.last?.result ?? "notRun";
-  const open = expanded.has(test.id);
+  const open = view.ui.expanded.includes(test.id);
   const mode = test.mode && test.mode !== "run"
     ? '<span class="badge mode" title="' + esc(test.modeReason) + '">' + esc(test.mode) + "</span>" : "";
   const dots = test.history.map((entry) =>
@@ -64,7 +59,9 @@ function testRow(test, disabled) {
 
 function render() {
   if (!view) return;
-  const query = document.getElementById("filter").value.trim();
+  const filter = document.getElementById("filter");
+  // The server's filter wins unless the user is mid-edit (a change not yet sent).
+  if (filterTimer === null && filter.value !== view.ui.filter) filter.value = view.ui.filter;
   const tests = view.suites.flatMap((suite) => suite.tests);
   document.getElementById("counts").textContent =
     view.suites.length + (view.suites.length === 1 ? " suite · " : " suites · ") + tests.length + (tests.length === 1 ? " test" : " tests");
@@ -101,7 +98,7 @@ function render() {
   document.getElementById("cancel").hidden = !view.active;
 
   const sections = view.suites.map((suite) => {
-    const shown = suite.tests.filter((test) => matches(test, query));
+    const shown = suite.tests.filter((test) => test.shown);
     if (!shown.length) return "";
     const failing = suite.tests.filter((test) => test.last?.result === "failed").length;
     return '<section class="suite"><div class="suite-head row">' +
@@ -126,9 +123,11 @@ document.addEventListener("click", (event) => {
   if (target.id === "cancel") return post("/cancel");
   if (target.id === "refresh") return load(true);
   if (target.dataset.id) {
-    if (expanded.has(target.dataset.id)) expanded.delete(target.dataset.id);
-    else expanded.add(target.dataset.id);
+    const id = target.dataset.id;
+    const expanded = view.ui.expanded.includes(id) ? view.ui.expanded.filter((each) => each !== id) : view.ui.expanded.concat(id);
+    view.ui.expanded = expanded;
     render();
+    changeView({ expanded });
   }
 });
 document.addEventListener("keydown", (event) => {
@@ -138,5 +137,24 @@ document.addEventListener("keydown", (event) => {
     row.click();
   }
 });
-document.getElementById("filter").addEventListener("input", render);
+// Shows the change at once; the server's answer (via the event stream) is what sticks.
+async function changeView(patch) {
+  try {
+    await setView(patch);
+  } catch (error) {
+    actionError = error.message;
+    await load();
+  }
+}
+
+let filterTimer = null;
+document.getElementById("filter").addEventListener("input", (event) => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => {
+    filterTimer = null;
+    view.ui.filter = event.target.value;
+    changeView({ filter: event.target.value });
+  }, 150);
+});
+onServerChange(load);
 load();

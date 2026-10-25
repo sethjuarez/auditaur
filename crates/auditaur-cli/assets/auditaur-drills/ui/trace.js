@@ -1,9 +1,9 @@
 const KINDS = ["ipc", "event", "log", "error", "span"];
-const kinds = new Set(KINDS);
 let view = null;
 let error = null;
-let step = undefined;
-let shownKey = null;
+// Both come from the server's view on each render: the kinds shown and the focused step (or null).
+let kinds = new Set(KINDS);
+let step = null;
 let timer = null;
 
 const kindOf = (event) => (event.kind === "span-event" ? "span" : event.kind);
@@ -12,7 +12,9 @@ const fileUrl = (path) => "/file?runId=" + encodeURIComponent(view.run.runId) + 
 async function load() {
   clearTimeout(timer);
   try {
-    view = await getJson("/state");
+    const next = await fetchState();
+    if (!next) return;
+    view = next;
     error = null;
   } catch (err) {
     error = "Canvas server unreachable: " + err.message;
@@ -84,12 +86,8 @@ function render() {
     main.innerHTML = '<div class="empty muted">This run has no tests.</div>';
     return;
   }
-  const key = sel.key + "|" + sel.attempt;
-  if (key !== shownKey) {
-    shownKey = key;
-    const failing = sel.steps.find((s) => ["failed", "timedOut"].includes(s.status));
-    step = failing ? failing.index : null;
-  }
+  kinds = new Set(view.ui.kinds);
+  step = sel.step;
   document.getElementById("summary").innerHTML = ['<span class="' + cls(sel.status) + '">' + esc(sel.status) + "</span>", ms(sel.durationMs, 2),
     sel.steps.length + " steps", sel.events.length + " telemetry records"].filter(Boolean).join(" · ");
 
@@ -120,17 +118,28 @@ function render() {
     (sel.filterNotes && (typeof sel.filterNotes === "string" || Object.keys(sel.filterNotes).length) ? '<div class="muted" style="font-size:11px;margin-top:6px">' + esc(typeof sel.filterNotes === "string" ? sel.filterNotes : JSON.stringify(sel.filterNotes)) + "</div>" : "");
 }
 
+// Shows the change at once, then stores it; the server's answer (via the event stream) is what sticks.
+function changeView(patch) {
+  Object.assign(view.ui, patch);
+  render();
+  setView(patch).catch((err) => {
+    error = err.message;
+    load();
+  });
+}
+
 document.addEventListener("click", (event) => {
   const kind = event.target.closest("[data-kind]");
   if (kind) {
-    kinds.has(kind.dataset.kind) ? kinds.delete(kind.dataset.kind) : kinds.add(kind.dataset.kind);
-    return render();
+    const k = kind.dataset.kind;
+    return changeView({ kinds: kinds.has(k) ? view.ui.kinds.filter((each) => each !== k) : view.ui.kinds.concat(k) });
   }
   const target = event.target.closest("[data-step]");
-  if (target) {
+  if (target && view?.selected) {
     const value = target.dataset.step;
-    step = value === "all" || Number(value) === step ? null : Number(value);
-    return render();
+    const next = value === "all" || Number(value) === step ? "all" : Number(value);
+    view.selected.step = next === "all" ? null : next;
+    return changeView({ step: next });
   }
   if (event.target.id === "refresh") load();
 });
@@ -160,4 +169,5 @@ document.addEventListener("toggle", async (event) => {
 document.getElementById("run").addEventListener("change", (event) => select({ runId: event.target.value || null }));
 document.getElementById("test").addEventListener("change", (event) => select({ runId: view?.pinned ?? null, testId: event.target.value }));
 document.getElementById("attempt").addEventListener("change", (event) => select({ runId: view?.pinned ?? null, testId: view?.selected?.key, attempt: Number(event.target.value) }));
+onServerChange(load);
 load();

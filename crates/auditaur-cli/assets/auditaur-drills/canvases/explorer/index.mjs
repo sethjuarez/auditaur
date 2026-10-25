@@ -5,7 +5,8 @@ import { cancelRun, startRun } from "../../lib/launcher.mjs";
 import { DrillError } from "../../lib/errors.mjs";
 import { cwdProperty } from "../../lib/schemas.mjs";
 import { readBody } from "../../lib/server.mjs";
-import { snapshot, summary } from "./view.mjs";
+import { field } from "../../lib/view-state.mjs";
+import { snapshot, summary, visibleTests } from "./view.mjs";
 const openSchema = {
     type: "object",
     additionalProperties: false,
@@ -64,13 +65,18 @@ export default {
     inputSchema: openSchema,
     title: "Drill tests",
     page: "explorer",
-    create: (input) => configure({ launch: null }, input),
+    view: {
+        filter: field.text().about("Show only tests whose `suite > test @tags` contain every word."),
+        expanded: field.ids().about("Test ids whose steps and last error are expanded."),
+    },
+    create: (input, view) => configure({ view, launch: null }, input),
     reconfigure(state, input) {
         if (state.starting || (state.launch && !state.launch.exited)) {
             throw new DrillError("run_in_progress", "cancel or finish the current run before reconfiguring this canvas");
         }
         configure(state, input);
     },
+    describe: async (state) => ({ shown: visibleTests(await snapshot(state)) }),
     routes: (state) => ({
         "GET /state": (url) => snapshot(state, url.searchParams.has("refresh")),
         "POST /run": async (_url, req) => startRun(state, await readBody(req)),
@@ -80,6 +86,7 @@ export default {
         {
             name: "get_summary",
             description: "Suites, tests, the latest run, and which tests are failing, flaky, or have never run.",
+            readOnly: true,
             handler: async (state) => summary(await snapshot(state)),
         },
         {

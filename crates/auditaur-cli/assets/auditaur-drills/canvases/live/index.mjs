@@ -7,6 +7,7 @@ import { respondGate } from "../../lib/gates.mjs";
 import { DrillError } from "../../lib/errors.mjs";
 import { cwdProperty, runIdProperty } from "../../lib/schemas.mjs";
 import { readBody } from "../../lib/server.mjs";
+import { field } from "../../lib/view-state.mjs";
 import { liveSummary, liveView } from "./view.mjs";
 
 const inputSchema = {
@@ -32,6 +33,12 @@ const respondSchema = {
             },
         },
     },
+};
+
+const followSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: { runId: { ...runIdProperty, description: "Show this run; omit to follow the newest run." } },
 };
 
 function configure(state, input) {
@@ -63,8 +70,17 @@ export default {
     inputSchema,
     title: "Drill run",
     page: "live",
-    create: (input) => configure({}, input),
+    view: {
+        expanded: field.toggles().about(
+            "Open (true) or closed (false) overrides by test id, or `hooks:<suite id>` for suite hooks. Without one, running and failed tests are open.",
+        ),
+    },
+    create: (input, view) => configure({ view }, input),
     reconfigure: configure,
+    describe: async (state) => {
+        const { pinned, run } = await liveView(state);
+        return { following: pinned ? "pinned" : "newest", runId: run?.runId ?? null };
+    },
     routes: (state) => ({
         "GET /state": () => liveView(state),
         "POST /gate": async (_url, req) => respondGate(state, await readBody(req)),
@@ -75,7 +91,17 @@ export default {
         {
             name: "get_status",
             description: "The shown run's status, totals, running and failed tests, and gates waiting for an answer.",
+            readOnly: true,
             handler: async (state) => liveSummary(await liveView(state)),
+        },
+        {
+            name: "follow",
+            description: "Show one run, or omit runId to follow the newest run.",
+            inputSchema: followSchema,
+            handler: async (state, input) => {
+                follow(state, input.runId ?? null);
+                return liveSummary(await liveView(state));
+            },
         },
         {
             name: "respond_gate",

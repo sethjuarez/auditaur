@@ -1,7 +1,10 @@
-// Open panels by instance id. A panel is one canvas definition's state plus its server.
+// Open panels by instance id. A panel is one canvas definition's state plus its server. The state
+// carries the panel's `view` (see view-state.mjs), which the canvas's own code may read.
 
 import { DrillError } from "./errors.mjs";
 import { startServer, stopServer } from "./server.mjs";
+import { ViewState } from "./view-state.mjs";
+import { withViewRoutes } from "./view-routes.mjs";
 
 export class Panels {
     #open = new Map();
@@ -10,11 +13,14 @@ export class Panels {
     async open(canvas, instanceId, input) {
         let panel = this.#open.get(instanceId);
         if (!panel) {
-            const state = canvas.create(input);
-            panel = { state, ...(await startServer(canvas.routes(state), canvas.page, canvas.components)) };
+            const view = new ViewState(canvas.view ?? {});
+            const state = canvas.create(input, view);
+            const routes = withViewRoutes(canvas.routes(state), view, async () => canvas.sync?.(state));
+            panel = { state, ...(await startServer(routes, canvas.page, canvas.components)) };
             this.#open.set(instanceId, panel);
         } else if (input && Object.keys(input).length > 0) {
             canvas.reconfigure(panel.state, input);
+            panel.state.view.changed();
         }
         return panel;
     }

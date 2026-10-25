@@ -1,8 +1,17 @@
-// The explorer's view model: every suite and test with its latest result and recent history.
+// The explorer's view model: every suite and test with its latest result and recent history, and
+// whether the view's filter shows it.
 
 import { loadSuites } from "../../lib/cli.mjs";
 import { readRuns, resultOf } from "../../lib/runs.mjs";
+
+function matches(test, filter) {
+    const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+    const haystack = `${test.title} ${(test.tags ?? []).map((tag) => `@${tag}`).join(" ")}`.toLowerCase();
+    return words.every((word) => haystack.includes(word));
+}
+
 export function buildView(state, runs) {
+    const { filter } = state.view.get();
     const byRun = runs.map((run) => {
         const tests = new Map();
         for (const suite of run.suites ?? []) {
@@ -39,6 +48,7 @@ export function buildView(state, runs) {
                 // Oldest first, so the newest result sits at the right edge.
                 history: history.slice().reverse(),
                 flaky: history.some((entry) => entry.result === "flaky"),
+                shown: matches(test, filter),
             };
         }),
     }));
@@ -74,6 +84,11 @@ export function buildView(state, runs) {
 export async function snapshot(state, force = false) {
     await loadSuites(state, force);
     return buildView(state, await readRuns(state));
+}
+
+// The tests the filter leaves on screen, as the agent would name them.
+export function visibleTests(view) {
+    return view.suites.flatMap((suite) => suite.tests).filter((test) => test.shown).map((test) => ({ id: test.id, title: test.title, result: test.last?.result ?? "notRun" }));
 }
 
 export function summary(view) {

@@ -39,6 +39,8 @@ export async function readBody(req) {
 
 // A route returning `{ [RAW]: { contentType, body } }` sends bytes instead of JSON.
 export const RAW = Symbol("raw");
+// A route returning `STREAMED` has written (and keeps writing) the response itself.
+export const STREAMED = Symbol("streamed");
 
 // Only the page's own files, the UI components it names (`<name>.js` and `.css`), and the shared ones
 // are served; nothing else under `ui/` is reachable.
@@ -77,7 +79,8 @@ export async function startServer(routes, page, components = []) {
             const url = new URL(req.url ?? "/", "http://127.0.0.1");
             const route = routes[`${req.method} ${url.pathname}`];
             if (route) {
-                const value = await route(url, req);
+                const value = await route(url, req, res);
+                if (value === STREAMED) return;
                 if (value?.[RAW]) sendRaw(res, value[RAW]);
                 else jsonResponse(res, value);
             } else if (req.method === "GET" && assets.has(url.pathname)) {
@@ -93,6 +96,10 @@ export async function startServer(routes, page, components = []) {
     return { server, url: `http://127.0.0.1:${server.address().port}/` };
 }
 
+// Event streams never end on their own, so open connections are dropped rather than awaited.
 export function stopServer(server) {
-    return new Promise((resolvePromise) => server.close(() => resolvePromise()));
+    return new Promise((resolvePromise) => {
+        server.close(() => resolvePromise());
+        server.closeAllConnections();
+    });
 }

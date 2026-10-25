@@ -49,7 +49,19 @@ export async function traceView(state) {
         view.entries[0];
     if (!entry) return view;
     view.selected = await traceDetail(state, run, entry);
+    view.selected.step = shownStep(state, run.runId, view.selected);
     return view;
+}
+
+// The step the view shows: "auto" is the failing step (or the whole attempt when none failed), "all"
+// the whole attempt. Another attempt coming into view (a new latest run, another test) puts the step
+// back to auto and tells open pages, so every reader agrees on what is shown.
+function shownStep(state, runId, selected) {
+    state.view.scope(`${runId}|${selected.key}|${selected.attempt}`, "step");
+    const { step } = state.view.get();
+    if (step === "auto") return selected.steps.find((each) => ["failed", "timedOut"].includes(each.status))?.index ?? null;
+    if (step === "all") return null;
+    return step < selected.steps.length ? step : null;
 }
 
 async function traceDetail(state, run, entry) {

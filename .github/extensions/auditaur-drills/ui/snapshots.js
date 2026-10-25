@@ -11,9 +11,9 @@ let view = null;
 let error = null;
 let notice = null;
 let busy = false;
-let mode = "side";
 let timer = null;
 
+const mode = () => view?.ui.mode ?? "side";
 const fileUrl = (path) => "/file?runId=" + encodeURIComponent(view.run.runId) + "&path=" + encodeURIComponent(path);
 const locked = () => busy || view?.run?.status === "running";
 const urlOf = (item, name) => (item.files[name] ? fileUrl(item.files[name].path) : null);
@@ -21,7 +21,9 @@ const urlOf = (item, name) => (item.files[name] ? fileUrl(item.files[name].path)
 async function load() {
   clearTimeout(timer);
   try {
-    view = await getJson("/state");
+    const next = await fetchState();
+    if (!next) return;
+    view = next;
     error = null;
   } catch (err) {
     error = "Canvas server unreachable: " + err.message;
@@ -58,7 +60,7 @@ async function accept(ids) {
 function body(item) {
   if (item.kind === "screenshot") {
     return '<div class="snap-message muted">' + esc(item.message) + "</div>" +
-      '<div class="snap-body">' + imageCompare({ expected: urlOf(item, "expected"), actual: urlOf(item, "actual"), diff: urlOf(item, "diff") }, mode) + "</div>";
+      '<div class="snap-body">' + imageCompare({ expected: urlOf(item, "expected"), actual: urlOf(item, "actual"), diff: urlOf(item, "diff") }, mode()) + "</div>";
   }
   const files = ["expected", "actual"].filter((name) => item.files[name]).map((name) => textFile(name, urlOf(item, name))).join("");
   return '<div class="snap-body">' + lineDiff(item.message) + files + "</div>";
@@ -80,7 +82,7 @@ function card(item) {
 function render() {
   document.getElementById("banners").innerHTML =
     (error ? '<div class="banner error">' + esc(error) + "</div>" : "") + (notice ? '<div class="banner ok">' + esc(notice) + "</div>" : "");
-  document.getElementById("modes").innerHTML = compareModes(mode);
+  document.getElementById("modes").innerHTML = compareModes(mode());
   if (!view) return;
   options(document.getElementById("run"), '<option value="">Latest run</option>' + view.runs.map((r) =>
     '<option value="' + esc(r.runId) + '">' + esc(r.runId) + " · " + esc(r.status) + "</option>").join(""), view.pinned ?? "");
@@ -105,8 +107,13 @@ function render() {
 document.addEventListener("click", (event) => {
   const modeButton = event.target.closest("[data-compare-mode]");
   if (modeButton) {
-    mode = modeButton.dataset.compareMode;
-    return render();
+    if (!view) return;
+    view.ui.mode = modeButton.dataset.compareMode;
+    render();
+    return setView({ mode: view.ui.mode }).catch((err) => {
+      error = err.message;
+      load();
+    });
   }
   const acceptButton = event.target.closest("[data-accept]");
   if (acceptButton) return accept([acceptButton.dataset.accept]);
@@ -114,4 +121,5 @@ document.addEventListener("click", (event) => {
   if (event.target.id === "refresh") load();
 });
 document.getElementById("run").addEventListener("change", (event) => select({ runId: event.target.value || null }));
+onServerChange(load);
 load();

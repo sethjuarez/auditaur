@@ -1,9 +1,10 @@
 const VIEWS = [["commands", "Commands"], ["events", "Events"], ["tests", "Tests"], ["map", "Map"]];
 let view = null;
 let error = null;
-let current = "commands";
-let missedOnly = false;
 let timer = null;
+
+// Tab and missed-only live on the server so the agent can see and change them.
+const ui = () => view?.ui ?? { tab: "commands", missedOnly: false };
 
 const titles = () => new Map((view.coverage?.tests ?? []).map((test) => [test.id, test.title]));
 const plural = (count, word) => count + " " + word + (count === 1 ? "" : "s");
@@ -11,7 +12,9 @@ const plural = (count, word) => count + " " + word + (count === 1 ? "" : "s");
 async function load(refresh = false) {
   clearTimeout(timer);
   try {
-    view = await getJson(refresh ? "/state?refresh" : "/state");
+    const next = await fetchState(refresh ? "?refresh" : "");
+    if (!next) return;
+    view = next;
     error = view.error;
   } catch (err) {
     error = "Canvas server unreachable: " + err.message;
@@ -47,7 +50,7 @@ function seen(item) {
 }
 
 function commandRows(names) {
-  return view.coverage.commands.filter((item) => !missedOnly || !item.tests.length).map((item) =>
+  return view.coverage.commands.filter((item) => !ui().missedOnly || !item.tests.length).map((item) =>
     itemRow(item.command, [
       plural(item.calls, "call"),
       item.failed ? '<span class="failed">' + item.failed + " failed</span>" : null,
@@ -56,13 +59,13 @@ function commandRows(names) {
 }
 
 function eventRows(names) {
-  return view.coverage.events.filter((item) => !missedOnly || !item.tests.length).map((item) =>
+  return view.coverage.events.filter((item) => !ui().missedOnly || !item.tests.length).map((item) =>
     itemRow(item.event, [plural(item.count, "record"), esc([...item.directions].join("/")), seen(item)], item.tests, names));
 }
 
 function testRows() {
   return view.coverage.tests
-    .filter((test) => !missedOnly || (!test.commands.length && !test.events.length))
+    .filter((test) => !ui().missedOnly || (!test.commands.length && !test.events.length))
     .map((test) => {
       const touched = [...test.commands, ...test.events];
       const tags = touched.length ? touched.map((name) => '<span class="tag mono">' + esc(name) + "</span>").join("") : '<span class="muted">No IPC or events.</span>';
@@ -84,7 +87,7 @@ function mapView() {
   const cols = [
     ...coverage.commands.map((item) => ({ key: "c:" + item.command, label: item.command, cls: item.tests.length ? "" : "muted", title: "command " + item.command })),
     ...coverage.events.map((item) => ({ key: "e:" + item.event, label: item.event, cls: item.tests.length ? "" : "muted", title: "event " + item.event })),
-  ].filter((col) => !missedOnly || col.cls);
+  ].filter((col) => !ui().missedOnly || col.cls);
   const rows = coverage.tests.map((test) => ({
     key: test.id,
     label: test.title,
@@ -114,13 +117,14 @@ function renderMain() {
     main.innerHTML = '<div class="empty muted">Coverage is unavailable for this run.</div>';
     return;
   }
-  if (current === "map") {
+  if (ui().tab === "map") {
     main.innerHTML = mapView();
     return;
   }
   const names = titles();
-  const rows = current === "commands" ? commandRows(names) : current === "events" ? eventRows(names) : testRows();
-  main.innerHTML = rows.length ? rows.join("") : '<div class="empty muted">' + (missedOnly ? "Nothing unexercised here." : EMPTY[current]) + "</div>";
+  const tab = ui().tab;
+  const rows = tab === "commands" ? commandRows(names) : tab === "events" ? eventRows(names) : testRows();
+  main.innerHTML = rows.length ? rows.join("") : '<div class="empty muted">' + (ui().missedOnly ? "Nothing unexercised here." : EMPTY[ui().tab]) + "</div>";
 }
 
 function renderMeters() {
@@ -137,7 +141,8 @@ function render() {
   document.getElementById("banners").innerHTML =
     (error ? '<div class="banner error">' + esc(error) + "</div>" : "") +
     sources.map((source) => '<div class="banner error">' + esc(source.db) + ": " + esc(source.error) + "</div>").join("");
-  document.getElementById("views").innerHTML = segmented("View", VIEWS, current);
+  document.getElementById("views").innerHTML = segmented("View", VIEWS, ui().tab);
+  document.getElementById("missed").checked = ui().missedOnly;
   if (!view) return;
   options(document.getElementById("run"), '<option value="">Latest run</option>' + view.runs.map((r) =>
     '<option value="' + esc(r.runId) + '">' + esc(r.runId) + " · " + esc(r.status) + "</option>").join(""), view.pinned ?? "");
@@ -178,12 +183,20 @@ async function loadStores() {
   renderStores();
 }
 
+// Shows the change at once, then stores it; the server's answer (via the event stream) is what sticks.
+function changeView(patch) {
+  if (!view) return;
+  Object.assign(view.ui, patch);
+  render();
+  setView(patch).catch((err) => {
+    error = err.message;
+    load();
+  });
+}
+
 document.addEventListener("click", (event) => {
   const segment = event.target.closest("[data-segment]");
-  if (segment) {
-    current = segment.dataset.segment;
-    return render();
-  }
+  if (segment) return changeView({ tab: segment.dataset.segment });
   if (event.target.id === "apply-stores") return post("/sources", { dbs: [...picker.chosen] });
   if (event.target.id === "refresh") load(true);
 });
@@ -195,12 +208,10 @@ document.getElementById("store-rows").addEventListener("change", (event) => {
   renderStores();
 });
 document.getElementById("store-filter").addEventListener("input", renderStores);
-document.getElementById("missed").addEventListener("change", (event) => {
-  missedOnly = event.target.checked;
-  render();
-});
+document.getElementById("missed").addEventListener("change", (event) => changeView({ missedOnly: event.target.checked }));
 document.getElementById("stores").addEventListener("toggle", (event) => {
   if (event.target.open && view) loadStores();
 });
 document.getElementById("run").addEventListener("change", (event) => post("/select", { runId: event.target.value || null }));
+onServerChange(load);
 load();

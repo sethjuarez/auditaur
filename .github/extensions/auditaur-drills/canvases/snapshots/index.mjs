@@ -5,6 +5,7 @@ import { DrillError } from "../../lib/errors.mjs";
 import { cwdProperty, runIdProperty } from "../../lib/schemas.mjs";
 import { readBody } from "../../lib/server.mjs";
 import { serveAttachment } from "../../lib/attachments.mjs";
+import { field } from "../../lib/view-state.mjs";
 import { acceptSnapshots, snapshotsSummary, snapshotsView } from "./view.mjs";
 
 const inputSchema = {
@@ -55,8 +56,12 @@ export default {
     title: "Drill snapshots",
     page: "snapshots",
     components: ["compare"],
-    create: (input) => configure({}, input),
+    view: {
+        mode: field.choice(["side", "slider", "diff"], "side").about("How screenshot mismatches compare expected and actual."),
+    },
+    create: (input, view) => configure({ view }, input),
     reconfigure: configure,
+    describe: async (state) => ({ runId: (await snapshotsView(state)).run?.runId ?? null }),
     routes: (state) => ({
         "GET /state": () => snapshotsView(state),
         "GET /file": (url) => serveAttachment(state, url),
@@ -67,6 +72,7 @@ export default {
         {
             name: "get_snapshots",
             description: "The shown run's snapshot results: baseline path, status (changed, missing, accepted, unstable, unreadable, noActual), message, and attachment paths.",
+            readOnly: true,
             handler: async (state) => snapshotsSummary(await snapshotsView(state)),
         },
         {

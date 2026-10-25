@@ -9,6 +9,7 @@ import { joinSession, createCanvas, CanvasError } from "@github/copilot-sdk/exte
 import { DrillError } from "./lib/errors.mjs";
 import { Panels } from "./lib/panels.mjs";
 import { sweepOrphanLogs } from "./lib/processes.mjs";
+import { runAction, viewActions } from "./lib/view-actions.mjs";
 import explorer from "./canvases/explorer/index.mjs";
 import live from "./canvases/live/index.mjs";
 import trace from "./canvases/trace/index.mjs";
@@ -34,11 +35,11 @@ function toCanvas(canvas) {
         displayName: canvas.displayName,
         description: canvas.description,
         inputSchema: canvas.inputSchema,
-        actions: canvas.actions.map((action) => ({
+        actions: [...canvas.actions, ...viewActions(canvas)].map((action) => ({
             name: action.name,
             description: action.description,
             ...(action.inputSchema && { inputSchema: action.inputSchema }),
-            handler: surfaced((ctx) => action.handler(panels.state(ctx.instanceId), ctx.input ?? {})),
+            handler: surfaced((ctx) => runAction(action, panels.state(ctx.instanceId), ctx.input ?? {})),
         })),
         open: surfaced(async (ctx) => {
             const panel = await panels.open(canvas, ctx.instanceId, ctx.input);

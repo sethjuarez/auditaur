@@ -1,4 +1,3 @@
-const toggled = new Map();
 let view = null;
 let actionError = null;
 let gateSig = null;
@@ -19,9 +18,11 @@ async function post(path, body) {
 async function load() {
   clearTimeout(timer);
   try {
-    view = await getJson("/state");
+    const next = await fetchState();
+    if (!next) return;
+    view = next;
   } catch (error) {
-    view = { ...(view ?? { runs: [], gates: [], run: null }), loadError: "Canvas server unreachable: " + error.message };
+    view = { ...(view ?? { runs: [], gates: [], run: null, ui: { expanded: {} } }), loadError: "Canvas server unreachable: " + error.message };
   }
   render();
   timer = setTimeout(load, view.run?.status === "running" ? 500 : 3000);
@@ -37,7 +38,8 @@ function stepRow(step) {
 }
 
 function isOpen(id, auto) {
-  return toggled.has(id) ? toggled.get(id) : auto;
+  const expanded = view.ui.expanded;
+  return Object.hasOwn(expanded, id) ? expanded[id] : auto;
 }
 
 function testRows(suite) {
@@ -147,9 +149,14 @@ document.addEventListener("click", (event) => {
   if (!target || target.disabled) return;
   if (target.id === "cancel") return post("/cancel");
   if (target.classList.contains("test")) {
-    const auto = target.getAttribute("aria-expanded") === "true";
-    toggled.set(target.dataset.id, !auto);
+    const open = target.getAttribute("aria-expanded") === "true";
+    const expanded = { ...view.ui.expanded, [target.dataset.id]: !open };
+    view.ui.expanded = expanded;
     render();
+    setView({ expanded }).catch((error) => {
+      actionError = error.message;
+      load();
+    });
   }
 });
 document.addEventListener("submit", async (event) => {
@@ -175,4 +182,5 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.getElementById("pick").addEventListener("change", (event) => post("/follow", { runId: event.target.value || null }));
+onServerChange(load);
 load();

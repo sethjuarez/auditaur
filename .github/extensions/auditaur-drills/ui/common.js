@@ -41,3 +41,40 @@ function options(el, html, value) {
   }
   if (document.activeElement !== el) el.value = value;
 }
+
+let stateSeq = 0;
+let viewEpoch = 0;
+// View fields the page changed but the server hasn't confirmed yet: field -> { value, token }.
+const pendingView = new Map();
+
+// The panel's `/state` (data plus the view as `ui`), or null when a newer request overtook this one.
+// A view change landing mid-request makes it fetch again, and unconfirmed view changes are laid over
+// `ui`, so a poll can't undo what the user just did.
+async function fetchState(query) {
+  const mine = ++stateSeq;
+  for (;;) {
+    const epoch = viewEpoch;
+    const value = await getJson("/state" + (query ?? ""));
+    if (mine !== stateSeq) return null;
+    if (epoch !== viewEpoch) continue;
+    if (value.ui) for (const [name, pending] of pendingView) value.ui[name] = pending.value;
+    return value;
+  }
+}
+
+// Patches the server-owned view; the server then tells every open copy of the page to reload.
+async function setView(patch) {
+  const token = {};
+  for (const [name, value] of Object.entries(patch)) pendingView.set(name, { value, token });
+  try {
+    return await postJson("/view", patch);
+  } finally {
+    for (const name of Object.keys(patch)) if (pendingView.get(name)?.token === token) pendingView.delete(name);
+    viewEpoch += 1;
+  }
+}
+
+// Calls `reload` whenever the server says the view or data changed, e.g. because the agent acted.
+function onServerChange(reload) {
+  new EventSource("/events").onmessage = () => reload();
+}

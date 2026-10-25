@@ -4,6 +4,9 @@ export const TRACE_EVENT_LIMIT = 2000;
 
 export const DETAIL_LIMIT = 2000;
 
+// The kinds the trace view filters by; "span-event" records count as "span".
+export const TELEMETRY_KINDS = ["ipc", "event", "log", "error", "span"];
+
 // ISO timestamps carry up to 9 fractional digits; Date.parse keeps only 3, so add the rest back.
 export function isoMs(value) {
     if (typeof value !== "string") return null;

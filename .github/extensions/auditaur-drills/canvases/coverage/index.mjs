@@ -5,6 +5,7 @@ import { DrillError } from "../../lib/errors.mjs";
 import { cwdProperty, runIdProperty } from "../../lib/schemas.mjs";
 import { readBody } from "../../lib/server.mjs";
 import { listAppStores } from "../../lib/apps.mjs";
+import { field } from "../../lib/view-state.mjs";
 import { coverageSummary, coverageView } from "./view.mjs";
 
 const dbsProperty = {
@@ -69,8 +70,13 @@ export default {
     title: "Drill coverage",
     page: "coverage",
     components: ["meter", "segmented", "matrix", "checklist"],
-    create: (input) => configure({}, input),
+    view: {
+        tab: field.choice(["commands", "events", "tests", "map"], "commands").about("Which coverage list the page shows."),
+        missedOnly: field.flag(false).about("Show only commands, events, and tests no test exercised."),
+    },
+    create: (input, view) => configure({ view }, input),
     reconfigure: configure,
+    describe: async (state) => ({ runId: (await coverageView(state)).run?.runId ?? null, dbs: state.dbs }),
     routes: (state) => ({
         "GET /state": (url) => coverageView(state, { fresh: url.searchParams.has("refresh") }),
         "GET /apps": () => listAppStores(state),
@@ -81,7 +87,8 @@ export default {
         {
             name: "get_coverage",
             description: "Totals, unexercised commands and events, failing commands, and tests without complete telemetry for the shown run. Always re-reads the run and stores.",
-            handler: async (state) => coverageSummary(await coverageView(state, { fresh: true })),
+                        readOnly: true,
+                        handler: async (state) => coverageSummary(await coverageView(state, { fresh: true })),
         },
         {
             name: "select",
@@ -95,7 +102,8 @@ export default {
         {
             name: "list_app_stores",
             description: "Auditaur app sessions on this machine whose telemetry stores can be compared against.",
-            handler: (state) => listAppStores(state),
+                        readOnly: true,
+                        handler: (state) => listAppStores(state),
         },
         {
             name: "set_sources",
