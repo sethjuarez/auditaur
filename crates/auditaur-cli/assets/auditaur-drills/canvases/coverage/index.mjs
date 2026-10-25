@@ -69,13 +69,14 @@ export default {
     inputSchema,
     title: "Drill coverage",
     page: "coverage",
-    components: ["meter", "segmented", "matrix", "checklist"],
+    components: ["meter", "segmented", "matrix", "checklist", "links"],
     view: {
         tab: field.choice(["commands", "events", "tests", "map"], "commands").about("Which coverage list the page shows."),
         missedOnly: field.flag(false).about("Show only commands, events, and tests no test exercised."),
     },
     create: (input, view) => configure({ view }, input),
     reconfigure: configure,
+    navigate: (state, { runId }) => select(state, { runId }),
     describe: async (state) => ({ runId: (await coverageView(state)).run?.runId ?? null, dbs: state.dbs }),
     routes: (state) => ({
         "GET /state": (url) => coverageView(state, { fresh: url.searchParams.has("refresh") }),

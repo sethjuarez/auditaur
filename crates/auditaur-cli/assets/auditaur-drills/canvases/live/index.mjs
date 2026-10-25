@@ -70,6 +70,7 @@ export default {
     inputSchema,
     title: "Drill run",
     page: "live",
+    components: ["links"],
     view: {
         expanded: field.toggles().about(
             "Open (true) or closed (false) overrides by test id, or `hooks:<suite id>` for suite hooks. Without one, running and failed tests are open.",
@@ -77,6 +78,7 @@ export default {
     },
     create: (input, view) => configure({ view }, input),
     reconfigure: configure,
+    navigate: (state, { runId }) => follow(state, runId ?? null),
     describe: async (state) => {
         const { pinned, run } = await liveView(state);
         return { following: pinned ? "pinned" : "newest", runId: run?.runId ?? null };

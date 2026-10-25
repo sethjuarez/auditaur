@@ -1,0 +1,5 @@
+/* "Open in" links to other drill canvases (component: links). */
+.open-in { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.open-in-link { font-size: 11px; padding: 0 8px; }
+.detail-links { margin-top: 6px; }
+#open-in-toast { position: fixed; left: 16px; right: 16px; bottom: 12px; z-index: 5; margin: 0; }

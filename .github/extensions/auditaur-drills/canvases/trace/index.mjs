@@ -19,7 +19,7 @@ const inputSchema = {
     properties: {
         cwd: cwdProperty,
         runId: runIdProperty,
-        testId: { type: "string", pattern: TEST_ID.source, description: "Test id from run.json; defaults to the first failed test." },
+        testId: { type: "string", pattern: `${TEST_ID.source}|${HOOKS_ID.source}`, description: "Test id (or `hooks:<suite>`) from run.json; defaults to the first failed test." },
         attempt: attemptProperty,
     },
 };
@@ -58,6 +58,7 @@ export default {
     inputSchema,
     title: "Drill trace",
     page: "trace",
+    components: ["links"],
     view: {
         step: field.index(["auto", "all"], "auto").about(
             "Zero-based step to focus; `auto` focuses the failing step, `all` the whole attempt. Selecting another test resets it to `auto`.",
@@ -66,6 +67,7 @@ export default {
     },
     create: (input, view) => configure({ view }, input),
     reconfigure: configure,
+    navigate: (state, selection) => select(state, selection),
     // Resolving the shown attempt rescopes the step, so writes land on the attempt actually shown.
     sync: (state) => traceView(state),
     describe: async (state) => {

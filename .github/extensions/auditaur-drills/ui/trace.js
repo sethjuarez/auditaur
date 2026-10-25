@@ -67,6 +67,7 @@ function render() {
   if (!view) return;
   options(document.getElementById("run"), '<option value="">Latest run</option>' + view.runs.map((r) =>
     '<option value="' + esc(r.runId) + '">' + esc(r.runId) + " · " + esc(r.status) + "</option>").join(""), view.pinned ?? "");
+  showOpenIn(document.getElementById("open-in"), runLinks(view.run?.runId, "trace"));
   const sel = view.selected;
   options(document.getElementById("test"), view.entries.map((e) =>
     '<option value="' + esc(e.key) + '">' + ICONS[cls(e.result)] + " " + esc(e.title) + "</option>").join(""), sel?.key ?? "");

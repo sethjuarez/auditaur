@@ -65,6 +65,7 @@ export default {
     inputSchema: openSchema,
     title: "Drill tests",
     page: "explorer",
+    components: ["links"],
     view: {
         filter: field.text().about("Show only tests whose `suite > test @tags` contain every word."),
         expanded: field.ids().about("Test ids whose steps and last error are expanded."),

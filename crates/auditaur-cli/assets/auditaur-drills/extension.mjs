@@ -11,13 +11,17 @@ import { Panels } from "./lib/panels.mjs";
 import { sweepOrphanLogs } from "./lib/processes.mjs";
 import { runAction, viewActions } from "./lib/view-actions.mjs";
 import { screenshotAction } from "./lib/screenshot-action.mjs";
+import { Navigator, navigationAction, navigationRoutes } from "./lib/navigator.mjs";
 import explorer from "./canvases/explorer/index.mjs";
 import live from "./canvases/live/index.mjs";
 import trace from "./canvases/trace/index.mjs";
 import snapshots from "./canvases/snapshots/index.mjs";
 import coverage from "./canvases/coverage/index.mjs";
 
+const canvases = [explorer, live, trace, snapshots, coverage];
 const panels = new Panels();
+const navigation = new Navigator(panels, canvases);
+panels.share(navigationRoutes(navigation));
 
 function surfaced(fn) {
     return async (...args) => {
@@ -36,7 +40,7 @@ function toCanvas(canvas) {
         displayName: canvas.displayName,
         description: canvas.description,
         inputSchema: canvas.inputSchema,
-        actions: [...canvas.actions, ...viewActions(canvas), screenshotAction(canvas)].map((action) => ({
+        actions: [...canvas.actions, ...viewActions(canvas), screenshotAction(canvas), navigationAction(navigation)].map((action) => ({
             name: action.name,
             description: action.description,
             ...(action.inputSchema && { inputSchema: action.inputSchema }),
@@ -54,4 +58,5 @@ function toCanvas(canvas) {
 
 sweepOrphanLogs();
 
-await joinSession({ canvases: [explorer, live, trace, snapshots, coverage].map(toCanvas) });
+const session = await joinSession({ canvases: canvases.map(toCanvas) });
+navigation.bind(session.rpc);

@@ -86,6 +86,7 @@ function render() {
   if (!view) return;
   options(document.getElementById("run"), '<option value="">Latest run</option>' + view.runs.map((r) =>
     '<option value="' + esc(r.runId) + '">' + esc(r.runId) + " · " + esc(r.status) + "</option>").join(""), view.pinned ?? "");
+  showOpenIn(document.getElementById("open-in"), runLinks(view.run?.runId, "snapshots"));
   const pending = view.items.filter((item) => ACCEPTABLE.includes(item.status));
   const acceptAll = document.getElementById("accept-all");
   acceptAll.disabled = locked() || !pending.length;

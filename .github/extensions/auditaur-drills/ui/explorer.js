@@ -52,7 +52,9 @@ function testRow(test, disabled) {
     html += '<div class="detail">' +
       (test.last?.error ? '<div class="error">' + esc(test.last.error) + "</div>" : "") +
       "<ol>" + test.steps.map((step) => "<li>" + esc(step.title) + "</li>").join("") + "</ol>" +
-      '<span class="muted path">' + esc(test.title) + " · " + esc(test.id) + "</span></div>";
+      '<span class="muted path">' + esc(test.title) + " · " + esc(test.id) + "</span>" +
+      (test.last?.runId ? '<div class="row detail-links">' + openInLinks([{ to: "trace", runId: test.last.runId, testId: test.id, label: "Last trace" }]) + "</div>" : "") +
+      "</div>";
   }
   return html;
 }
@@ -66,6 +68,7 @@ function render() {
   document.getElementById("counts").textContent =
     view.suites.length + (view.suites.length === 1 ? " suite · " : " suites · ") + tests.length + (tests.length === 1 ? " test" : " tests");
   const last = view.runs.find((run) => run.status !== "running");
+  showOpenIn(document.getElementById("open-in"), runLinks(last?.runId, null));
   const lastClass = last?.status === "passed" ? "passed" : last?.status === "interrupted" ? "interrupted" : "failed";
   document.getElementById("last-run").innerHTML = last
     ? 'Last run <span class="' + lastClass + '">' + esc(last.status) + "</span> · " +

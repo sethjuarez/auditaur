@@ -55,12 +55,13 @@ export default {
     inputSchema,
     title: "Drill snapshots",
     page: "snapshots",
-    components: ["compare"],
+    components: ["compare", "links"],
     view: {
         mode: field.choice(["side", "slider", "diff"], "side").about("How screenshot mismatches compare expected and actual."),
     },
     create: (input, view) => configure({ view }, input),
     reconfigure: configure,
+    navigate: (state, { runId }) => select(state, { runId }),
     describe: async (state) => ({ runId: (await snapshotsView(state)).run?.runId ?? null }),
     routes: (state) => ({
         "GET /state": () => snapshotsView(state),

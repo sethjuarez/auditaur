@@ -4,12 +4,14 @@
 <meta charset="utf-8">
 <title>Drill trace</title>
 <link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="links.css">
 <link rel="stylesheet" href="trace.css">
 </head>
 <body>
 <header>
   <div class="row">
     <h1>Drill trace</h1>
+    <span id="open-in"></span>
     <span class="spacer"></span>
     <select id="run" aria-label="Run"></select>
     <button id="refresh" title="Reload">↻</button>
@@ -23,6 +25,7 @@
 </header>
 <main id="main"><div class="empty muted">Loading…</div></main>
 <script src="common.js"></script>
+<script src="links.js"></script>
 <script src="trace.js"></script>
 </body>
 </html>

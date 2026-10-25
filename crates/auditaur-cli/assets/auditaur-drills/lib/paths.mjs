@@ -26,6 +26,12 @@ export function workspaceFor(input) {
     return isAbsolute(cwd) ? cwd : resolve(REPO_ROOT, cwd);
 }
 
+// One spelling per workspace folder, for comparing two (Windows paths are case-insensitive).
+export function workspaceKey(workspace) {
+    const full = resolve(workspace ?? REPO_ROOT).replace(/[\\/]+$/, "");
+    return process.platform === "win32" ? full.toLowerCase() : full;
+}
+
 export function cliFor(input) {
     const cli = input?.cli ?? process.env.AUDITAUR_BIN ?? "auditaur";
     // A bare command name is looked up on PATH; anything with a separator is a path.

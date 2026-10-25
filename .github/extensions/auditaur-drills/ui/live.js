@@ -57,7 +57,8 @@ function testRows(suite) {
         (test.attempts.length > 1 ? '<div class="attempt-head ' + cls(attempt.status) + '">Attempt ' + (Number(attempt.attempt) + 1) + " · " + esc(attempt.status) + "</div>" : "") +
         (attempt.steps.length ? attempt.steps.map(stepRow).join("") : '<div class="muted">No steps yet.</div>') +
         (attempt.error && !attempt.steps.some((step) => step.error) ? '<div class="error">' + esc(attempt.error) + "</div>" : "")
-      ).join("") : '<div class="muted">Not started.</div>') + "</div>";
+      ).join("") + '<div class="row detail-links">' + openInLinks([{ to: "trace", runId: view.run.runId, testId: test.id, label: "Trace" }]) + "</div>"
+        : '<div class="muted">Not started.</div>') + "</div>";
     }
     return html;
   }).join("");
@@ -96,6 +97,7 @@ function render() {
   if (document.activeElement !== pick) pick.value = view.pinned ?? "";
 
   const run = view.run;
+  showOpenIn(document.getElementById("open-in"), runLinks(run?.runId, "run"));
   const banners = [];
   if (actionError) banners.push('<div class="banner error">' + esc(actionError) + "</div>");
   if (view.loadError) banners.push('<div class="banner error">' + esc(view.loadError) + "</div>");
