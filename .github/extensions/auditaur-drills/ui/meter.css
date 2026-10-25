@@ -1,0 +1,5 @@
+/* Meter component. */
+.meter { min-width: 160px; flex: 1; }
+.meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.meter-track { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--text-color-muted, #656d76) 20%, transparent); overflow: hidden; }
+.meter-fill { height: 100%; background: var(--true-color-green, #1a7f37); }

@@ -13,6 +13,7 @@ import explorer from "./canvases/explorer/index.mjs";
 import live from "./canvases/live/index.mjs";
 import trace from "./canvases/trace/index.mjs";
 import snapshots from "./canvases/snapshots/index.mjs";
+import coverage from "./canvases/coverage/index.mjs";
 
 const panels = new Panels();
 
@@ -49,4 +50,4 @@ function toCanvas(canvas) {
 
 sweepOrphanLogs();
 
-await joinSession({ canvases: [explorer, live, trace, snapshots].map(toCanvas) });
+await joinSession({ canvases: [explorer, live, trace, snapshots, coverage].map(toCanvas) });

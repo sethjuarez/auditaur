@@ -19,11 +19,22 @@ export function jsonResponse(res, value, status = 200) {
     res.end(JSON.stringify(value));
 }
 
+// A JSON object body; anything else is refused as a DrillError (409) rather than crashing a handler.
 export async function readBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const text = Buffer.concat(chunks).toString("utf8");
-    return text ? JSON.parse(text) : {};
+    if (!text) return {};
+    let body;
+    try {
+        body = JSON.parse(text);
+    } catch {
+        throw new DrillError("invalid_body", "request body is not JSON");
+    }
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        throw new DrillError("invalid_body", "request body must be a JSON object");
+    }
+    return body;
 }
 
 // A route returning `{ [RAW]: { contentType, body } }` sends bytes instead of JSON.

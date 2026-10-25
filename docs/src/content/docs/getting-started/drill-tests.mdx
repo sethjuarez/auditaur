@@ -192,6 +192,8 @@ The `auditaur-drill-trace` canvas replays one test attempt: a timeline of steps 
 
 The `auditaur-drill-snapshots` canvas reviews a run's snapshot mismatches. ARIA results show the line diff; screenshots show expected and actual side by side, with a slider, or as the pixel diff. **Accept** copies the run's actual output over the baseline once the run has finished; output that never stabilized cannot be accepted. Open it with `{ "runId" }`, optional. Agents can call its `get_snapshots`, `select`, and `accept` actions.
 
+The `auditaur-drill-coverage` canvas shows which Tauri IPC commands and events a run's tests exercised: meters for the totals, then Commands, Events, Tests, and a test-by-item Map. A run only knows what it touched, so **Compare with app telemetry** picks sessions from `auditaur apps`; anything those sessions recorded that no test touched shows as unexercised. The same data comes from `auditaur drill coverage [run] --db <telemetry.sqlite>`. Agents can call its `get_coverage`, `select`, `list_app_stores`, and `set_sources` actions.
+
 ## CI
 
 Build a debug app, which embeds the frontend and keeps the drive bridge on, then run the drills against the binary:

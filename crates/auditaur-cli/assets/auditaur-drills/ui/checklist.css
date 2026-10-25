@@ -1,0 +1,5 @@
+/* Checklist component. */
+.checklist { display: grid; gap: 2px; max-height: 240px; overflow-y: auto; }
+.checklist-row { display: flex; align-items: center; gap: 4px; font-size: 12px; min-width: 0; }
+.checklist-row .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checklist-count { font-size: 11px; margin: 2px 0; }

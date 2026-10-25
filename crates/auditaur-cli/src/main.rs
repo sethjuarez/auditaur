@@ -601,6 +601,18 @@ enum DrillCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Show which IPC commands and events a run's tests exercised.
+    Coverage {
+        /// `latest` (default) or a run id or prefix.
+        #[arg()]
+        run: Option<String>,
+        /// Telemetry store whose commands and events count as the app's surface
+        /// (repeatable); anything recorded there but not exercised is listed too.
+        #[arg(long)]
+        db: Vec<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Run drill tests and record them under .auditaur/drill-runs.
     Test {
         /// Match a file path substring or suite name.
@@ -1104,6 +1116,9 @@ fn inner_main() -> Result<()> {
             }
             Some(DrillCommand::Runs { json }) => commands::drills::runs(json),
             Some(DrillCommand::Show { run, json }) => commands::drills::show(run.as_deref(), json),
+            Some(DrillCommand::Coverage { run, db, json }) => {
+                commands::drills::coverage::coverage(run.as_deref(), &db, json)
+            }
             Some(DrillCommand::Test {
                 filters,
                 grep,

@@ -1,6 +1,7 @@
 //! Drill suites: unit-test style drill files under `.auditaur/drills`.
 
 // The runner consumes the remaining model fields; drop this once it lands.
+pub mod coverage;
 #[allow(dead_code)]
 mod junit;
 pub mod model;
