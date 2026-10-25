@@ -25,6 +25,7 @@ Translate common user phrases to the appropriate Auditaur workflow:
 | "debug the app with Auditaur" | Check readiness first, then inspect logs/timeline/traces/IPC. |
 | "drive the app" / "click in the app" | Require the Tauri-native drive bridge, then use `auditaur drive`. |
 | "run a drill" / "smoke test the app" | Run `auditaur drill` for the configured default drill, or `auditaur drill <name>` for a named drill. |
+| "run the drill tests" / "add a test for this" / "did my change break anything" | Use `auditaur drill test` with suites in `.auditaur/drills/*.drill.json` (see Drill tests). |
 | "manual approval" / "human gate" / "OAuth consent" | Use a drill script gate so the app session stays pinned while the human action completes. |
 
 Preserve the app's normal startup command. Prefer the simple repo-configured flow when available:
@@ -194,6 +195,22 @@ auditaur explain --json
 ```
 
 Prefer `--session <id>`, `--db <path>`, `--active`, `--latest`, `--pid`, or `--instance-id` when there are stale or multiple sessions.
+
+## Drill tests
+
+For repeatable checks, write Playwright-style suites in `.auditaur/drills/<name>.drill.json` and run them with `auditaur drill test`. Each test is a list of steps: actions (`click`, `fill`, `press`, `select`, `check`, ...), auto-retrying UI assertions (`expect` with `toBeVisible`, `toHaveText`, `toMatchAriaSnapshot`, `toHaveScreenshot`, ...), and telemetry assertions (`expectIpc`, `expectEvent`, `expectLog`, `expectNoErrors`) scoped to that test.
+
+```bash
+auditaur drill validate                      # schema check with "did you mean" hints
+auditaur drill test --app <app> -- npm run tauri dev
+auditaur drill test --last-failed -x         # rerun failures, stop at the first
+auditaur drill show                          # latest run and its failures
+```
+
+- Prefer role/label/text locators (`{ "role": "button", "name": "Save" }`) over brittle CSS.
+- Assert telemetry, not just UI: a passing click whose IPC failed is still a bug.
+- Snapshot baselines go in `__snapshots__/` beside the suite. A missing baseline is written and fails; review it before committing. Use `--update-snapshots=changed` (the `=` is required) only for intended UI changes.
+- Read failures from `.auditaur/drill-runs/<runId>/` (`run.json`, `tests/<id>/attempt-<n>/attempt.json`), not by rerunning blindly.
 
 ## Human gates in drills
 
