@@ -205,9 +205,10 @@ auditaur drill validate                      # schema check with "did you mean" 
 auditaur drill test --app <app> -- npm run tauri dev
 auditaur drill test --last-failed -x         # rerun failures, stop at the first
 auditaur drill show                          # latest run and its failures
+auditaur drill locate 'li button' --app <app>  # suggest role/label/test-id locators for a running app
 ```
 
-- Prefer role/label/text locators (`{ "role": "button", "name": "Save" }`) over brittle CSS.
+- Prefer role/label/text locators (`{ "role": "button", "name": "Save" }`) over brittle CSS. When writing a step, run `auditaur drill locate <css>` against the running app and paste the locator it suggests.
 - Assert telemetry, not just UI: a passing click whose IPC failed is still a bug.
 - Snapshot baselines go in `__snapshots__/` beside the suite. A missing baseline is written and fails; review it before committing. Use `--update-snapshots=changed` (the `=` is required) only for intended UI changes.
 - Read failures from `.auditaur/drill-runs/<runId>/` (`run.json`, `tests/<id>/attempt-<n>/attempt.json`), not by rerunning blindly.

@@ -613,6 +613,18 @@ enum DrillCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Suggest robust drill locators for the elements a CSS selector or locator
+    /// matches in a running app.
+    Locate {
+        /// CSS selector, or a drill locator as JSON (e.g. `{"role":"button","name":"Save"}`).
+        #[arg()]
+        target: String,
+        /// App name; defaults to `app` in the config.
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Run drill tests and record them under .auditaur/drill-runs.
     Test {
         /// Match a file path substring or suite name.
@@ -1118,6 +1130,14 @@ fn inner_main() -> Result<()> {
             Some(DrillCommand::Show { run, json }) => commands::drills::show(run.as_deref(), json),
             Some(DrillCommand::Coverage { run, db, json }) => {
                 commands::drills::coverage::coverage(run.as_deref(), &db, json)
+            }
+            Some(DrillCommand::Locate { target, app, json }) => {
+                commands::drills::locate::locate(commands::drills::locate::LocateOptions {
+                    target,
+                    app,
+                    config,
+                    json,
+                })
             }
             Some(DrillCommand::Test {
                 filters,

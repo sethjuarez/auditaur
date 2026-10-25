@@ -10,6 +10,7 @@ import {
   queryLocator,
   resolveLocator,
 } from './locator';
+import { generateLocator } from './locator-gen';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -347,6 +348,9 @@ export async function executeDriveBridgeRequest(
         stabilize: request.value === 'expect',
       });
     }
+    case 'locate': {
+      return locateSelector(request.selector);
+    }
     default:
       throw new Error(`unsupported drive bridge action: ${request.action}`);
   }
@@ -378,8 +382,7 @@ function inspectSelector(selector: string | undefined): Record<string, unknown> 
     const spec = parseLocator(selector);
     const all = queryLocator(spec);
     if (spec.nth !== undefined) {
-      const el = spec.nth < 0 ? all[all.length + spec.nth] : all[spec.nth];
-      matches = el ? [el] : [];
+      matches = pickNth(all, spec.nth);
     } else {
       matches = all;
       if (all.length > 1) {
@@ -401,6 +404,37 @@ function inspectSelector(selector: string | undefined): Record<string, unknown> 
           checked: checkedOf(el),
         }
       : null,
+  };
+}
+
+const MAX_LOCATED = 20;
+
+function pickNth(all: Element[], nth: number): Element[] {
+  const el = nth < 0 ? all[all.length + nth] : all[nth];
+  return el ? [el] : [];
+}
+
+/** Suggested drill locators for every element a CSS selector or locator matches. */
+function locateSelector(selector: string | undefined): Record<string, unknown> {
+  if (!selector) {
+    throw new Error('locate needs a selector');
+  }
+  let matches: Element[];
+  if (isLocatorSelector(selector)) {
+    const spec = parseLocator(selector);
+    const all = queryLocator(spec);
+    matches = spec.nth === undefined ? all : pickNth(all, spec.nth);
+  } else {
+    matches = Array.from(document.querySelectorAll(selector));
+  }
+  return {
+    count: matches.length,
+    elements: matches.slice(0, MAX_LOCATED).map((el) => ({
+      locator: generateLocator(el),
+      tag: el.tagName.toLowerCase(),
+      text: locatorText(el).slice(0, 80),
+      visible: isVisible(el),
+    })),
   };
 }
 

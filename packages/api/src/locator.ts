@@ -337,11 +337,25 @@ function labelledByText(el: Element): string | undefined {
 
 function nativeLabels(el: Element): string[] {
   const labels = (el as HTMLInputElement).labels;
-  return labels ? Array.from(labels).map((label) => label.textContent ?? '') : [];
+  return labels ? Array.from(labels).map((label) => textWithout(label, el)) : [];
+}
+
+// A wrapping <label> must not name a control by the control's own content
+// (a textarea's text or a select's options): that changes as the user edits it.
+function textWithout(node: Node, skip: Element): string {
+  if (node === skip) {
+    return '';
+  }
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.nodeValue ?? '';
+  }
+  return Array.from(node.childNodes)
+    .map((child) => textWithout(child, skip))
+    .join('');
 }
 
 /** Every label-ish text that names a form control, for `getByLabel`. */
-function labelsOf(el: Element): string[] {
+export function labelsOf(el: Element): string[] {
   const labels = nativeLabels(el);
   const labelledBy = labelledByText(el);
   if (labelledBy !== undefined) {

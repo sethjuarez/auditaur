@@ -46,6 +46,7 @@ The app name and launch command can come from `.auditaur/config.json` (`app`, `s
 | `drill test` | Run tests and record a run. |
 | `drill runs` | List recorded runs, newest first. |
 | `drill show [id]` | Show a run (`latest` by default). |
+| `drill locate <target>` | Suggest locators for what a CSS selector or locator matches in a running app. |
 
 ### Select tests
 
@@ -121,6 +122,16 @@ A locator is a CSS string or an object:
 | Test id | `{ "testId": "save" }` (`data-testid`) |
 
 Add `nth` to pick one element when several match.
+
+To find a good locator, point `drill locate` at a running app with a CSS selector. It suggests the most readable locator that matches only that element: test id, then role + name, label, placeholder, text, `#id`, and a CSS path last.
+
+```bash
+auditaur drill locate "li button" --app my-app
+# 2 elements match:
+#   {"exact":true,"name":"Edit","nth":0,"role":"button"}
+#     <button> "Edit"
+#   ...
+```
 
 ## Hooks, timeouts, and modes
 

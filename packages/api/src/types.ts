@@ -76,6 +76,7 @@ export interface DriveBridgeRequest {
     | 'ariaSnapshot'
   | 'flush'
     | 'screenshot'
+    | 'locate'
     | string;
   selector?: string;
   value?: string;

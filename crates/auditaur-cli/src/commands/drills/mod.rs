@@ -4,6 +4,7 @@
 pub mod coverage;
 #[allow(dead_code)]
 mod junit;
+pub mod locate;
 pub mod model;
 pub mod run;
 pub mod runner;
