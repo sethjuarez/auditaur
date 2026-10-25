@@ -11,7 +11,7 @@ use auditaur_core::{
 use serde_json::{json, Value};
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -1274,7 +1274,12 @@ fn init_extension_installs_auditaur_gate_canvas() {
     let extension = fs::read_to_string(&extension_path).unwrap();
     assert!(extension.contains("id: \"auditaur-human-gate\""));
     assert!(extension.contains("respond"));
-    assert!(fs::read_to_string(&drills_path)
+    let explorer = extensions
+        .join("auditaur-drills")
+        .join("canvases")
+        .join("explorer")
+        .join("index.mjs");
+    assert!(fs::read_to_string(explorer)
         .unwrap()
         .contains("id: \"auditaur-drill-explorer\""));
 
@@ -1298,7 +1303,8 @@ fn init_extension_installs_auditaur_gate_canvas() {
         "--json",
     ]);
     assert_eq!(upgraded["extensions"][0]["status"], "skipped");
-    assert_eq!(upgraded["extensions"][1]["status"], "installed");
+    // The drills entry point is gone but its other files remain, so it is repaired.
+    assert_eq!(upgraded["extensions"][1]["status"], "repaired");
     assert_eq!(upgraded["overwritten"], false);
     assert_eq!(fs::read_to_string(&extension_path).unwrap(), "customized");
     assert!(drills_path.exists());
@@ -1442,12 +1448,67 @@ fn packaged_init_extension_matches_repo_extension() {
 }
 
 #[test]
+fn init_extension_restores_missing_files_without_touching_edits() {
+    let repo = TempDir::new().unwrap();
+    let args = [
+        "init",
+        "extension",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ];
+    run_json(args);
+    let drills = repo.path().join(".github/extensions/auditaur-drills");
+    fs::remove_file(drills.join("ui").join("common.js")).unwrap();
+    fs::write(drills.join("extension.mjs"), "customized").unwrap();
+
+    let repaired = run_json(args);
+    assert_eq!(repaired["extensions"][0]["status"], "skipped");
+    assert_eq!(repaired["extensions"][1]["status"], "repaired");
+    assert!(drills.join("ui").join("common.js").exists());
+    assert_eq!(
+        fs::read_to_string(drills.join("extension.mjs")).unwrap(),
+        "customized"
+    );
+    assert!(run_failure(args).contains("already exist"));
+
+    fs::remove_file(drills.join("extension.mjs")).unwrap();
+    let [a, b, c, d, e] = args;
+    let overwritten = run_json([a, b, c, d, e, "--force"]);
+    assert_eq!(overwritten["extensions"][1]["status"], "overwritten");
+}
+
+fn read_tree(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, String>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            read_tree(root, &path, out);
+        } else {
+            let relative = path.strip_prefix(root).unwrap();
+            let contents = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+            out.insert(relative.to_string_lossy().replace('\\', "/"), contents);
+        }
+    }
+}
+
+#[test]
 fn packaged_init_drills_extension_matches_repo_extension() {
-    let repo_extension = include_str!("../../../.github/extensions/auditaur-drills/extension.mjs")
-        .replace("\r\n", "\n");
-    let packaged_extension =
-        include_str!("../assets/auditaur-drills-extension.mjs").replace("\r\n", "\n");
-    assert_eq!(packaged_extension, repo_extension);
+    let target = TempDir::new().unwrap();
+    run_json([
+        "init",
+        "extension",
+        "--path",
+        target.path().to_str().unwrap(),
+        "--json",
+    ]);
+    let installed_dir = target.path().join(".github/extensions/auditaur-drills");
+    let repo_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/extensions/auditaur-drills");
+    let (mut installed, mut repo) = (Default::default(), Default::default());
+    read_tree(&installed_dir, &installed_dir, &mut installed);
+    read_tree(&repo_dir, &repo_dir, &mut repo);
+    assert!(installed.contains_key("ui/common.js"));
+    assert_eq!(installed, repo);
 }
 
 #[test]

@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Drill tests</title>
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="explorer.css">
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Drill tests</h1>
+    <span id="counts" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="run-all">Run all</button>
+    <button id="run-failed">Rerun failed</button>
+    <button id="cancel" hidden>Cancel run</button>
+    <button id="refresh" title="Reload drill files">Refresh</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <input id="filter" type="search" placeholder="Filter by title or @tag" aria-label="Filter tests">
+    <span id="last-run" class="muted" style="font-size:12px"></span>
+  </div>
+  <div id="banners" aria-live="polite"></div>
+</header>
+<main id="main"><div class="empty muted">Loading…</div></main>
+<script src="common.js"></script>
+<script src="explorer.js"></script>
+</body>
+</html>

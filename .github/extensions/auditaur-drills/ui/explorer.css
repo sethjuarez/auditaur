@@ -1,0 +1,14 @@
+input[type=search] { padding: 3px 8px; min-width: 180px; flex: 1; }
+.bar { height: 4px; border-radius: 2px; background: var(--border-color-default, #d0d7de); margin-top: 4px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--true-color-blue, #0969da); transition: width .3s; }
+.test { grid-template-columns: 18px 1fr auto auto auto; }
+.badge.flaky { border-color: var(--true-color-orange, #bc4c00); }
+.badge.mode { border-style: dashed; }
+.history { display: flex; gap: 2px; }
+.dot { width: 8px; height: 8px; border-radius: 2px; background: var(--border-color-default, #d0d7de); }
+.dot.passed { background: var(--true-color-green, #1a7f37); }
+.dot.failed { background: var(--true-color-red, #cf222e); }
+.dot.flaky { background: var(--true-color-orange, #bc4c00); }
+.dot.interrupted { background: var(--true-color-yellow, #9a6700); }
+.dot.running { background: var(--true-color-blue, #0969da); }
+.detail ol { margin: 4px 0; padding-left: 20px; }

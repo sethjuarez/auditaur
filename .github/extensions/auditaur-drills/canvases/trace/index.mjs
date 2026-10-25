@@ -1,0 +1,81 @@
+// Trace canvas: step through one test attempt with screenshots, DOM, and telemetry lined up by time.
+
+import { RUN_ID, TEST_ID, workspaceFor } from "../../lib/paths.mjs";
+import { DrillError } from "../../lib/errors.mjs";
+import { cwdProperty, runIdProperty } from "../../lib/schemas.mjs";
+import { readBody } from "../../lib/server.mjs";
+import { traceFile } from "./attachments.mjs";
+import { traceSummary, traceView } from "./view.mjs";
+
+const HOOKS_ID = /^hooks:[A-Za-z0-9_-]{1,128}$/;
+
+const attemptProperty = { type: "integer", minimum: 0, description: "Zero-based attempt; defaults to the last one." };
+
+const inputSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+        cwd: cwdProperty,
+        runId: runIdProperty,
+        testId: { type: "string", pattern: TEST_ID.source, description: "Test id from run.json; defaults to the first failed test." },
+        attempt: attemptProperty,
+    },
+};
+
+const selectSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: { runId: runIdProperty, testId: { type: "string" }, attempt: attemptProperty },
+};
+
+function select(state, input) {
+    if (input.runId != null && !RUN_ID.test(input.runId)) throw new DrillError("invalid_run", "not a drill run id");
+    if (input.testId != null && !TEST_ID.test(input.testId) && !HOOKS_ID.test(input.testId)) {
+        throw new DrillError("invalid_test", "not a drill test id");
+    }
+    if (input.attempt != null && !(Number.isInteger(input.attempt) && input.attempt >= 0)) {
+        throw new DrillError("invalid_attempt", "attempt is a zero-based integer");
+    }
+    state.runId = input.runId ?? null;
+    state.testId = input.testId ?? null;
+    state.attempt = input.attempt ?? null;
+    return { runId: state.runId, testId: state.testId, attempt: state.attempt };
+}
+
+function configure(state, input) {
+    state.workspace = workspaceFor(input);
+    select(state, input ?? {});
+    return state;
+}
+
+export default {
+    id: "auditaur-drill-trace",
+    displayName: "Auditaur Drill Trace",
+    description: "Step through one drill test attempt: a step timeline with screenshots, DOM, IPC, events, logs, and errors lined up by time.",
+    inputSchema,
+    title: "Drill trace",
+    page: "trace",
+    create: (input) => configure({}, input),
+    reconfigure: configure,
+    routes: (state) => ({
+        "GET /state": () => traceView(state),
+        "GET /file": (url) => traceFile(state, url),
+        "POST /select": async (_url, req) => select(state, await readBody(req)),
+    }),
+    actions: [
+        {
+            name: "get_trace",
+            description: "The shown attempt's steps with timing, errors, attachments, and the telemetry recorded during each step.",
+            handler: async (state) => traceSummary(await traceView(state)),
+        },
+        {
+            name: "select",
+            description: "Show another run, test, or attempt. Omit runId to follow the newest run.",
+            inputSchema: selectSchema,
+            handler: async (state, input) => {
+                select(state, input);
+                return traceSummary(await traceView(state));
+            },
+        },
+    ],
+};

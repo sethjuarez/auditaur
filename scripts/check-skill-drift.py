@@ -7,12 +7,31 @@ REPO_SKILL = ROOT / ".github" / "skills" / "auditaur-debug" / "SKILL.md"
 CLI_SKILL_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-debug-skill.md"
 REPO_EXTENSION = ROOT / ".github" / "extensions" / "auditaur-gate" / "extension.mjs"
 CLI_EXTENSION_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-gate-extension.mjs"
-REPO_DRILLS_EXTENSION = ROOT / ".github" / "extensions" / "auditaur-drills" / "extension.mjs"
-CLI_DRILLS_EXTENSION_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-drills-extension.mjs"
+REPO_DRILLS_EXTENSION = ROOT / ".github" / "extensions" / "auditaur-drills"
+CLI_DRILLS_EXTENSION_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-drills"
 
 
 def normalized(path: Path) -> str:
     return path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+
+def files_under(path: Path) -> set[str]:
+    return {p.relative_to(path).as_posix() for p in path.rglob("*") if p.is_file()}
+
+
+def expand(pairs):
+    """Turns directory pairs into per-file pairs; returns them plus any file-set mismatches."""
+    files, mismatches = [], []
+    for label, repo_path, asset_path in pairs:
+        if not repo_path.is_dir():
+            files.append((label, repo_path, asset_path))
+            continue
+        repo_files, asset_files = files_under(repo_path), files_under(asset_path)
+        for name in sorted(repo_files ^ asset_files):
+            owner = repo_path if name in repo_files else asset_path
+            mismatches.append(f"{label}: {(owner / name).relative_to(ROOT)} has no counterpart")
+        files += [(label, repo_path / name, asset_path / name) for name in sorted(repo_files & asset_files)]
+    return files, mismatches
 
 
 def main() -> int:
@@ -37,6 +56,12 @@ def main() -> int:
     if missing:
         for path in missing:
             print(f"missing required packaged file: {path.relative_to(ROOT)}", file=sys.stderr)
+        return 1
+
+    pairs, mismatches = expand(pairs)
+    if mismatches:
+        for mismatch in mismatches:
+            print(f"{mismatch}. Keep the packaged copy in sync.", file=sys.stderr)
         return 1
 
     for label, repo_path, asset_path in pairs:

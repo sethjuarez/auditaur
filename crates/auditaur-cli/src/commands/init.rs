@@ -13,12 +13,54 @@ pub(crate) const AUDITAUR_GATE_EXTENSION: &str =
     include_str!("../../assets/auditaur-gate-extension.mjs");
 const GITHUB_SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-debug", "SKILL.md"];
 const AGENTS_SKILL_RELATIVE_PATH: [&str; 4] = [".agents", "skills", "auditaur-debug", "SKILL.md"];
-const GITHUB_EXTENSION_RELATIVE_PATH: [&str; 4] =
-    [".github", "extensions", "auditaur-gate", "extension.mjs"];
-pub(crate) const AUDITAUR_DRILLS_EXTENSION: &str =
-    include_str!("../../assets/auditaur-drills-extension.mjs");
-const GITHUB_DRILLS_EXTENSION_RELATIVE_PATH: [&str; 4] =
-    [".github", "extensions", "auditaur-drills", "extension.mjs"];
+const GITHUB_EXTENSION_RELATIVE_DIR: [&str; 3] = [".github", "extensions", "auditaur-gate"];
+const AUDITAUR_GATE_EXTENSION_FILES: &[(&str, &str)] =
+    &[("extension.mjs", AUDITAUR_GATE_EXTENSION)];
+const GITHUB_DRILLS_EXTENSION_RELATIVE_DIR: [&str; 3] =
+    [".github", "extensions", "auditaur-drills"];
+
+/// Embeds files from `assets/auditaur-drills` under their path relative to the extension folder.
+macro_rules! drills_extension_files {
+    ($($path:literal,)*) => {
+        &[$(($path, include_str!(concat!("../../assets/auditaur-drills/", $path))),)*]
+    };
+}
+
+/// Every file of the drills canvas extension. The entry point comes first.
+pub(crate) const AUDITAUR_DRILLS_EXTENSION_FILES: &[(&str, &str)] = drills_extension_files![
+    "extension.mjs",
+    "canvases/explorer/index.mjs",
+    "canvases/explorer/view.mjs",
+    "canvases/live/index.mjs",
+    "canvases/live/view.mjs",
+    "canvases/trace/attachments.mjs",
+    "canvases/trace/index.mjs",
+    "canvases/trace/view.mjs",
+    "lib/cli.mjs",
+    "lib/errors.mjs",
+    "lib/events.mjs",
+    "lib/files.mjs",
+    "lib/gates.mjs",
+    "lib/launcher.mjs",
+    "lib/panels.mjs",
+    "lib/paths.mjs",
+    "lib/processes.mjs",
+    "lib/runs.mjs",
+    "lib/schemas.mjs",
+    "lib/server.mjs",
+    "lib/telemetry.mjs",
+    "ui/base.css",
+    "ui/common.js",
+    "ui/explorer.css",
+    "ui/explorer.html",
+    "ui/explorer.js",
+    "ui/live.css",
+    "ui/live.html",
+    "ui/live.js",
+    "ui/trace.css",
+    "ui/trace.html",
+    "ui/trace.js",
+];
 const DIAGNOSTICS_CONFIG_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.json"];
 const DIAGNOSTICS_GUIDE_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.md"];
 const DIAGNOSTICS_CONFIG: &str = r#"{
@@ -163,23 +205,32 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
     let targets = [
         (
             "auditaur-gate",
-            GITHUB_EXTENSION_RELATIVE_PATH,
-            AUDITAUR_GATE_EXTENSION,
+            GITHUB_EXTENSION_RELATIVE_DIR,
+            AUDITAUR_GATE_EXTENSION_FILES,
         ),
         (
             "auditaur-drills",
-            GITHUB_DRILLS_EXTENSION_RELATIVE_PATH,
-            AUDITAUR_DRILLS_EXTENSION,
+            GITHUB_DRILLS_EXTENSION_RELATIVE_DIR,
+            AUDITAUR_DRILLS_EXTENSION_FILES,
         ),
     ]
-    .map(|(name, relative, contents)| {
-        let output = relative
+    .map(|(name, relative, files)| {
+        let dir = relative
             .iter()
             .fold(root.clone(), |path, segment| path.join(segment));
-        let existed = output.exists();
-        (name, output, contents, existed)
+        let output = dir.join("extension.mjs");
+        let present = files
+            .iter()
+            .filter(|(file, _)| file_path(&dir, file).is_file())
+            .count();
+        (
+            name,
+            output,
+            (dir, files),
+            (present == files.len(), present > 0),
+        )
     });
-    if !force && targets.iter().all(|(_, _, _, existed)| *existed) {
+    if !force && targets.iter().all(|(_, _, _, (complete, _))| *complete) {
         return Err(anyhow!(
             "Auditaur canvas extensions already exist at {}. Pass --force to overwrite them.",
             targets
@@ -191,21 +242,17 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
     }
 
     let mut extensions = Vec::new();
-    for (name, output, contents, existed) in &targets {
-        let status = match (existed, force) {
-            (true, false) => "skipped",
-            (true, true) => "overwritten",
-            (false, _) => "installed",
+    for (name, output, (dir, files), (complete, partial)) in &targets {
+        // Missing files mean an interrupted or older install: without --force, only those
+        // files are written so local edits survive.
+        let status = match (complete, partial, force) {
+            (true, _, false) => "skipped",
+            (_, true, true) => "overwritten",
+            (false, true, false) => "repaired",
+            (_, false, _) => "installed",
         };
         if status != "skipped" {
-            let parent = output
-                .parent()
-                .ok_or_else(|| anyhow!("invalid extension output path: {}", output.display()))?;
-            fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create extension directory {}", parent.display())
-            })?;
-            fs::write(output, contents)
-                .with_context(|| format!("failed to write extension file {}", output.display()))?;
+            write_extension_files(dir, files, force)?;
         }
         extensions.push(InitExtension {
             name,
@@ -226,6 +273,10 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
                 "overwritten" => {
                     println!("Overwrote {} canvas extension at {}", ext.name, ext.path)
                 }
+                "repaired" => println!(
+                    "Restored missing files of the {} canvas extension at {}",
+                    ext.name, ext.path
+                ),
                 _ => println!(
                     "Kept existing {} canvas extension at {} (pass --force to overwrite)",
                     ext.name, ext.path
@@ -234,6 +285,31 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
         }
         Ok(())
     })
+}
+
+fn file_path(dir: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(dir.to_path_buf(), |path, segment| path.join(segment))
+}
+
+/// Writes the entry point last, so an interrupted install never looks complete.
+fn write_extension_files(dir: &Path, files: &[(&str, &str)], overwrite: bool) -> Result<()> {
+    for (relative, contents) in files.iter().rev() {
+        let output = file_path(dir, relative);
+        if !overwrite && output.is_file() {
+            continue;
+        }
+        let parent = output
+            .parent()
+            .ok_or_else(|| anyhow!("invalid extension output path: {}", output.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create extension directory {}", parent.display())
+        })?;
+        fs::write(&output, contents)
+            .with_context(|| format!("failed to write extension file {}", output.display()))?;
+    }
+    Ok(())
 }
 
 pub fn diagnostics(path: Option<&Path>, force: bool, dry_run: bool, json: bool) -> Result<()> {
@@ -418,4 +494,38 @@ fn print_diagnostics_help() {
     println!(
         "Usage: auditaur init diagnostics [--path <repo-root>] [--dry-run] [--force] [--json]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::AUDITAUR_DRILLS_EXTENSION_FILES;
+
+    fn tree(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                tree(root, &path, out);
+            } else {
+                let relative = path.strip_prefix(root).unwrap();
+                out.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+
+    #[test]
+    fn drills_extension_file_list_matches_packaged_assets() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/auditaur-drills");
+        let mut on_disk = Vec::new();
+        tree(&root, &root, &mut on_disk);
+        on_disk.sort();
+        let mut listed: Vec<String> = AUDITAUR_DRILLS_EXTENSION_FILES
+            .iter()
+            .map(|(path, _)| path.to_string())
+            .collect();
+        assert_eq!(listed[0], "extension.mjs");
+        listed.sort();
+        assert_eq!(listed, on_disk);
+    }
 }
