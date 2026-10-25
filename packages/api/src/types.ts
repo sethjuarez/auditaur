@@ -62,6 +62,7 @@ export interface DriveBridgeRequest {
     | 'exists'
     | 'text'
     | 'click'
+    | 'dblclick'
     | 'fill'
     | 'type'
     | 'press'

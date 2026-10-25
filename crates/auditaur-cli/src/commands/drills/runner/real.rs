@@ -281,11 +281,60 @@ fn unsupported(what: &str) -> StepResult {
     failed(format!("{what} is not supported by the drill runner yet"))
 }
 
-/// The bridge resolves CSS only; richer locators arrive with the locator engine.
-fn css(locator: &Locator) -> std::result::Result<String, StepResult> {
-    match locator {
-        Locator::Css(css) => Ok(css.clone()),
-        other => Err(unsupported(&format!("locator `{other}`"))),
+/// Bridge selectors carry the whole locator as JSON; the bridge resolves it strictly.
+pub(crate) const LOCATOR_PREFIX: &str = "locator:";
+/// The bridge's error when an action's target is missing (or not visible).
+const SELECTOR_NOT_FOUND: &str = "selector not found";
+
+pub(crate) fn bridge_selector(locator: &Locator) -> String {
+    fn put<T: serde::Serialize>(spec: &mut Value, key: &str, value: Option<T>) {
+        if let Some(value) = value {
+            spec[key] = json!(value);
+        }
+    }
+    let (kind, value, name, exact, nth) = match locator {
+        Locator::Css(css) => ("css", css, None, false, None),
+        Locator::CssNth { css, nth } => ("css", css, None, false, Some(*nth)),
+        Locator::Role {
+            role,
+            name,
+            exact,
+            nth,
+        } => ("role", role, name.as_ref(), *exact, *nth),
+        Locator::Text { text, exact, nth } => ("text", text, None, *exact, *nth),
+        Locator::TestId { id, nth } => ("testId", id, None, false, *nth),
+        Locator::Label { label, exact, nth } => ("label", label, None, *exact, *nth),
+        Locator::Placeholder {
+            placeholder,
+            exact,
+            nth,
+        } => ("placeholder", placeholder, None, *exact, *nth),
+    };
+    let mut spec = json!({ "kind": kind, "value": value });
+    put(&mut spec, "name", name);
+    put(&mut spec, "exact", exact.then_some(true));
+    put(&mut spec, "nth", nth);
+    format!("{LOCATOR_PREFIX}{spec}")
+}
+
+/// Name the target in an error unless the bridge already did.
+fn about(target: &Locator, error: String) -> String {
+    let target = target.to_string();
+    if error.contains(&target) {
+        error
+    } else {
+        format!("`{target}`: {error}")
+    }
+}
+
+/// Old bridges hand `locator:` selectors to `querySelectorAll`, which rejects them.
+fn explain(error: String) -> String {
+    if error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX) {
+        format!(
+            "{error}\nThis app's @auditaur/api predates drill locators; upgrade it to drive this app with `auditaur drill test`."
+        )
+    } else {
+        error
     }
 }
 
@@ -293,6 +342,7 @@ impl BridgeDriver {
     fn step(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepOutcome {
         match &step.kind {
             StepKind::Click(target) => self.act(ctx, "click", target, None, Vec::new()),
+            StepKind::Dblclick(target) => self.act(ctx, "dblclick", target, None, Vec::new()),
             StepKind::Hover(target) => self.act(ctx, "hover", target, None, Vec::new()),
             StepKind::Check(target) => self.act(ctx, "check", target, None, Vec::new()),
             StepKind::Uncheck(target) => self.act(ctx, "uncheck", target, None, Vec::new()),
@@ -333,7 +383,6 @@ impl BridgeDriver {
                 Ok(())
             }
             StepKind::Screenshot { name, target } => self.screenshot(ctx, name, target.as_ref()),
-            StepKind::Dblclick(_) => Err(unsupported("`dblclick`")),
             StepKind::Gate(_) => Err(unsupported("`gate`")),
             StepKind::Expect(expectation) => Err(unsupported(&format!(
                 "`expect.{}`",
@@ -393,18 +442,19 @@ impl BridgeDriver {
         let reply = self.request_full(ctx, action, selector, value, values, false, ctx.remaining());
         match reply {
             Ok(reply) if reply.ok => Ok(reply),
-            Ok(reply) => Err(failed(format!(
+            Ok(reply) => Err(failed(explain(format!(
                 "{action} failed: {}",
                 reply
                     .error
                     .unwrap_or_else(|| "bridge returned ok=false".to_string())
-            ))),
+            )))),
             Err(_) if ctx.expired() => Err(timed_out(format!("{action}: step timed out"))),
-            Err(error) => Err(failed(format!("{action} failed: {error:#}"))),
+            Err(error) => Err(failed(explain(format!("{action} failed: {error:#}")))),
         }
     }
 
     /// Auto-wait for the target to be visible, then act on it (like Playwright actionability).
+    /// The action itself also requires visibility; if the target vanished in between, wait again.
     fn act(
         &self,
         ctx: &StepCtx<'_>,
@@ -413,27 +463,59 @@ impl BridgeDriver {
         value: Option<String>,
         values: Vec<String>,
     ) -> StepOutcome {
-        let selector = css(target)?;
-        self.poll(ctx, &selector, true, true)
-            .map_err(|error| match error {
-                StepResult::TimedOut(_) => timed_out(format!(
-                    "{action}: timed out waiting for `{target}` to be visible"
-                )),
-                other => other,
-            })?;
-        self.call(ctx, action, Some(selector), value, values)
-            .map(drop)
+        loop {
+            self.poll(ctx, target, true, true)
+                .map_err(|error| match error {
+                    StepResult::TimedOut(_) => timed_out(format!(
+                        "{action}: timed out waiting for `{target}` to be visible"
+                    )),
+                    other => other,
+                })?;
+            if ctx.expired() {
+                return Err(timed_out(format!("{action}: step timed out")));
+            }
+            let reply = self.request_full(
+                ctx,
+                action,
+                Some(bridge_selector(target)),
+                value.clone(),
+                values.clone(),
+                true,
+                ctx.remaining(),
+            );
+            match reply {
+                Ok(reply) if reply.ok => return Ok(()),
+                Ok(reply) if reply.error.as_deref() == Some(SELECTOR_NOT_FOUND) => {
+                    thread::sleep(WAIT_POLL.min(ctx.remaining()));
+                }
+                Ok(reply) => {
+                    return Err(failed(explain(format!(
+                        "{action} `{target}` failed: {}",
+                        reply
+                            .error
+                            .unwrap_or_else(|| "bridge returned ok=false".to_string())
+                    ))))
+                }
+                Err(_) if ctx.expired() => {
+                    return Err(timed_out(format!("{action}: step timed out")))
+                }
+                Err(error) => {
+                    return Err(failed(explain(format!(
+                        "{action} `{target}` failed: {error:#}"
+                    ))))
+                }
+            }
+        }
     }
 
     fn wait_for(&self, ctx: &StepCtx<'_>, target: &Locator, state: WaitState) -> StepOutcome {
-        let selector = css(target)?;
         let (visible_only, want) = match state {
             WaitState::Attached => (false, true),
             WaitState::Detached => (false, false),
             WaitState::Visible => (true, true),
             WaitState::Hidden => (true, false),
         };
-        self.poll(ctx, &selector, visible_only, want)
+        self.poll(ctx, target, visible_only, want)
             .map_err(|error| match error {
                 StepResult::TimedOut(_) => timed_out(format!(
                     "timed out waiting for `{target}` to be {}",
@@ -447,10 +529,11 @@ impl BridgeDriver {
     fn poll(
         &self,
         ctx: &StepCtx<'_>,
-        selector: &str,
+        target: &Locator,
         visible_only: bool,
         want: bool,
     ) -> StepOutcome {
+        let selector = bridge_selector(target);
         loop {
             if ctx.expired() {
                 return Err(timed_out("wait: step timed out"));
@@ -458,7 +541,7 @@ impl BridgeDriver {
             let reply = self.request_full(
                 ctx,
                 "exists",
-                Some(selector.to_string()),
+                Some(selector.clone()),
                 None,
                 Vec::new(),
                 visible_only,
@@ -472,14 +555,14 @@ impl BridgeDriver {
                         let error = reply
                             .error
                             .unwrap_or_else(|| "bridge reply had no `exists` field".to_string());
-                        return Err(failed(format!("wait failed: {error}")));
+                        return Err(failed(explain(about(target, error))));
                     };
                     if exists == want {
                         return Ok(());
                     }
                 }
                 Err(_) if ctx.expired() => return Err(timed_out("wait: step timed out")),
-                Err(error) => return Err(failed(format!("wait failed: {error:#}"))),
+                Err(error) => return Err(failed(explain(about(target, format!("{error:#}"))))),
             }
             thread::sleep(WAIT_POLL.min(ctx.remaining()));
         }
@@ -521,7 +604,16 @@ impl BridgeDriver {
         name: &str,
         target: Option<&Locator>,
     ) -> StepOutcome {
-        let selector = target.map(css).transpose()?;
+        if let Some(target) = target {
+            self.poll(ctx, target, true, true)
+                .map_err(|error| match error {
+                    StepResult::TimedOut(_) => timed_out(format!(
+                        "screenshot: timed out waiting for `{target}` to be visible"
+                    )),
+                    other => other,
+                })?;
+        }
+        let selector = target.map(bridge_selector);
         if ctx.expired() {
             return Err(timed_out("screenshot: step timed out"));
         }
@@ -557,5 +649,88 @@ fn file_safe(name: &str) -> String {
         "screenshot".to_string()
     } else {
         safe
+    }
+}
+
+#[cfg(test)]
+mod selector_tests {
+    use super::*;
+
+    fn spec(locator: Locator) -> Value {
+        let selector = bridge_selector(&locator);
+        let json = selector.strip_prefix(LOCATOR_PREFIX).expect("prefix");
+        serde_json::from_str(json).expect("json")
+    }
+
+    #[test]
+    fn css_omits_defaults() {
+        assert_eq!(
+            spec(Locator::Css("#a".into())),
+            json!({"kind": "css", "value": "#a"})
+        );
+        assert_eq!(
+            spec(Locator::CssNth {
+                css: "li".into(),
+                nth: -1
+            }),
+            json!({"kind": "css", "value": "li", "nth": -1})
+        );
+    }
+
+    #[test]
+    fn role_carries_name_exact_nth() {
+        let locator = Locator::Role {
+            role: "button".into(),
+            name: Some("Save \"it\"".into()),
+            exact: true,
+            nth: Some(2),
+        };
+        assert_eq!(
+            spec(locator),
+            json!({"kind": "role", "value": "button", "name": "Save \"it\"", "exact": true, "nth": 2})
+        );
+    }
+
+    #[test]
+    fn every_kind_maps() {
+        let text = Locator::Text {
+            text: "Hi".into(),
+            exact: false,
+            nth: None,
+        };
+        assert_eq!(spec(text), json!({"kind": "text", "value": "Hi"}));
+        let test_id = Locator::TestId {
+            id: "t".into(),
+            nth: Some(0),
+        };
+        assert_eq!(
+            spec(test_id),
+            json!({"kind": "testId", "value": "t", "nth": 0})
+        );
+        let label = Locator::Label {
+            label: "Email".into(),
+            exact: true,
+            nth: None,
+        };
+        assert_eq!(
+            spec(label),
+            json!({"kind": "label", "value": "Email", "exact": true})
+        );
+        let placeholder = Locator::Placeholder {
+            placeholder: "Search".into(),
+            exact: false,
+            nth: None,
+        };
+        assert_eq!(
+            spec(placeholder),
+            json!({"kind": "placeholder", "value": "Search"})
+        );
+    }
+
+    #[test]
+    fn explains_old_bridges() {
+        let error = "click failed: 'locator:{}' is not a valid selector".to_string();
+        assert!(explain(error).contains("upgrade it"));
+        assert_eq!(explain("selector not found".into()), "selector not found");
     }
 }

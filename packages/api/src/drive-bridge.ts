@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AuditaurExporter } from './exporter';
+import { isLocatorSelector, parseLocator, resolveLocator } from './locator';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -259,6 +260,15 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
       (el as HTMLElement).click?.();
       return { ok: true, visibleOnly: request.visibleOnly };
     }
+    case 'dblclick': {
+      const el = requireSelector(request.selector, request.visibleOnly);
+      el.scrollIntoView?.({ block: 'center', inline: 'center' });
+      (el as HTMLElement).click?.();
+      (el as HTMLElement).click?.();
+      const DblClick = typeof MouseEvent === 'function' ? MouseEvent : Event;
+      el.dispatchEvent(new DblClick('dblclick', { bubbles: true, cancelable: true, detail: 2 } as MouseEventInit));
+      return { ok: true, visibleOnly: request.visibleOnly };
+    }
     case 'hover': {
       const el = requireSelector(request.selector, request.visibleOnly);
       hoverElement(el);
@@ -314,6 +324,9 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
 function resolveSelector(selector: string | undefined, visibleOnly: boolean): Element | undefined {
   if (!selector) {
     return undefined;
+  }
+  if (isLocatorSelector(selector)) {
+    return resolveLocator(parseLocator(selector), visibleOnly, isVisible);
   }
   const matches = Array.from(document.querySelectorAll(selector));
   return visibleOnly ? matches.find(isVisible) : matches[0];
@@ -515,8 +528,11 @@ function setNativeValue(
   }
 }
 
-function captureSnapshot(selector: string | undefined): Record<string, unknown> {
-  const selected = selector ? document.querySelector(selector) : null;
+function captureSnapshot(
+  selector: string | undefined,
+  resolved?: Element,
+): Record<string, unknown> {
+  const selected = resolved ?? (selector ? resolveSelector(selector, false) : null);
   return {
     title: document.title,
     url: location.href,
@@ -533,14 +549,14 @@ async function captureScreenshot(
   selector: string | undefined,
   windowLabel: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const target = selector ? document.querySelector(selector) : document.documentElement;
+  const target = selector ? resolveSelector(selector, false) : document.documentElement;
   if (!target) {
     throw new Error('selector not found');
   }
   if (selector) {
     await scrollTargetIntoViewForScreenshot(target);
   }
-  const snapshot = captureSnapshot(selector);
+  const snapshot = captureSnapshot(selector, selector ? target : undefined);
   const targetRect = selector ? screenshotTargetRect(target) : undefined;
   try {
     const nativeScreenshot = await nativeScreenshotInvoker({ windowLabel, targetRect });
