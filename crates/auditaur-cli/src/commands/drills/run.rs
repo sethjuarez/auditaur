@@ -33,7 +33,10 @@ use super::{effective_tags, model::TestMode, title, Selected};
 pub const RUN_SCHEMA_VERSION: u32 = 1;
 pub const RUNS_DIR: &str = ".auditaur/drill-runs";
 pub const DEFAULT_KEEP_RUNS: usize = 20;
+// Served to tools and canvases in later steps; tests validate against it now.
+#[allow(dead_code)]
 pub const RUN_SCHEMA: &str = include_str!("../../../assets/drill-run.schema.json");
+#[allow(dead_code)]
 pub const RUN_SCHEMA_URL: &str = "https://auditaur.dev/schemas/drill-run.schema.json";
 /// Unreadable run folders younger than this may still be starting; prune leaves them.
 const PRUNE_GRACE: Duration = Duration::from_secs(600);
@@ -632,6 +635,7 @@ impl RunWriter {
         Ok(writer)
     }
 
+    #[cfg(test)]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -974,6 +978,8 @@ impl RunWriter {
         Ok(attachment)
     }
 
+    // Manual gates run through the drill runner in a later step.
+    #[allow(dead_code)]
     fn gate_scope(&self) -> Result<(Scope, usize)> {
         let step = self
             .step
@@ -984,6 +990,7 @@ impl RunWriter {
     }
 
     /// A manual gate in the running step is waiting for a human.
+    #[allow(dead_code)]
     pub fn gate_waiting(&mut self, gate: Value) -> Result<()> {
         let (scope, step) = self.gate_scope()?;
         self.commit(
@@ -998,6 +1005,7 @@ impl RunWriter {
         )
     }
 
+    #[allow(dead_code)]
     pub fn gate_resolved(&mut self, response: Value) -> Result<()> {
         let (scope, step) = self.gate_scope()?;
         self.commit(
@@ -1373,6 +1381,8 @@ pub fn read_run(dir: &Path) -> Result<RunReport> {
     Ok(report)
 }
 
+// Read by the trace canvas and MCP tools in later steps.
+#[allow(dead_code)]
 pub fn read_attempt(run_dir: &Path, summary: &AttemptSummary) -> Result<AttemptReport> {
     if !is_contained(&summary.dir) {
         return Err(anyhow!(

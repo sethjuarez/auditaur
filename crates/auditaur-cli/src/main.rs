@@ -601,6 +601,40 @@ enum DrillCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Run drill tests and record them under .auditaur/drill-runs.
+    Test {
+        /// Match a file path substring or suite name.
+        #[arg()]
+        filters: Vec<String>,
+        /// Only tests whose title or tags match this regex.
+        #[arg(long, short = 'g')]
+        grep: Option<String>,
+        /// Skip tests whose title or tags match this regex.
+        #[arg(long)]
+        grep_invert: Option<String>,
+        /// Only tests with this tag (repeatable; any may match).
+        #[arg(long)]
+        tag: Vec<String>,
+        /// Retries for failed tests, unless the test or suite sets its own.
+        #[arg(long)]
+        retries: Option<u32>,
+        /// App name; defaults to `app` in the config.
+        #[arg(long)]
+        app: Option<String>,
+        /// Drive an already running app instead of launching one.
+        #[arg(long)]
+        attach: bool,
+        #[arg(long)]
+        require_frontend: bool,
+        /// Seconds to wait for each launched app to be ready.
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long)]
+        json: bool,
+        /// Launch command; defaults to the config `start` command.
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
     Run {
         #[arg(long)]
         app: String,
@@ -1043,6 +1077,41 @@ fn inner_main() -> Result<()> {
             }
             Some(DrillCommand::Runs { json }) => commands::drills::runs(json),
             Some(DrillCommand::Show { run, json }) => commands::drills::show(run.as_deref(), json),
+            Some(DrillCommand::Test {
+                filters,
+                grep,
+                grep_invert,
+                tag,
+                retries,
+                app,
+                attach,
+                require_frontend,
+                timeout_seconds,
+                json,
+                command,
+            }) => {
+                let filters = commands::drills::Filters::new(
+                    filters,
+                    grep.as_deref(),
+                    grep_invert.as_deref(),
+                    tag,
+                )?;
+                let exit_code = commands::drills::test(commands::drills::TestOptions {
+                    filters,
+                    retries,
+                    app,
+                    config,
+                    attach,
+                    require_frontend,
+                    timeout_seconds,
+                    json,
+                    command,
+                })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
             Some(DrillCommand::Run {
                 app,
                 require_frontend,

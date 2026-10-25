@@ -2105,6 +2105,34 @@ fn gate_satisfied_by_name(satisfied_by: DrillGateSatisfiedBy) -> &'static str {
     }
 }
 
+pub(crate) struct HookRun {
+    pub passed: bool,
+    pub timed_out: bool,
+    pub report: Value,
+}
+
+/// Run one legacy command hook described as JSON (used by drill suites).
+pub(crate) fn run_hook_json(
+    workspace_root: &Path,
+    value: &Value,
+    teardown: bool,
+) -> Result<HookRun> {
+    let lifecycle = if teardown {
+        DrillHookLifecycle::Teardown
+    } else {
+        DrillHookLifecycle::Setup
+    };
+    let hook: DrillHook = serde_json::from_value(value.clone())?;
+    let resolved = resolve_hook(workspace_root, hook, lifecycle)?;
+    let report = execute_hook(&resolved, lifecycle);
+    let kind = hook_exit_kind(&report);
+    Ok(HookRun {
+        passed: kind == HookExitKind::Passed,
+        timed_out: kind == HookExitKind::TimedOut,
+        report: serde_json::to_value(&report)?,
+    })
+}
+
 fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> DrillHookReport {
     let started = Instant::now();
     let timeout = Duration::from_millis(hook.timeout_ms);
@@ -2611,7 +2639,7 @@ fn wait_for_debug_ready(
     }
 }
 
-fn spawn_command(command: &[String], environment: &[(String, String)]) -> Result<Child> {
+pub(crate) fn spawn_command(command: &[String], environment: &[(String, String)]) -> Result<Child> {
     if command.is_empty() {
         return Err(anyhow!("drill run requires a command after `--`"));
     }
@@ -2631,7 +2659,7 @@ fn spawn_command(command: &[String], environment: &[(String, String)]) -> Result
         .with_context(|| format!("failed to start `{}`", command.join(" ")))
 }
 
-fn matching_sessions(app_name: &str) -> Result<Vec<DiscoveredApp>> {
+pub(crate) fn matching_sessions(app_name: &str) -> Result<Vec<DiscoveredApp>> {
     let mut apps = discovery::list_apps()?
         .into_iter()
         .filter(|app| app_matches(app, app_name))
@@ -2640,7 +2668,7 @@ fn matching_sessions(app_name: &str) -> Result<Vec<DiscoveredApp>> {
     Ok(apps)
 }
 
-fn find_spawned_session(
+pub(crate) fn find_spawned_session(
     app_name: &str,
     started_at: OffsetDateTime,
     preexisting_ids: &HashSet<&str>,
@@ -2676,7 +2704,7 @@ fn parse_rfc3339(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
 }
 
-fn drive_selector(app: &DiscoveredApp) -> drive::DriveAppSelector {
+pub(crate) fn drive_selector(app: &DiscoveredApp) -> drive::DriveAppSelector {
     drive::DriveAppSelector {
         app: None,
         session_id: Some(app.session_id.clone()),
@@ -2687,14 +2715,27 @@ fn drive_selector(app: &DiscoveredApp) -> drive::DriveAppSelector {
     }
 }
 
-fn cleanup_child_tree(child: &mut Child) -> Result<String> {
+pub(crate) fn cleanup_child_tree(child: &mut Child) -> Result<String> {
     if let Some(status) = child.try_wait()? {
         return Ok(format!(
             "wrapped command already exited with status {status}"
         ));
     }
     let pid = child.id();
-    cleanup_process_tree(pid)?;
+    if let Err(tree_error) = cleanup_process_tree(pid) {
+        // Fall back to killing the direct child so it is never leaked.
+        if let Err(kill_error) = child.kill() {
+            if child.try_wait().ok().flatten().is_none() {
+                return Err(anyhow!(
+                    "{tree_error:#}; fallback kill of pid {pid} also failed: {kill_error}"
+                ));
+            }
+        }
+        let _ = child.wait();
+        return Ok(format!(
+            "stopped pid {pid} directly; process tree cleanup failed: {tree_error:#}"
+        ));
+    }
     let _ = child.wait();
     Ok(format!("stopped process tree rooted at pid {pid}"))
 }

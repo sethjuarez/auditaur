@@ -3,9 +3,11 @@
 // The runner consumes the remaining model fields; drop this once it lands.
 #[allow(dead_code)]
 pub mod model;
-// The writer is driven by the runner in the next step.
-#[allow(dead_code)]
 pub mod run;
+pub mod runner;
+mod test_command;
+
+pub use test_command::{test, TestOptions};
 
 use std::{
     collections::HashMap,
