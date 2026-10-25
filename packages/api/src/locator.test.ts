@@ -202,4 +202,30 @@ describe('bridge integration', () => {
       executeDriveBridgeRequest(request('exists', sel({ kind: 'role', value: 'button', name: 'save' }))),
     ).rejects.toThrow(/strict mode violation/);
   });
+
+  it('inspects targets for assertions without throwing', async () => {
+    const inspect = (spec: LocatorSpec | string) =>
+      executeDriveBridgeRequest(request('inspect', typeof spec === 'string' ? spec : sel(spec)));
+
+    const many = await inspect({ kind: 'role', value: 'button', name: 'save' });
+    expect(many.count).toBe(2);
+    expect(many.strict).toMatch(/strict mode violation/);
+    expect(many.element).toBeNull();
+
+    const last = await inspect({ kind: 'role', value: 'listitem', nth: -1 });
+    expect(last.count).toBe(1);
+    expect(last.element).toMatchObject({ text: 'Three', value: null, checked: null });
+
+    (document.getElementById('email') as HTMLInputElement).value = 'x@y.z';
+    const email = await inspect({ kind: 'label', value: 'Email' });
+    expect(email.element).toMatchObject({ value: 'x@y.z', checked: null });
+
+    (document.getElementById('agree') as HTMLInputElement).checked = true;
+    expect((await inspect({ kind: 'role', value: 'checkbox' })).element).toMatchObject({ checked: true });
+
+    expect((await inspect({ kind: 'css', value: '#pick' })).element).toMatchObject({ value: 'a' });
+    expect((await inspect({ kind: 'text', value: 'no such text' })).count).toBe(0);
+    expect((await inspect({ kind: 'role', value: 'listitem', nth: 9 })).count).toBe(0);
+    expect((await inspect('li')).count).toBe(3);
+  });
 });

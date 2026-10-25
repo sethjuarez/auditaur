@@ -4,6 +4,7 @@
 //! control: a [`Host`] launches apps and runs command hooks, and an [`AppDriver`]
 //! performs steps. Unit tests swap in fakes; [`real`] drives Tauri apps.
 
+pub mod expect;
 pub mod real;
 
 use std::time::{Duration, Instant};
@@ -29,7 +30,6 @@ pub struct StepCtx<'a> {
     /// The step must finish by this instant.
     pub deadline: Instant,
     /// Auto-retrying assertions give up after this long (bounded by `deadline`).
-    #[allow(dead_code)] // Used by DOM assertions in the next step.
     pub expect_timeout: Duration,
     pub test_id: Option<String>,
     pub step_index: usize,

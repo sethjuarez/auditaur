@@ -12,13 +12,16 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
-use super::{AppDriver, HookResult, Host, StepCtx, StepResult};
+use super::{
+    expect::{judge, Inspection, Verdict},
+    AppDriver, HookResult, Host, StepCtx, StepResult,
+};
 use crate::{
     commands::{
         debug::{self, DebugStageStatus},
         drill,
         drills::{
-            model::{DrillSuite, Locator, Step, StepKind, WaitState},
+            model::{DrillSuite, Expectation, Locator, Matcher, Step, StepKind, WaitState},
             run::ErrorInfo,
         },
         drive::{BridgeReply, BridgeSession, DriveAppSelector},
@@ -29,6 +32,8 @@ use crate::{
 
 const LAUNCH_POLL: Duration = Duration::from_millis(500);
 const WAIT_POLL: Duration = Duration::from_millis(100);
+/// Long enough for one bridge round trip, even when the expect budget is nearly spent.
+const MIN_INSPECT_TIMEOUT: Duration = Duration::from_millis(250);
 /// Bounded so failure evidence never hangs a run.
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 const RELOAD_POLL_TIMEOUT: Duration = Duration::from_secs(2);
@@ -327,11 +332,13 @@ fn about(target: &Locator, error: String) -> String {
     }
 }
 
-/// Old bridges hand `locator:` selectors to `querySelectorAll`, which rejects them.
+/// Old bridges reject `locator:` selectors and newer actions (`dblclick`, `inspect`).
 fn explain(error: String) -> String {
-    if error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX) {
+    let stale = (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
+        || error.contains("unsupported drive bridge action");
+    if stale {
         format!(
-            "{error}\nThis app's @auditaur/api predates drill locators; upgrade it to drive this app with `auditaur drill test`."
+            "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to drive this app with drills."
         )
     } else {
         error
@@ -384,10 +391,12 @@ impl BridgeDriver {
             }
             StepKind::Screenshot { name, target } => self.screenshot(ctx, name, target.as_ref()),
             StepKind::Gate(_) => Err(unsupported("`gate`")),
-            StepKind::Expect(expectation) => Err(unsupported(&format!(
-                "`expect.{}`",
-                expectation.matcher.key()
-            ))),
+            StepKind::Expect(expectation) => match expectation.matcher {
+                Matcher::ToMatchAriaSnapshot(_) | Matcher::ToHaveScreenshot(_) => Err(unsupported(
+                    &format!("`expect.{}`", expectation.matcher.key()),
+                )),
+                _ => self.expect(ctx, expectation),
+            },
             StepKind::Telemetry(_) => Err(unsupported("`telemetry`")),
         }
     }
@@ -450,6 +459,76 @@ impl BridgeDriver {
             )))),
             Err(_) if ctx.expired() => Err(timed_out(format!("{action}: step timed out"))),
             Err(error) => Err(failed(explain(format!("{action} failed: {error:#}")))),
+        }
+    }
+
+    /// Re-inspect the target until the matcher passes or the expect timeout runs out.
+    fn expect(&self, ctx: &StepCtx<'_>, expectation: &Expectation) -> StepOutcome {
+        let target = &expectation.target;
+        let started = Instant::now();
+        let give_up = (started + ctx.expect_timeout).min(ctx.deadline);
+        let selector = bridge_selector(target);
+        let mut last = None;
+        let mut first = true;
+        loop {
+            let now = Instant::now();
+            if now >= give_up && !first {
+                break;
+            }
+            // The first check always gets a full round trip; later ones stop at `give_up`.
+            let budget = give_up.saturating_duration_since(now);
+            let wait = if first {
+                budget.max(MIN_INSPECT_TIMEOUT)
+            } else {
+                budget
+            }
+            .min(ctx.remaining());
+            first = false;
+            if wait.is_zero() {
+                break;
+            }
+            let reply = self.request(ctx, "inspect", Some(selector.clone()), None, wait);
+            let inspection = match reply {
+                Ok(reply) if reply.ok => serde_json::from_value::<Inspection>(reply.payload)
+                    .map_err(|error| {
+                        failed(format!("bridge `inspect` reply was malformed: {error}"))
+                    })?,
+                Ok(reply) => {
+                    let error = reply
+                        .error
+                        .unwrap_or_else(|| "bridge returned ok=false".to_string());
+                    return Err(failed(explain(about(target, error))));
+                }
+                Err(_) if Instant::now() >= give_up => break,
+                Err(error) => return Err(failed(explain(about(target, format!("{error:#}"))))),
+            };
+            match judge(&expectation.matcher, expectation.not, &inspection) {
+                Verdict::Pass => return Ok(()),
+                Verdict::Fatal(message) => return Err(failed(about(target, message))),
+                Verdict::Retry { expected, actual } => last = Some((expected, actual)),
+            }
+            thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
+        }
+        let ms = started.elapsed().as_millis();
+        let not = if expectation.not { "not." } else { "" };
+        let headline = format!(
+            "expect(`{target}`).{not}{}() failed after {ms}ms",
+            expectation.matcher.key()
+        );
+        let info = match last {
+            Some((expected, actual)) => ErrorInfo {
+                message: format!("{headline}\nexpected: {expected}\nreceived: {actual}"),
+                expected: Some(Value::String(expected)),
+                actual: Some(Value::String(actual)),
+                ..ErrorInfo::default()
+            },
+            None => ErrorInfo::new(format!("{headline}: no time left to check")),
+        };
+        // A step or test deadline that cut the assertion short is a timeout.
+        if ctx.expired() && give_up < started + ctx.expect_timeout {
+            Err(StepResult::TimedOut(info))
+        } else {
+            Err(StepResult::Failed(info))
         }
     }
 
@@ -731,6 +810,7 @@ mod selector_tests {
     fn explains_old_bridges() {
         let error = "click failed: 'locator:{}' is not a valid selector".to_string();
         assert!(explain(error).contains("upgrade it"));
+        assert!(explain("unsupported drive bridge action: inspect".into()).contains("upgrade it"));
         assert_eq!(explain("selector not found".into()), "selector not found");
     }
 }

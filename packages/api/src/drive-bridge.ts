@@ -1,7 +1,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AuditaurExporter } from './exporter';
-import { isLocatorSelector, parseLocator, resolveLocator } from './locator';
+import {
+  describeLocator,
+  elementText as locatorText,
+  isLocatorSelector,
+  parseLocator,
+  queryLocator,
+  resolveLocator,
+} from './locator';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -313,6 +320,9 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
     case 'snapshot': {
       return captureSnapshot(request.selector);
     }
+    case 'inspect': {
+      return inspectSelector(request.selector);
+    }
     case 'screenshot': {
       return captureScreenshot(request.selector, request.windowLabel);
     }
@@ -330,6 +340,65 @@ function resolveSelector(selector: string | undefined, visibleOnly: boolean): El
   }
   const matches = Array.from(document.querySelectorAll(selector));
   return visibleOnly ? matches.find(isVisible) : matches[0];
+}
+
+/**
+ * Everything a drill assertion needs about a target, without throwing: how many
+ * elements match, a strict-mode message when the locator is ambiguous, and the
+ * resolved element's state.
+ */
+function inspectSelector(selector: string | undefined): Record<string, unknown> {
+  if (!selector) {
+    throw new Error('inspect needs a selector');
+  }
+  let matches: Element[];
+  let strict: string | undefined;
+  if (isLocatorSelector(selector)) {
+    const spec = parseLocator(selector);
+    const all = queryLocator(spec);
+    if (spec.nth !== undefined) {
+      const el = spec.nth < 0 ? all[all.length + spec.nth] : all[spec.nth];
+      matches = el ? [el] : [];
+    } else {
+      matches = all;
+      if (all.length > 1) {
+        strict = `strict mode violation: \`${describeLocator(spec)}\` resolved to ${all.length} elements; add \`nth\` or narrow the locator`;
+      }
+    }
+  } else {
+    matches = Array.from(document.querySelectorAll(selector));
+  }
+  const el = strict ? undefined : matches[0];
+  return {
+    count: matches.length,
+    ...(strict ? { strict } : {}),
+    element: el
+      ? {
+          visible: isVisible(el),
+          text: locatorText(el),
+          value: valueOf(el),
+          checked: checkedOf(el),
+        }
+      : null,
+  };
+}
+
+function valueOf(el: Element): string | null {
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    return el.value;
+  }
+  return null;
+}
+
+function checkedOf(el: Element): boolean | 'mixed' | null {
+  if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+    return el.indeterminate ? 'mixed' : el.checked;
+  }
+  const aria = el.getAttribute('aria-checked');
+  if (aria === 'true' || aria === 'false') {
+    return aria === 'true';
+  }
+  return aria === 'mixed' ? 'mixed' : null;
 }
 
 function requireSelector(selector: string | undefined, visibleOnly: boolean): Element {
