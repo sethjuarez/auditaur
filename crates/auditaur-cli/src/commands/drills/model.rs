@@ -1639,21 +1639,54 @@ pub fn describe(kind: &StepKind) -> String {
             };
             format!("expect {} {not}{matcher}", expectation.target)
         }
-        StepKind::Telemetry(expectation) => match expectation {
-            TelemetryExpectation::Ipc { command, not, .. } => format!(
-                "expect IPC `{command}` {}",
-                if *not { "not called" } else { "called" }
-            ),
-            TelemetryExpectation::Event { name, not, .. } => format!(
-                "expect event `{name}` {}",
-                if *not { "not emitted" } else { "emitted" }
-            ),
-            TelemetryExpectation::Log { contains, not, .. } => format!(
-                "expect {}log containing {contains:?}",
-                if *not { "no " } else { "" }
-            ),
-            TelemetryExpectation::NoErrors { .. } => "expect no errors".to_string(),
-        },
+        StepKind::Telemetry(expectation) => {
+            let times = |verb: &str, not: bool, count: Option<u64>| match count {
+                _ if not => format!("not {verb}"),
+                Some(0) => format!("not {verb}"),
+                Some(1) => format!("{verb} once"),
+                Some(n) => format!("{verb} {n} times"),
+                None => verb.to_string(),
+            };
+            match expectation {
+                TelemetryExpectation::Ipc {
+                    command,
+                    status,
+                    count,
+                    not,
+                    ..
+                } => {
+                    let status = match status {
+                        Some(IpcStatus::Ok) => " ok",
+                        Some(IpcStatus::Error) => " with an error",
+                        None => "",
+                    };
+                    format!(
+                        "expect IPC `{command}` {}",
+                        times(&format!("called{status}"), *not, *count)
+                    )
+                }
+                TelemetryExpectation::Event {
+                    name, count, not, ..
+                } => format!("expect event `{name}` {}", times("emitted", *not, *count)),
+                TelemetryExpectation::Log {
+                    contains,
+                    level,
+                    count,
+                    not,
+                    ..
+                } => {
+                    let level = level
+                        .as_deref()
+                        .map(|l| format!(" {l}"))
+                        .unwrap_or_default();
+                    format!(
+                        "expect{level} log containing {contains:?} {}",
+                        times("logged", *not, *count)
+                    )
+                }
+                TelemetryExpectation::NoErrors { .. } => "expect no errors".to_string(),
+            }
+        }
     }
 }
 

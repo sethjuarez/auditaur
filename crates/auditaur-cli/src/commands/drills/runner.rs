@@ -6,8 +6,9 @@
 
 pub mod expect;
 pub mod real;
+pub mod telemetry;
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use auditaur_core::redaction::redact_json;
@@ -33,6 +34,8 @@ pub struct StepCtx<'a> {
     pub expect_timeout: Duration,
     pub test_id: Option<String>,
     pub step_index: usize,
+    /// Telemetry assertions see what the app recorded from this instant (Unix nanos) on.
+    pub since_unix_nanos: i64,
 }
 
 impl StepCtx<'_> {
@@ -59,6 +62,11 @@ pub trait AppDriver {
     fn run_step(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepResult;
     /// Attach evidence (screenshot, DOM) to the failing step. Best effort.
     fn capture_failure(&mut self, _ctx: &mut StepCtx<'_>) {}
+    /// What the app recorded since `since_unix_nanos`, saved with each attempt. Best effort;
+    /// `live` is false once the app has exited.
+    fn telemetry(&mut self, _since_unix_nanos: i64, _live: bool) -> Option<Value> {
+        None
+    }
     /// Why the app can no longer be driven, once it has died.
     fn exited(&mut self) -> Option<String>;
     fn close(&mut self) -> Result<()>;
@@ -181,6 +189,7 @@ struct Budget {
     deadline: Instant,
     timeout_ms: u64,
     test_id: Option<String>,
+    since_unix_nanos: i64,
 }
 
 impl SuiteRun<'_, '_> {
@@ -255,11 +264,12 @@ impl SuiteRun<'_, '_> {
     fn run_suite_body(&mut self, driver: &mut dyn AppDriver) -> Result<()> {
         let suite = self.selected.suite;
         let timeout_ms = suite.timeout_ms.unwrap_or(DEFAULT_TEST_TIMEOUT_MS);
+        let since = now_unix_nanos();
 
         let tally = self.run_steps(
             driver,
             &suite.before_all,
-            &Budget::new(Phase::BeforeAll, timeout_ms, None),
+            &Budget::new(Phase::BeforeAll, timeout_ms, None, since),
         )?;
         if let Some(error) = tally.first_error() {
             self.error = Some(error);
@@ -279,7 +289,7 @@ impl SuiteRun<'_, '_> {
             let tally = self.run_steps(
                 driver,
                 &suite.after_all,
-                &Budget::new(Phase::AfterAll, timeout_ms, None),
+                &Budget::new(Phase::AfterAll, timeout_ms, None, since),
             )?;
             if let Some(error) = tally.first_error() {
                 self.error.get_or_insert(error);
@@ -337,8 +347,15 @@ impl SuiteRun<'_, '_> {
         for attempt in 0..=retries {
             self.writer.test_started(self.index, index, attempt)?;
             let started = Instant::now();
-            let tally = self.run_attempt(driver, test, timeout_ms, &id)?;
+            let since = now_unix_nanos();
+            let tally = self.run_attempt(driver, test, timeout_ms, &id, since)?;
             self.probe_exit(driver);
+            if let Some(telemetry) = driver.telemetry(since, self.exited.is_none()) {
+                let telemetry = redact_json(&telemetry, &[]).value;
+                let bytes = serde_json::to_vec_pretty(&telemetry)?;
+                self.writer
+                    .attach("telemetry", "application/json", "telemetry.json", &bytes)?;
+            }
             let mut status = tally.status();
             let mut error = tally.first_error();
             if let Some(reason) = &self.exited {
@@ -383,9 +400,10 @@ impl SuiteRun<'_, '_> {
         test: &TestCase,
         timeout_ms: u64,
         id: &str,
+        since: i64,
     ) -> Result<Tally> {
         let suite = self.selected.suite;
-        let budget = Budget::new(Phase::BeforeEach, timeout_ms, Some(id.to_string()));
+        let budget = Budget::new(Phase::BeforeEach, timeout_ms, Some(id.to_string()), since);
         let mut tally = self.run_steps(driver, &suite.before_each, &budget)?;
         if tally.hard.is_none() && self.exited.is_none() {
             let budget = Budget {
@@ -397,7 +415,7 @@ impl SuiteRun<'_, '_> {
         }
         // afterEach always runs (unless the app died), with its own time budget.
         if self.exited.is_none() {
-            let budget = Budget::new(Phase::AfterEach, timeout_ms, Some(id.to_string()));
+            let budget = Budget::new(Phase::AfterEach, timeout_ms, Some(id.to_string()), since);
             let after = self.run_steps(driver, &suite.after_each, &budget)?;
             tally.merge(after);
         }
@@ -424,16 +442,24 @@ impl SuiteRun<'_, '_> {
             let index = self
                 .writer
                 .step_started(budget.phase, &step.title, step.action)?;
-            let deadline = step
-                .timeout_ms
-                .map(|ms| (Instant::now() + Duration::from_millis(ms)).min(budget.deadline))
-                .unwrap_or(budget.deadline);
+            // On assertions `timeoutMs` is the retry window (Playwright's `expect(..., { timeout })`),
+            // so running out is a failed assertion; on actions it bounds the step.
+            let assertion = matches!(step.kind, StepKind::Expect(_) | StepKind::Telemetry(_));
+            let (deadline, expect_timeout) = match step.timeout_ms {
+                Some(ms) if assertion => (budget.deadline, Duration::from_millis(ms)),
+                Some(ms) => (
+                    (Instant::now() + Duration::from_millis(ms)).min(budget.deadline),
+                    expect_timeout,
+                ),
+                None => (budget.deadline, expect_timeout),
+            };
             let mut ctx = StepCtx {
                 writer: &mut *self.writer,
                 deadline,
                 expect_timeout,
                 test_id: budget.test_id.clone(),
                 step_index: index,
+                since_unix_nanos: budget.since_unix_nanos,
             };
             let result = driver.run_step(step, &mut ctx);
             let (step_status, mut error) = match result {
@@ -562,18 +588,30 @@ impl SuiteRun<'_, '_> {
 }
 
 impl Budget {
-    fn new(phase: Phase, timeout_ms: u64, test_id: Option<String>) -> Self {
+    fn new(phase: Phase, timeout_ms: u64, test_id: Option<String>, since_unix_nanos: i64) -> Self {
         Self {
             phase,
             deadline: Instant::now() + Duration::from_millis(timeout_ms),
             timeout_ms,
             test_id,
+            since_unix_nanos,
         }
     }
 
     fn timeout_error(&self) -> ErrorInfo {
         ErrorInfo::new(format!("timeout of {}ms exceeded", self.timeout_ms))
     }
+}
+
+/// Wall-clock now, floored to the millisecond and backed off one more: the webview stamps
+/// telemetry as `Date.now() * 1e6`, which is whole milliseconds rounded through an f64, so a
+/// record from this very millisecond can land just below the boundary.
+fn now_unix_nanos() -> i64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let millis = i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX / 1_000_000);
+    millis.saturating_sub(1) * 1_000_000
 }
 
 fn hook_always(hook: &Value) -> bool {

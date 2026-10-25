@@ -125,7 +125,7 @@ async function pollOnce(exporter: AuditaurExporter, windowLabel: string | undefi
     selector: request.selector,
     windowLabel: request.windowLabel,
   });
-  const response = await responseForRequest(request);
+  const response = await responseForRequest(request, exporter);
   recordDriveBridgeTelemetry(exporter, request, response);
   await invoke(COMPLETE_COMMAND, { response });
   console.debug('Auditaur drive bridge completed request', {
@@ -201,9 +201,12 @@ function sleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-async function responseForRequest(request: DriveBridgeRequest): Promise<DriveBridgeResponse> {
+async function responseForRequest(
+  request: DriveBridgeRequest,
+  exporter: AuditaurExporter,
+): Promise<DriveBridgeResponse> {
   try {
-    const payload = await executeDriveBridgeRequest(request);
+    const payload = await executeDriveBridgeRequest(request, exporter);
     return {
       schemaVersion: 1,
       protocolVersion: PROTOCOL_VERSION,
@@ -232,7 +235,10 @@ async function responseForRequest(request: DriveBridgeRequest): Promise<DriveBri
   }
 }
 
-export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Promise<Record<string, unknown>> {
+export async function executeDriveBridgeRequest(
+  request: DriveBridgeRequest,
+  exporter?: Pick<AuditaurExporter, 'flush'>,
+): Promise<Record<string, unknown>> {
   if (request.protocolVersion !== PROTOCOL_VERSION) {
     throw new Error(
       `unsupported drive bridge protocol version: ${request.protocolVersion}; expected ${PROTOCOL_VERSION}`,
@@ -322,6 +328,13 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
     }
     case 'inspect': {
       return inspectSelector(request.selector);
+    }
+    case 'flush': {
+      if (!exporter) {
+        throw new Error('flush needs the Auditaur exporter');
+      }
+      await exporter.flush();
+      return { ok: true };
     }
     case 'screenshot': {
       return captureScreenshot(request.selector, request.windowLabel);

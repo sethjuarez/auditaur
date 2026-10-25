@@ -6,6 +6,7 @@ const EXPORT_COMMAND = 'plugin:auditaur|export_otel_batch';
 export class AuditaurExporter {
   private batch: OTelBatch = emptyBatch();
   private timer: ReturnType<typeof setInterval> | undefined;
+  private exporting: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly batchIntervalMs: number,
@@ -50,7 +51,17 @@ export class AuditaurExporter {
     void this.flushIfFull();
   }
 
-  async flush(): Promise<void> {
+  /**
+   * Export everything queued so far. Exports run one at a time, so when this resolves every
+   * record queued before the call has been handed to the plugin (or re-queued on failure).
+   */
+  flush(): Promise<void> {
+    const run = this.exporting.catch(() => undefined).then(() => this.exportQueued());
+    this.exporting = run;
+    return run;
+  }
+
+  private async exportQueued(): Promise<void> {
     if (this.size === 0) {
       return;
     }

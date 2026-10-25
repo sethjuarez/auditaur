@@ -2,18 +2,21 @@
 
 use std::{
     collections::HashSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Child,
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Result};
+use auditaur_collector::exporter_sqlite::SqliteStore;
+use auditaur_core::storage::{RelatedTelemetry, RelatedTelemetryQuery};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
 use super::{
     expect::{judge, Inspection, Verdict},
+    telemetry::{self, Judgement},
     AppDriver, HookResult, Host, StepCtx, StepResult,
 };
 use crate::{
@@ -21,11 +24,14 @@ use crate::{
         debug::{self, DebugStageStatus},
         drill,
         drills::{
-            model::{DrillSuite, Expectation, Locator, Matcher, Step, StepKind, WaitState},
+            model::{
+                DrillSuite, Expectation, Locator, Matcher, Step, StepKind, TelemetryExpectation,
+                WaitState,
+            },
             run::ErrorInfo,
         },
         drive::{BridgeReply, BridgeSession, DriveAppSelector},
-        workflow,
+        read, workflow,
     },
     discovery::DiscoveredApp,
 };
@@ -36,6 +42,8 @@ const WAIT_POLL: Duration = Duration::from_millis(100);
 const MIN_INSPECT_TIMEOUT: Duration = Duration::from_millis(250);
 /// Bounded so failure evidence never hangs a run.
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The per-attempt telemetry slice is best effort; don't stall the run on a gone app.
+const SLICE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 const RELOAD_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How each suite gets its app.
@@ -99,10 +107,7 @@ impl RealHost {
                 "{error:#}\nStart the app first, or pass `-- <command>` (or a config `start` command) so the drill launches it."
             )
         })?;
-        Ok(Box::new(BridgeDriver {
-            session,
-            child: None,
-        }))
+        Ok(Box::new(BridgeDriver::new(session, None)))
     }
 
     fn spawn(
@@ -120,10 +125,7 @@ impl RealHost {
         let deadline = Instant::now() + self.ready_timeout;
         let ready = self.wait_until_ready(&mut child, started_at, &preexisting_ids, deadline);
         match ready.and_then(|app| BridgeSession::connect(&drill::drive_selector(&app))) {
-            Ok(session) => Ok(Box::new(BridgeDriver {
-                session,
-                child: Some(child),
-            })),
+            Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child)))),
             Err(error) => {
                 let _ = drill::cleanup_child_tree(&mut child);
                 Err(error)
@@ -204,6 +206,21 @@ pub struct BridgeDriver {
     session: BridgeSession,
     /// The spawned app process; `None` when attached to a running app.
     child: Option<Child>,
+    /// The app's telemetry store, opened on first use.
+    store: Option<SqliteStore>,
+    /// Cleared once the bridge says it has no `flush` action.
+    can_flush: bool,
+}
+
+impl BridgeDriver {
+    fn new(session: BridgeSession, child: Option<Child>) -> Self {
+        Self {
+            session,
+            child,
+            store: None,
+            can_flush: true,
+        }
+    }
 }
 
 impl Drop for BridgeDriver {
@@ -252,6 +269,14 @@ impl AppDriver for BridgeDriver {
                 }
             }
         }
+    }
+
+    fn telemetry(&mut self, since_unix_nanos: i64, live: bool) -> Option<Value> {
+        if live {
+            self.flush(None, None, SLICE_FLUSH_TIMEOUT);
+        }
+        let related = self.recorded_since(since_unix_nanos).ok()?;
+        serde_json::to_value(related).ok()
     }
 
     fn exited(&mut self) -> Option<String> {
@@ -397,7 +422,116 @@ impl BridgeDriver {
                 )),
                 _ => self.expect(ctx, expectation),
             },
-            StepKind::Telemetry(_) => Err(unsupported("`telemetry`")),
+            StepKind::Telemetry(expectation) => self.expect_telemetry(ctx, step, expectation),
+        }
+    }
+
+    /// Ask the frontend to push its queued telemetry now so assertions see it promptly.
+    /// Older bridges lack `flush`; then assertions just poll until the batch lands.
+    fn flush(&mut self, test_id: Option<String>, step_id: Option<String>, timeout: Duration) {
+        if !self.can_flush || timeout.is_zero() {
+            return;
+        }
+        let reply = self.session.request(
+            "flush",
+            None,
+            None,
+            Vec::new(),
+            false,
+            test_id,
+            step_id,
+            timeout,
+        );
+        if let Ok(reply) = reply {
+            if reply
+                .error
+                .is_some_and(|error| error.contains("unsupported drive bridge action"))
+            {
+                self.can_flush = false;
+            }
+        }
+    }
+
+    /// Everything this session recorded since `since` (Unix nanos), minus the harness's own logs.
+    fn recorded_since(&mut self, since: i64) -> Result<RelatedTelemetry> {
+        if self.store.is_none() {
+            self.store = Some(read::open_validated_store(Path::new(
+                self.session.db_path(),
+            ))?);
+        }
+        let store = self.store.as_ref().expect("opened above");
+        let related = store.related_telemetry(&RelatedTelemetryQuery {
+            session_id: Some(self.session.session_id().to_string()),
+            trace_id: None,
+            window_label: None,
+            start_time_unix_nanos: Some(since),
+            end_time_unix_nanos: None,
+            limit: Some(usize::MAX),
+        })?;
+        Ok(telemetry::scrub(related))
+    }
+
+    /// Re-read telemetry until the assertion holds, can no longer hold, or time runs out.
+    fn expect_telemetry(
+        &mut self,
+        ctx: &StepCtx<'_>,
+        step: &Step,
+        expectation: &TelemetryExpectation,
+    ) -> StepOutcome {
+        let started = Instant::now();
+        let give_up = (started + ctx.expect_timeout).min(ctx.deadline);
+        let mut last = None;
+        let mut first = true;
+        loop {
+            if Instant::now() >= give_up && !first {
+                break;
+            }
+            first = false;
+            let budget = give_up
+                .saturating_duration_since(Instant::now())
+                .max(MIN_INSPECT_TIMEOUT)
+                .min(CAPTURE_TIMEOUT)
+                .min(ctx.remaining());
+            self.flush(
+                ctx.test_id.clone(),
+                Some(format!("step-{}", ctx.step_index)),
+                budget,
+            );
+            let related = self
+                .recorded_since(ctx.since_unix_nanos)
+                .map_err(|error| failed(format!("reading recorded telemetry failed: {error:#}")))?;
+            let verdict = telemetry::judge(expectation, &related);
+            match verdict.judgement {
+                Judgement::Pass => return Ok(()),
+                Judgement::Failed => {
+                    last = Some(verdict);
+                    break;
+                }
+                Judgement::Pending => last = Some(verdict),
+            }
+            thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
+        }
+        let ms = started.elapsed().as_millis();
+        let headline = format!("{} failed after {ms}ms", step.title);
+        let info = match &last {
+            Some(verdict) => ErrorInfo {
+                message: format!(
+                    "{headline}\nexpected: {}\nreceived: {}",
+                    verdict.expected, verdict.actual
+                ),
+                expected: Some(Value::String(verdict.expected.clone())),
+                actual: Some(Value::String(verdict.actual.clone())),
+                ..ErrorInfo::default()
+            },
+            None => ErrorInfo::new(format!("{headline}: no time left to check")),
+        };
+        let decided = last
+            .as_ref()
+            .is_some_and(|verdict| verdict.judgement == Judgement::Failed);
+        if !decided && ctx.expired() && give_up < started + ctx.expect_timeout {
+            Err(StepResult::TimedOut(info))
+        } else {
+            Err(StepResult::Failed(info))
         }
     }
 

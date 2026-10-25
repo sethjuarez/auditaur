@@ -1276,6 +1276,14 @@ impl BridgeSession {
         Ok(Self { attach })
     }
 
+    pub(crate) fn db_path(&self) -> &str {
+        &self.attach.db_path
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.attach.session_id
+    }
+
     pub(crate) fn app_info(&self) -> Value {
         json!({
             "serviceName": self.attach.service_name,

@@ -18,6 +18,10 @@ struct Shared {
     /// Calls per selector, for flaky steps.
     calls: HashMap<String, u32>,
     dead: bool,
+    /// `(since, live)` per telemetry request.
+    telemetry: Vec<(i64, bool)>,
+    /// `since` seen by each step, in order.
+    since: Vec<i64>,
 }
 
 type State = Rc<RefCell<Shared>>;
@@ -43,6 +47,7 @@ impl AppDriver for FakeDriver {
             .to_string();
         let mut state = self.state.borrow_mut();
         state.log.push(step.title.clone());
+        state.since.push(ctx.since_unix_nanos);
         let calls = {
             let count = state.calls.entry(target.clone()).or_default();
             *count += 1;
@@ -79,6 +84,15 @@ impl AppDriver for FakeDriver {
                     .unwrap();
                 StepResult::Passed
             }
+            "#window" => {
+                state
+                    .log
+                    .push(format!("window {}", ctx.expect_timeout.as_millis()));
+                if ctx.deadline < Instant::now() + std::time::Duration::from_secs(10) {
+                    state.log.push("short deadline".to_string());
+                }
+                StepResult::Passed
+            }
             _ => StepResult::Passed,
         }
     }
@@ -92,6 +106,15 @@ impl AppDriver for FakeDriver {
 
     fn exited(&mut self) -> Option<String> {
         self.state.borrow().dead.then(|| "crashed".to_string())
+    }
+
+    /// Only tests that ran a `#tel` step have telemetry.
+    fn telemetry(&mut self, since_unix_nanos: i64, live: bool) -> Option<Value> {
+        let mut state = self.state.borrow_mut();
+        state.telemetry.push((since_unix_nanos, live));
+        state.calls.contains_key("#tel").then(|| {
+            json!({ "since": since_unix_nanos, "live": live, "logs": [{ "token": "secret-value" }] })
+        })
     }
 
     fn close(&mut self) -> Result<()> {
@@ -130,6 +153,8 @@ impl Host for FakeHost {
 struct Ran {
     report: RunReport,
     log: Vec<String>,
+    telemetry: Vec<(i64, bool)>,
+    since: Vec<i64>,
     dir: std::path::PathBuf,
     _temp: tempfile::TempDir,
 }
@@ -162,9 +187,13 @@ fn run_with(suite: &str, options: RunnerOptions) -> Ran {
     // The persisted report matches what the writer returned.
     assert_eq!(read_run(&dir).unwrap().totals, report.totals);
     let log = state.borrow().log.clone();
+    let telemetry = state.borrow().telemetry.clone();
+    let since = state.borrow().since.clone();
     Ran {
         report,
         log,
+        telemetry,
+        since,
         dir,
         _temp: temp,
     }
@@ -545,4 +574,58 @@ fn hook_output_is_redacted() {
     let written = fs::read_to_string(ran.dir.join(&hook.attachments[0].path)).unwrap();
     assert!(written.contains("seed"));
     assert!(!written.contains("secret-value"), "{written}");
+}
+
+#[test]
+fn each_attempt_saves_its_telemetry_slice() {
+    let ran = run(r##"{
+        "beforeAll": [{ "click": "#setup" }],
+        "tests": [
+            { "name": "tel", "retries": 1, "steps": [{ "click": "#tel" }, { "click": "#flaky" }] },
+            { "name": "dies", "steps": [{ "click": "#quietdie" }] }
+        ]
+    }"##);
+    let tel = test(&ran, "tel");
+    assert_eq!(tel.attempts.len(), 2);
+    for summary in &tel.attempts {
+        let attempt = read_attempt(&ran.dir, summary).unwrap();
+        assert_eq!(attempt.attachments.len(), 1, "{:?}", attempt.attachments);
+        let saved = &attempt.attachments[0];
+        assert_eq!(saved.name, "telemetry");
+        let written = fs::read_to_string(ran.dir.join(&saved.path)).unwrap();
+        assert!(!written.contains("secret-value"), "{written}");
+    }
+    // Each attempt reads from its own start, after the suite's; steps see the same instant.
+    let (first, second) = (ran.telemetry[0].0, ran.telemetry[1].0);
+    assert!(
+        ran.since[0] <= first && first <= second,
+        "{:?} {:?}",
+        ran.since,
+        ran.telemetry
+    );
+    assert_eq!(&ran.since[1..3], &[first, first]);
+    assert_eq!(&ran.since[3..5], &[second, second]);
+    assert!(first % 1_000_000 == 0, "floored to the millisecond");
+    // Once the app has gone, the slice is read without a live flush.
+    assert_eq!(ran.telemetry.last(), Some(&(ran.telemetry[2].0, false)));
+    assert!(ran.telemetry[..2].iter().all(|(_, live)| *live));
+}
+
+#[test]
+fn timeout_on_an_assertion_is_its_retry_window() {
+    let ran = run(r##"{ "tests": [{ "name": "t", "steps": [
+        { "expect": "#window", "toBeVisible": true, "timeoutMs": 50 },
+        { "click": "#window", "timeoutMs": 50 },
+        { "expect": "#window", "toBeVisible": true }
+    ] }] }"##);
+    let windows: Vec<_> = ran
+        .log
+        .iter()
+        .filter(|e| e.starts_with("window") || e.as_str() == "short deadline")
+        .cloned()
+        .collect();
+    assert_eq!(
+        windows,
+        vec!["window 50", "window 5000", "short deadline", "window 5000"]
+    );
 }

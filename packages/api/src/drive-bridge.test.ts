@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createSingleFlightPoller,
   drainPendingRequests,
@@ -258,6 +258,15 @@ describe('drive bridge selector operations', () => {
       ok: true,
       value: 3,
     });
+  });
+
+  it('flushes queued telemetry on request', async () => {
+    installDom([]);
+    const flush = vi.fn(async () => {});
+
+    await expect(executeDriveBridgeRequest(request('flush'), { flush })).resolves.toEqual({ ok: true });
+    expect(flush).toHaveBeenCalledOnce();
+    await expect(executeDriveBridgeRequest(request('flush'))).rejects.toThrow('flush needs the Auditaur exporter');
   });
 
   it('responds to selector-independent ping requests', async () => {

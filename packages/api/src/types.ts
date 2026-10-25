@@ -73,6 +73,7 @@ export interface DriveBridgeRequest {
     | 'evaluate'
     | 'snapshot'
     | 'inspect'
+  | 'flush'
     | 'screenshot'
     | string;
   selector?: string;
