@@ -4,7 +4,7 @@ import { RUN_ID, TEST_ID, workspaceFor } from "../../lib/paths.mjs";
 import { DrillError } from "../../lib/errors.mjs";
 import { cwdProperty, runIdProperty } from "../../lib/schemas.mjs";
 import { readBody } from "../../lib/server.mjs";
-import { traceFile } from "./attachments.mjs";
+import { serveAttachment } from "../../lib/attachments.mjs";
 import { traceSummary, traceView } from "./view.mjs";
 
 const HOOKS_ID = /^hooks:[A-Za-z0-9_-]{1,128}$/;
@@ -59,7 +59,7 @@ export default {
     reconfigure: configure,
     routes: (state) => ({
         "GET /state": () => traceView(state),
-        "GET /file": (url) => traceFile(state, url),
+        "GET /file": (url) => serveAttachment(state, url),
         "POST /select": async (_url, req) => select(state, await readBody(req)),
     }),
     actions: [

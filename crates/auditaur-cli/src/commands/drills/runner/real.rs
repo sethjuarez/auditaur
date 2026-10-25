@@ -1191,7 +1191,8 @@ impl BridgeDriver {
                     snapshot_noun(snapshot),
                     snapshot.display
                 ),
-                expected: Some(expected_info),
+                // `stable: false` tells reviewers (the snapshots canvas) not to accept this actual.
+                expected: Some(json!({ "snapshot": snapshot.display, "stable": false })),
                 actual: Some(captured.received),
                 ..ErrorInfo::default()
             };

@@ -190,6 +190,8 @@ The `auditaur-drill-run` canvas watches one run live: suites, tests, and each st
 
 The `auditaur-drill-trace` canvas replays one test attempt: a timeline of steps with IPC, event, log, and frontend-error ticks, each step's screenshots and DOM snapshot, and the telemetry recorded during it. Open it with `{ "runId", "testId", "attempt" }`, all optional; it defaults to the newest run's first failed test. Agents can call its `get_trace` and `select` actions.
 
+The `auditaur-drill-snapshots` canvas reviews a run's snapshot mismatches. ARIA results show the line diff; screenshots show expected and actual side by side, with a slider, or as the pixel diff. **Accept** copies the run's actual output over the baseline once the run has finished; output that never stabilized cannot be accepted. Open it with `{ "runId" }`, optional. Agents can call its `get_snapshots`, `select`, and `accept` actions.
+
 ## CI
 
 Build a debug app, which embeds the frontend and keeps the drive bridge on, then run the drills against the binary:

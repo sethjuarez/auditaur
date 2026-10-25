@@ -29,9 +29,10 @@ export async function readBody(req) {
 // A route returning `{ [RAW]: { contentType, body } }` sends bytes instead of JSON.
 export const RAW = Symbol("raw");
 
-// Only the page's own files and the shared ones are served; nothing else under `ui/` is reachable.
-function assetsFor(page) {
-    const files = [`${page}.html`, `${page}.css`, `${page}.js`, ...SHARED_ASSETS];
+// Only the page's own files, the UI components it names (`<name>.js` and `.css`), and the shared ones
+// are served; nothing else under `ui/` is reachable.
+function assetsFor(page, components) {
+    const files = [`${page}.html`, `${page}.css`, `${page}.js`, ...SHARED_ASSETS, ...components.flatMap((name) => [`${name}.js`, `${name}.css`])];
     return new Map(files.map((file) => [file === `${page}.html` ? "/" : `/${file}`, file]));
 }
 
@@ -58,8 +59,8 @@ function sendRaw(res, raw) {
     res.end(raw.body);
 }
 
-export async function startServer(routes, page) {
-    const assets = assetsFor(page);
+export async function startServer(routes, page, components = []) {
+    const assets = assetsFor(page, components);
     const server = createServer(async (req, res) => {
         try {
             const url = new URL(req.url ?? "/", "http://127.0.0.1");

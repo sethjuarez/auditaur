@@ -11,7 +11,7 @@ export class Panels {
         let panel = this.#open.get(instanceId);
         if (!panel) {
             const state = canvas.create(input);
-            panel = { state, ...(await startServer(canvas.routes(state), canvas.page)) };
+            panel = { state, ...(await startServer(canvas.routes(state), canvas.page, canvas.components)) };
             this.#open.set(instanceId, panel);
         } else if (input && Object.keys(input).length > 0) {
             canvas.reconfigure(panel.state, input);
