@@ -39,11 +39,16 @@
       ]
     },
     {
-      "name": "matches the page snapshot",
-      "fixme": "aria and screenshot snapshots land with the snapshot step",
+      "name": "matches the aria snapshot",
       "steps": [
-        { "expect": "main", "toMatchAriaSnapshot": true },
-        { "expect": "main", "toHaveScreenshot": "controls", "mask": ["#output"] }
+        { "expect": "section.card:has(#failing-command)", "toMatchAriaSnapshot": "commands" }
+      ]
+    },
+    {
+      "name": "matches the screenshot",
+      "tags": ["@visual"],
+      "steps": [
+        { "expect": "section.card:has(#failing-command)", "toHaveScreenshot": "commands" }
       ]
     }
   ]

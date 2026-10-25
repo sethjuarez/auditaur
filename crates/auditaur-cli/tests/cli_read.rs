@@ -894,6 +894,13 @@ fn drill_list_and_validate_suite_files() {
     assert_eq!(explicit["files"], 1);
     let missing = run_failure_command(&mut run(&["drill", "validate", "nope"]));
     assert!(missing.contains("does not exist"), "{missing}");
+    let misplaced = run_failure_command(&mut run(&["drill", "test", "-u", "none"]));
+    let upper = run_failure_command(&mut run(&["drill", "test", "-u", "ALL"]));
+    assert!(upper.contains("`--update-snapshots=ALL`"), "{upper}");
+    assert!(
+        misplaced.contains("`--update-snapshots=none`"),
+        "{misplaced}"
+    );
 }
 
 #[test]

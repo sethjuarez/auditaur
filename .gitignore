@@ -10,3 +10,4 @@
 /examples/dogfood/dist/
 /examples/dogfood/src-tauri/target/
 /examples/dogfood/src-tauri/gen/
+/examples/dogfood/drill-results.xml

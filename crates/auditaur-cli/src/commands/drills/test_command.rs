@@ -49,6 +49,12 @@ pub struct TestOptions {
 /// Exit codes: 0 all passed (flaky counts), 1 a test failed or did not run, 2 drill files are
 /// invalid, 130 interrupted by Ctrl+C.
 pub fn test(options: TestOptions) -> Result<i32> {
+    if let Some(value) = misplaced_update_value(&options) {
+        bail!(
+            "`{value}` was read as a file filter; `--update-snapshots` takes its value after `=`, \
+             e.g. `--update-snapshots={value}`"
+        );
+    }
     let workspace = std::env::current_dir()?;
     let files = discover_or_empty(&default_roots())?;
     let loaded = load(&files);
@@ -213,6 +219,26 @@ pub fn test(options: TestOptions) -> Result<i32> {
         );
     }
     Ok(exit_code)
+}
+
+/// `-u none` parses as bare `-u` (`changed`) plus a `none` file filter, which could silently
+/// rewrite baselines; catch that before running.
+fn misplaced_update_value(options: &TestOptions) -> Option<&str> {
+    use clap::ValueEnum;
+    if options.update_snapshots != runner::snapshot::UpdateMode::Changed {
+        return None;
+    }
+    options
+        .filters
+        .patterns
+        .iter()
+        .map(String::as_str)
+        .find(|pattern| {
+            runner::snapshot::UpdateMode::value_variants()
+                .iter()
+                .filter_map(|mode| mode.to_possible_value())
+                .any(|value| value.get_name().eq_ignore_ascii_case(pattern))
+        })
 }
 
 fn plural(count: usize, one: &str, many: &str) -> String {

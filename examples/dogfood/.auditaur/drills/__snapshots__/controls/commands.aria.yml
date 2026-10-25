@@ -1,0 +1,4 @@
+- heading "Tauri command telemetry" [level=2]
+- button "Call successful command"
+- button "Call failing command"
+- button "Ask backend to emit event"
