@@ -7,6 +7,8 @@ REPO_SKILL = ROOT / ".github" / "skills" / "auditaur-debug" / "SKILL.md"
 CLI_SKILL_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-debug-skill.md"
 REPO_EXTENSION = ROOT / ".github" / "extensions" / "auditaur-gate" / "extension.mjs"
 CLI_EXTENSION_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-gate-extension.mjs"
+REPO_DRILLS_EXTENSION = ROOT / ".github" / "extensions" / "auditaur-drills" / "extension.mjs"
+CLI_DRILLS_EXTENSION_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-drills-extension.mjs"
 
 
 def normalized(path: Path) -> str:
@@ -24,6 +26,11 @@ def main() -> int:
             "Auditaur gate canvas extension",
             REPO_EXTENSION,
             CLI_EXTENSION_ASSET,
+        ),
+        (
+            "Auditaur drills canvas extension",
+            REPO_DRILLS_EXTENSION,
+            CLI_DRILLS_EXTENSION_ASSET,
         ),
     ]
     missing = [path for _, repo_path, asset_path in pairs for path in (repo_path, asset_path) if not path.exists()]

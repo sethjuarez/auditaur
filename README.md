@@ -87,7 +87,7 @@ Auditaur packages are published publicly:
 - Frontend package: install with `npm install @auditaur/api`.
 - Apple Swift package: add the SwiftPM package in `swift/` and use the `AuditaurAppleCore` product.
 - Agent skill: scaffold into a consuming repo with `auditaur init skill`; use `auditaur init skill --agents-path` for `.agents/skills` consumers. After the skill is available on GitHub, install with `gh skill install sethjuarez/auditaur auditaur-debug`. Maintainers can validate publishing with `gh skill publish .github --dry-run`.
-- Copilot canvas extension: scaffold the Auditaur manual-gate card into a consuming repo with `auditaur init extension`.
+- Copilot canvas extensions: scaffold the Auditaur manual-gate card and drill test explorer into a consuming repo with `auditaur init extension`.
 
 See the docs in `docs\src\content\docs` for installation, MCP, and Tauri integration details.
 

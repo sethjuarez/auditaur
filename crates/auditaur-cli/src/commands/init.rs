@@ -15,6 +15,10 @@ const GITHUB_SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-de
 const AGENTS_SKILL_RELATIVE_PATH: [&str; 4] = [".agents", "skills", "auditaur-debug", "SKILL.md"];
 const GITHUB_EXTENSION_RELATIVE_PATH: [&str; 4] =
     [".github", "extensions", "auditaur-gate", "extension.mjs"];
+pub(crate) const AUDITAUR_DRILLS_EXTENSION: &str =
+    include_str!("../../assets/auditaur-drills-extension.mjs");
+const GITHUB_DRILLS_EXTENSION_RELATIVE_PATH: [&str; 4] =
+    [".github", "extensions", "auditaur-drills", "extension.mjs"];
 const DIAGNOSTICS_CONFIG_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.json"];
 const DIAGNOSTICS_GUIDE_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.md"];
 const DIAGNOSTICS_CONFIG: &str = r#"{
@@ -76,6 +80,24 @@ struct InitSkillResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct InitExtensionResult {
+    ok: bool,
+    /// The gate extension's path, kept for callers written before multiple extensions.
+    path: String,
+    overwritten: bool,
+    extensions: Vec<InitExtension>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitExtension {
+    name: &'static str,
+    path: String,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct InitDiagnosticsResult {
     ok: bool,
     dry_run: bool,
@@ -132,40 +154,83 @@ pub fn skill(path: Option<&Path>, force: bool, agents_path: bool, json: bool) ->
     })
 }
 
+/// Installs every packaged canvas extension. Without `--force`, extensions that already exist
+/// are left alone and only missing ones are written; it fails only when nothing is missing.
 pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
     let root = path
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir().context("failed to resolve current directory")?);
-    let output = GITHUB_EXTENSION_RELATIVE_PATH
-        .iter()
-        .fold(root, |path, segment| path.join(segment));
-    let existed = output.exists();
-    if existed && !force {
+    let targets = [
+        (
+            "auditaur-gate",
+            GITHUB_EXTENSION_RELATIVE_PATH,
+            AUDITAUR_GATE_EXTENSION,
+        ),
+        (
+            "auditaur-drills",
+            GITHUB_DRILLS_EXTENSION_RELATIVE_PATH,
+            AUDITAUR_DRILLS_EXTENSION,
+        ),
+    ]
+    .map(|(name, relative, contents)| {
+        let output = relative
+            .iter()
+            .fold(root.clone(), |path, segment| path.join(segment));
+        let existed = output.exists();
+        (name, output, contents, existed)
+    });
+    if !force && targets.iter().all(|(_, _, _, existed)| *existed) {
         return Err(anyhow!(
-            "Auditaur gate canvas extension already exists at {}. Pass --force to overwrite it.",
-            output.display()
+            "Auditaur canvas extensions already exist at {}. Pass --force to overwrite them.",
+            targets
+                .iter()
+                .map(|(_, output, _, _)| output.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
 
-    let parent = output
-        .parent()
-        .ok_or_else(|| anyhow!("invalid extension output path: {}", output.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create extension directory {}", parent.display()))?;
-    fs::write(&output, AUDITAUR_GATE_EXTENSION)
-        .with_context(|| format!("failed to write extension file {}", output.display()))?;
-    let result = InitSkillResult {
+    let mut extensions = Vec::new();
+    for (name, output, contents, existed) in &targets {
+        let status = match (existed, force) {
+            (true, false) => "skipped",
+            (true, true) => "overwritten",
+            (false, _) => "installed",
+        };
+        if status != "skipped" {
+            let parent = output
+                .parent()
+                .ok_or_else(|| anyhow!("invalid extension output path: {}", output.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create extension directory {}", parent.display())
+            })?;
+            fs::write(output, contents)
+                .with_context(|| format!("failed to write extension file {}", output.display()))?;
+        }
+        extensions.push(InitExtension {
+            name,
+            path: output.to_string_lossy().to_string(),
+            status,
+        });
+    }
+    let result = InitExtensionResult {
         ok: true,
-        path: output.to_string_lossy().to_string(),
-        overwritten: existed,
+        path: extensions[0].path.clone(),
+        overwritten: extensions[0].status == "overwritten",
+        extensions,
     };
     read::print_json_or_table(json, &result, || {
-        println!(
-            "Installed Auditaur gate canvas extension at {}",
-            output.display()
-        );
-        if existed {
-            println!("Existing extension was overwritten.");
+        for ext in &result.extensions {
+            match ext.status {
+                "installed" => println!("Installed {} canvas extension at {}", ext.name, ext.path),
+                "overwritten" => {
+                    println!("Overwrote {} canvas extension at {}", ext.name, ext.path)
+                }
+                _ => println!(
+                    "Kept existing {} canvas extension at {} (pass --force to overwrite)",
+                    ext.name, ext.path
+                ),
+            }
         }
         Ok(())
     })
@@ -334,7 +399,7 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  skill  Install the Auditaur debug agent skill into a repository");
-    println!("  extension  Install the Auditaur gate canvas extension into a repository");
+    println!("  extension  Install the Auditaur canvas extensions (manual gate, drill explorer) into a repository");
     println!("  diagnostics  Install optional generic diagnostics config and guidance");
 }
 
@@ -344,6 +409,9 @@ fn print_skill_help() {
 
 fn print_extension_help() {
     println!("Usage: auditaur init extension [--path <repo-root>] [--force] [--json]");
+    println!();
+    println!("Installs .github/extensions/auditaur-gate and .github/extensions/auditaur-drills.");
+    println!("Existing extensions are kept unless --force is passed.");
 }
 
 fn print_diagnostics_help() {

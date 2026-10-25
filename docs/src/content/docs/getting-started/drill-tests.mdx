@@ -153,6 +153,20 @@ A running test command stops gracefully, like Ctrl+C, when a `cancel.request` fi
 
 Poll `drill_show` until `status` is no longer `running`. See [MCP Tools](/reference/mcp-tools/).
 
+## In the Copilot app
+
+`auditaur init extension` installs the `auditaur-drill-explorer` canvas. It lists every suite and test with its latest result, a strip of recent results, flaky and slow badges, and the last error. Run everything, a suite, one test, or the last failures from the canvas; a progress bar tracks the run, and **Cancel run** stops it.
+
+Open input, all optional:
+
+| Field | Meaning |
+| --- | --- |
+| `cwd` | Folder holding `.auditaur/drills`, relative to the repo root. |
+| `cli` | Path to `auditaur`; defaults to `$AUDITAUR_BIN`, then `PATH`. |
+| `run` | `{ app, command, args }` for the run buttons: `--app`, the launch command after `--`, and extra `drill test` arguments. |
+
+Agents can call its `get_summary`, `refresh`, `run`, and `cancel` actions.
+
 ## CI
 
 Build a debug app, which embeds the frontend and keeps the drive bridge on, then run the drills against the binary:
