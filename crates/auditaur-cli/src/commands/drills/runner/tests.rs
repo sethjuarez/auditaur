@@ -64,6 +64,7 @@ impl AppDriver for FakeDriver {
         };
         match target.as_str() {
             "#fail" => StepResult::Failed(ErrorInfo::new("boom")),
+            "#skip" => StepResult::Skipped,
             "#newbaseline" => {
                 ctx.wrote_baseline = true;
                 StepResult::Failed(ErrorInfo::new("wrote baseline"))
@@ -465,6 +466,62 @@ fn expect_fail_inverts_the_outcome_and_does_not_retry() {
     let fixed = test(&ran, "fixed");
     assert_eq!(fixed.outcome, Some(Outcome::Unexpected));
     assert_eq!(fixed.attempts.len(), 3);
+}
+
+#[test]
+fn a_skipping_step_skips_the_rest_of_the_test_without_retrying() {
+    let ran = run(r##"{
+        "retries": 2,
+        "beforeEach": [{ "click": "#be" }],
+        "afterEach": [{ "click": "#ae" }],
+        "tests": [
+            { "name": "body", "steps": [{ "click": "#skip" }, { "click": "#never" }] },
+            { "name": "known", "expectFail": true, "steps": [{ "click": "#skip" }] }
+        ]
+    }"##);
+    let body = test(&ran, "body");
+    assert_eq!(body.status, Status::Skipped);
+    assert_eq!(body.outcome, Some(Outcome::Skipped));
+    assert_eq!(body.attempts.len(), 1);
+    assert!(body.attempts[0].error.is_none());
+    assert_eq!(
+        steps(&ran, "body", 0),
+        vec![
+            ("click #be".to_string(), Status::Passed),
+            ("click #skip".to_string(), Status::Skipped),
+            ("click #ae".to_string(), Status::Passed),
+        ]
+    );
+    assert!(!ran.log.iter().any(|entry| entry.contains("#never")));
+    assert_eq!(test(&ran, "known").outcome, Some(Outcome::Skipped));
+    assert_eq!(ran.report.totals.skipped, 2);
+
+    // Skipping in beforeEach skips the body.
+    let ran = run(r##"{
+        "beforeEach": [{ "click": "#skip" }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#body" }] }]
+    }"##);
+    assert!(!ran.log.iter().any(|entry| entry.contains("#body")));
+    assert_eq!(test(&ran, "t").status, Status::Skipped);
+
+    // Skipping in beforeAll skips every test; afterAll still runs.
+    let ran = run(r##"{
+        "beforeAll": [{ "click": "#skip" }, { "click": "#never" }],
+        "afterAll": [{ "click": "#aa" }],
+        "tests": [
+            { "name": "a", "steps": [{ "click": "#a" }] },
+            { "name": "b", "steps": [{ "click": "#b" }] }
+        ]
+    }"##);
+    assert!(!ran
+        .log
+        .iter()
+        .any(|e| e.contains("#never") || e == "click #a" || e == "click #b"));
+    assert!(ran.log.iter().any(|e| e == "click #aa"));
+    assert_eq!(test(&ran, "a").outcome, Some(Outcome::Skipped));
+    assert_eq!(test(&ran, "b").outcome, Some(Outcome::Skipped));
+    assert_eq!(ran.report.totals.skipped, 2);
+    assert!(ran.report.suites[0].error.is_none());
 }
 
 #[test]

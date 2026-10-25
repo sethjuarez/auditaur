@@ -326,10 +326,6 @@ fn timed_out(message: impl Into<String>) -> StepResult {
     StepResult::TimedOut(ErrorInfo::new(message))
 }
 
-fn unsupported(what: &str) -> StepResult {
-    failed(format!("{what} is not supported by the drill runner yet"))
-}
-
 /// Bridge selectors carry the whole locator as JSON; the bridge resolves it strictly.
 pub(crate) const LOCATOR_PREFIX: &str = "locator:";
 /// The bridge's error when an action's target is missing (or not visible).
@@ -390,6 +386,45 @@ fn explain(error: String) -> String {
 }
 
 impl BridgeDriver {
+    /// Wait for a human (or agent) through the gate queue; see [`drill::run_test_gate`].
+    fn gate(&mut self, ctx: &mut StepCtx<'_>, gate: &Value) -> StepOutcome {
+        let target = self.session.gate_target();
+        let cancel = ctx.cancel.clone();
+        let child = &mut self.child;
+        let mut stop = || {
+            if cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::SeqCst))
+            {
+                return Some("interrupted".to_string());
+            }
+            match child.as_mut().map(Child::try_wait) {
+                Some(Ok(Some(status))) => Some(format!("app process exited ({status})")),
+                _ => None,
+            }
+        };
+        let deadline = ctx.deadline;
+        let writer = &mut *ctx.writer;
+        let mut waiting = |request: Value| writer.gate_waiting(request);
+        let outcome = drill::run_test_gate(gate, &target, deadline, &mut stop, &mut waiting);
+        let (response, result) = match outcome {
+            Ok(drill::TestGateOutcome::Passed(report)) => (report, Ok(())),
+            Ok(drill::TestGateOutcome::Skipped(report)) => (report, Err(StepResult::Skipped)),
+            Ok(drill::TestGateOutcome::Failed(message, report)) => (report, Err(failed(message))),
+            Ok(drill::TestGateOutcome::TimedOut(message)) => {
+                (json!({ "timedOut": true }), Err(timed_out(message)))
+            }
+            Ok(drill::TestGateOutcome::Stopped(reason)) => {
+                (json!({ "stopped": reason }), Err(failed(reason)))
+            }
+            Err(error) => return Err(failed(format!("{error:#}"))),
+        };
+        if let Err(error) = ctx.writer.gate_resolved(response) {
+            return Err(failed(format!("could not record gate result: {error:#}")));
+        }
+        result
+    }
+
     fn step(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepOutcome {
         match &step.kind {
             StepKind::Click(target) => self.act(ctx, "click", target, None, Vec::new()),
@@ -434,7 +469,7 @@ impl BridgeDriver {
                 Ok(())
             }
             StepKind::Screenshot { name, target } => self.screenshot(ctx, name, target.as_ref()),
-            StepKind::Gate(_) => Err(unsupported("`gate`")),
+            StepKind::Gate(gate) => self.gate(ctx, gate),
             StepKind::Expect(expectation) => match &expectation.matcher {
                 Matcher::ToMatchAriaSnapshot(_) => self.expect_aria(ctx, expectation),
                 Matcher::ToHaveScreenshot(options) => {

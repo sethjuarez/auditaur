@@ -5,9 +5,9 @@
 import { createServer } from "node:http";
 import { execFile, spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
-import { readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { joinSession, createCanvas, CanvasError } from "@github/copilot-sdk/extension";
 
@@ -164,38 +164,49 @@ function processAlive(pid) {
     }
 }
 
-async function readRuns(state) {
-    const root = join(state.workspace, RUNS_DIR);
+const RUN_ID = /^\d{8}-\d{6}-\d{3}[A-Za-z0-9-]*$/;
+
+async function readRun(state, id) {
+    try {
+        const report = JSON.parse(await readFile(join(state.workspace, RUNS_DIR, id, "run.json"), "utf8"));
+        // Same rule as `drill show`: a running run whose owner died was interrupted.
+        if (report.status === "running" && !processAlive(report.pid)) {
+            report.status = "interrupted";
+            for (const suite of report.suites ?? []) {
+                for (const test of suite.tests ?? []) {
+                    if (test.status === "running") test.status = "interrupted";
+                }
+            }
+        }
+        return report;
+    } catch {
+        // Missing, being written, or pruned; the next poll picks it up.
+        return null;
+    }
+}
+
+// Every run, newest first. Pruning keeps this short; `HISTORY_RUNS` only limits what is shown.
+async function readAllRuns(state) {
     let ids;
     try {
-        ids = (await readdir(root, { withFileTypes: true }))
-            .filter((entry) => entry.isDirectory() && /^\d{8}-\d{6}-\d{3}/.test(entry.name))
+        ids = (await readdir(join(state.workspace, RUNS_DIR), { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory() && RUN_ID.test(entry.name))
             .map((entry) => entry.name)
             .sort()
-            .reverse()
-            .slice(0, HISTORY_RUNS);
+            .reverse();
     } catch {
         return [];
     }
     const runs = [];
     for (const id of ids) {
-        try {
-            const report = JSON.parse(await readFile(join(root, id, "run.json"), "utf8"));
-            // Same rule as `drill show`: a running run whose owner died was interrupted.
-            if (report.status === "running" && !processAlive(report.pid)) {
-                report.status = "interrupted";
-                for (const suite of report.suites ?? []) {
-                    for (const test of suite.tests ?? []) {
-                        if (test.status === "running") test.status = "interrupted";
-                    }
-                }
-            }
-            runs.push(report);
-        } catch {
-            // Being written or pruned; the next poll picks it up.
-        }
+        const report = await readRun(state, id);
+        if (report) runs.push(report);
     }
     return runs;
+}
+
+async function readRuns(state) {
+    return (await readAllRuns(state)).slice(0, HISTORY_RUNS);
 }
 
 // One test's result in one run, folded to what the explorer shows.
@@ -381,11 +392,13 @@ async function launchRun(state, request) {
     return { started: true, pid: launch.pid, args };
 }
 
-async function cancelRun(state) {
-    const running = (await readRuns(state)).filter((run) => run.status === "running");
-    // Prefer the run this canvas launched; otherwise the newest run in the workspace.
+async function cancelRun(state, runId = null) {
+    const running = (await readAllRuns(state)).filter((run) => run.status === "running");
+    // Prefer the named run, then the run this canvas launched, then the newest run in the workspace.
     const ours = state.launch && !state.launch.exited ? state.launch.pid : null;
-    const active = running.find((run) => run.pid === ours) ?? running[0];
+    const active = runId
+        ? running.find((run) => run.runId === runId)
+        : running.find((run) => run.pid === ours) ?? running[0];
     if (!active) {
         throw new CanvasError("no_active_run", "no drill run is in progress");
     }
@@ -421,19 +434,16 @@ async function readBody(req) {
     return text ? JSON.parse(text) : {};
 }
 
-async function startServer(state) {
+async function startServer(routes, html) {
     const server = createServer(async (req, res) => {
         try {
             const url = new URL(req.url ?? "/", "http://127.0.0.1");
-            if (req.method === "GET" && url.pathname === "/state") {
-                jsonResponse(res, await snapshot(state, url.searchParams.has("refresh")));
-            } else if (req.method === "POST" && url.pathname === "/run") {
-                jsonResponse(res, await startRun(state, await readBody(req)));
-            } else if (req.method === "POST" && url.pathname === "/cancel") {
-                jsonResponse(res, await cancelRun(state));
+            const route = routes[`${req.method} ${url.pathname}`];
+            if (route) {
+                jsonResponse(res, await route(url, req));
             } else if (req.method === "GET" && url.pathname === "/") {
                 res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-                res.end(EXPLORER_HTML);
+                res.end(html);
             } else {
                 jsonResponse(res, { error: "not found" }, 404);
             }
@@ -443,6 +453,14 @@ async function startServer(state) {
     });
     await new Promise((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
     return { server, url: `http://127.0.0.1:${server.address().port}/` };
+}
+
+function explorerRoutes(state) {
+    return {
+        "GET /state": (url) => snapshot(state, url.searchParams.has("refresh")),
+        "POST /run": async (_url, req) => startRun(state, await readBody(req)),
+        "POST /cancel": () => cancelRun(state),
+    };
 }
 
 function configure(state, input) {
@@ -455,12 +473,323 @@ function configure(state, input) {
     return state;
 }
 
+const liveSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+        cwd: openSchema.properties.cwd,
+        runId: { type: "string", pattern: "^\\d{8}-\\d{6}-\\d{3}[A-Za-z0-9-]*$", description: "Show this run instead of following the newest one." },
+    },
+};
+
+function configureLive(state, input) {
+    state.workspace = workspaceFor(input);
+    state.runId = input?.runId ?? null;
+    return state;
+}
+
+async function closeEntry(ctx) {
+    const entry = servers.get(ctx.instanceId);
+    if (entry) {
+        servers.delete(ctx.instanceId);
+        await new Promise((resolvePromise) => entry.server.close(() => resolvePromise()));
+    }
+}
+
 function entryFor(ctx) {
     const entry = servers.get(ctx.instanceId);
     if (!entry) {
         throw new CanvasError("not_open", "this canvas instance is not open");
     }
     return entry;
+}
+
+// ---- Live run canvas -------------------------------------------------------------------------
+
+const EVENT_CACHE_LIMIT = 16;
+const eventCache = new Map();
+
+const scopeKey = (event) => `${event.suiteId}|${event.testId ?? ""}|${event.attempt ?? ""}`;
+const errorText = (error) => (error == null ? null : typeof error === "string" ? error : error.message ?? JSON.stringify(error));
+
+// Steps and pending gates come from the event log; `run.json` only carries test-level state.
+function foldEvents(text) {
+    const steps = new Map();
+    const gates = new Map();
+    for (const line of text.split("\n")) {
+        let event;
+        try {
+            event = JSON.parse(line);
+        } catch {
+            continue; // Blank, or the tail of a line still being written.
+        }
+        const key = scopeKey(event);
+        if (event.type === "stepStarted") {
+            if (!steps.has(key)) steps.set(key, []);
+            steps.get(key).push({
+                index: event.index,
+                phase: event.phase,
+                title: event.title,
+                action: event.action,
+                status: "running",
+                soft: false,
+                startedAt: event.ts,
+                durationMs: null,
+                error: null,
+            });
+        } else if (event.type === "stepFinished") {
+            const step = (steps.get(key) ?? []).findLast((candidate) => candidate.index === event.index && candidate.status === "running");
+            if (step) {
+                Object.assign(step, { status: event.status, soft: event.soft, durationMs: event.durationMs, error: errorText(event.error) });
+            }
+        } else if (event.type === "gateWaiting") {
+            gates.set(`${key}|${event.step}`, { ...event, since: event.ts });
+        } else if (event.type === "gateResolved") {
+            gates.delete(`${key}|${event.step}`);
+        }
+    }
+    return { steps, gates: [...gates.values()] };
+}
+
+async function readEvents(path) {
+    const info = await stat(path).catch(() => null);
+    if (!info) return { steps: new Map(), gates: [] };
+    const cached = eventCache.get(path);
+    if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.model;
+    const text = await readFile(path, "utf8").catch(() => null);
+    if (text == null) return cached?.model ?? { steps: new Map(), gates: [] };
+    const model = foldEvents(text);
+    eventCache.delete(path);
+    eventCache.set(path, { size: info.size, mtimeMs: info.mtimeMs, model });
+    if (eventCache.size > EVENT_CACHE_LIMIT) eventCache.delete(eventCache.keys().next().value);
+    return model;
+}
+
+async function exists(path) {
+    return Boolean(await stat(path).catch(() => null));
+}
+
+async function pickRun(state) {
+    const all = await readAllRuns(state);
+    const runs = all.slice(0, HISTORY_RUNS);
+    let run;
+    if (state.runId) {
+        run = all.find((candidate) => candidate.runId === state.runId) ?? (await readRun(state, state.runId));
+    } else {
+        // Follow the workspace: the run in progress (however old), else the newest one.
+        run = all.find((candidate) => candidate.status === "running") ?? all[0] ?? null;
+    }
+    if (run && !runs.some((candidate) => candidate.runId === run.runId)) runs.push(run);
+    return { run, runs };
+}
+
+// Pending gates whose request file is still published, with what the panel needs to answer them.
+async function pendingGates(run, events) {
+    if (run.status !== "running") return [];
+    const titles = new Map((run.suites ?? []).flatMap((suite) => (suite.tests ?? []).map((test) => [test.id, test.title])));
+    const suites = new Map((run.suites ?? []).map((suite) => [suite.id, suite.suite]));
+    const gates = [];
+    for (const waiting of events.gates) {
+        const request = waiting.gate?.request ?? null;
+        if (request && !(await exists(request.requestPath))) continue;
+        gates.push({
+            requestId: request?.requestId ?? null,
+            test: waiting.testId ? titles.get(waiting.testId) ?? waiting.testId : `${suites.get(waiting.suiteId) ?? waiting.suiteId} (hook)`,
+            attempt: waiting.attempt,
+            since: waiting.since,
+            name: waiting.gate?.name,
+            instructions: waiting.gate?.instructions,
+            selector: waiting.gate?.selector ?? null,
+            expectText: waiting.gate?.expectText ?? null,
+            timeoutMs: waiting.gate?.timeoutMs ?? null,
+            manualContinue: waiting.gate?.manualContinue ?? false,
+            choices: waiting.gate?.choices ?? [],
+            inputs: waiting.gate?.inputs ?? [],
+            clipboard: waiting.gate?.clipboard ?? null,
+        });
+    }
+    return gates;
+}
+
+async function liveView(state) {
+    const { run, runs } = await pickRun(state);
+    const view = {
+        workspace: state.workspace,
+        pinned: state.runId ?? null,
+        runs: runs.map((candidate) => ({ runId: candidate.runId, status: candidate.status })),
+        run: null,
+        gates: [],
+    };
+    if (!run) return view;
+    const events = await readEvents(join(state.workspace, RUNS_DIR, run.runId, "events.jsonl"));
+    const live = run.status === "running";
+    const stepsFor = (suiteId, testId, attempt) =>
+        (events.steps.get(`${suiteId}|${testId ?? ""}|${attempt ?? ""}`) ?? []).map((step) =>
+            // A step left running by a dead or finished run never finished.
+            !live && step.status === "running" ? { ...step, status: "interrupted" } : step,
+        );
+    view.run = {
+        runId: run.runId,
+        status: run.status,
+        startedAt: run.startedAt,
+        durationMs: run.durationMs,
+        totals: run.totals,
+        suites: (run.suites ?? []).map((suite) => ({
+            id: suite.id,
+            suite: suite.suite,
+            path: suite.path,
+            status: suite.status,
+            durationMs: suite.durationMs,
+            error: errorText(suite.error),
+            hooks: stepsFor(suite.id, null, null),
+            tests: (suite.tests ?? []).map((test) => ({
+                id: test.id,
+                name: test.name,
+                title: test.title,
+                tags: test.tags ?? [],
+                result: resultOf(test),
+                durationMs: test.durationMs,
+                attempts: (test.attempts ?? []).map((attempt) => ({
+                    attempt: attempt.attempt,
+                    status: !live && attempt.status === "running" ? "interrupted" : attempt.status,
+                    durationMs: attempt.durationMs,
+                    error: errorText(attempt.error),
+                    steps: stepsFor(suite.id, test.id, attempt.attempt),
+                })),
+            })),
+        })),
+    };
+    view.gates = await pendingGates(run, events);
+    return view;
+}
+
+const GATE_REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+// Answers a gate the shown run is waiting on, with the same response file the gate canvas and
+// `respond_human_gate` write. Only gates announced in the run's own event log can be answered.
+async function respondGate(state, body) {
+    const { run } = await pickRun(state);
+    if (!run || run.status !== "running") {
+        throw new CanvasError("no_active_run", "the shown run is not waiting on a gate");
+    }
+    const requestId = String(body?.requestId ?? "");
+    if (!GATE_REQUEST_ID.test(requestId)) {
+        throw new CanvasError("invalid_gate", "requestId is required");
+    }
+    const events = await readEvents(join(state.workspace, RUNS_DIR, run.runId, "events.jsonl"));
+    const waiting = events.gates.find((candidate) => candidate.gate?.request?.requestId === requestId);
+    const request = waiting?.gate?.request;
+    if (!request || !(await exists(request.requestPath))) {
+        throw new CanvasError("gate_not_pending", `gate \`${requestId}\` is not waiting for an answer`);
+    }
+    const requestPath = resolve(request.requestPath);
+    const responsePath = resolve(request.responsePath);
+    const queue = dirname(dirname(requestPath));
+    if (
+        basename(requestPath) !== `${requestId}.json` ||
+        basename(dirname(requestPath)) !== "requests" ||
+        basename(queue) !== "human-gates" ||
+        responsePath !== join(queue, "responses", `${requestId}.json`)
+    ) {
+        throw new CanvasError("invalid_gate", "the gate's request is outside a human-gates queue");
+    }
+    // The published request, not just the event log, must name this gate.
+    const published = await readFile(requestPath, "utf8")
+        .then((text) => JSON.parse(text))
+        .catch(() => null);
+    if (published?.requestId !== requestId || published?.nonce !== request.nonce) {
+        throw new CanvasError("gate_not_pending", `gate \`${requestId}\` is not waiting for an answer`);
+    }
+    const gate = waiting.gate;
+    const choices = gate.choices ?? [];
+    let choiceId = body?.choiceId ?? null;
+    if (choices.length) {
+        if (!choices.some((choice) => choice.id === choiceId)) {
+            throw new CanvasError("invalid_choice", `choose one of: ${choices.map((choice) => choice.id).join(", ")}`);
+        }
+    } else if (choiceId != null) {
+        throw new CanvasError("invalid_choice", "this gate has no choices; omit choiceId to continue");
+    }
+    const given = Array.isArray(body?.inputs) ? body.inputs : [];
+    const inputs = (gate.inputs ?? []).map((input) => ({
+        id: input.id,
+        value: String(given.find((candidate) => candidate?.id === input.id)?.value ?? ""),
+    }));
+    const chosen = choices.find((choice) => choice.id === choiceId);
+    // The runner checks required inputs for every answer except retry.
+    if (chosen?.outcome !== "retry") {
+        const missing = (gate.inputs ?? []).filter((input, index) => input.required && !inputs[index].value.trim());
+        if (missing.length) {
+            throw new CanvasError("missing_input", `fill in: ${missing.map((input) => input.label ?? input.id).join(", ")}`);
+        }
+    }
+    const response = {
+        schemaVersion: 1,
+        requestId,
+        runId: request.runId,
+        gateId: request.gateId,
+        attempt: request.attempt,
+        nonce: request.nonce,
+        responder: "human-confirmed-via-drill-run-canvas",
+        choiceId,
+        inputs,
+    };
+    const temp = `${responsePath}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temp, JSON.stringify(response, null, 2), "utf8");
+    await rename(temp, responsePath);
+    // The gate may have timed out or been cancelled while we wrote: its cleanup already ran, so the
+    // request is gone but our answer is not. Drop it (it can hold sensitive inputs). If both are
+    // gone, the runner consumed the answer.
+    if (!(await exists(requestPath)) && (await unlink(responsePath).then(() => true, () => false))) {
+        throw new CanvasError("gate_not_pending", `gate \`${requestId}\` stopped waiting before the answer arrived`);
+    }
+    return { requestId, choiceId, answered: true };
+}
+
+function liveRoutes(state) {
+    return {
+        "GET /state": () => liveView(state),
+        "POST /gate": async (_url, req) => respondGate(state, await readBody(req)),
+        "POST /cancel": async () => {
+            const { run } = await pickRun(state);
+            if (!run || run.status !== "running") {
+                throw new CanvasError("no_active_run", "the shown run is not in progress");
+            }
+            return cancelRun(state, run.runId);
+        },
+        "POST /follow": async (_url, req) => {
+            const runId = (await readBody(req)).runId ?? null;
+            if (runId != null && !RUN_ID.test(runId)) {
+                throw new CanvasError("invalid_run", "not a drill run id");
+            }
+            state.runId = runId;
+            return { pinned: state.runId };
+        },
+    };
+}
+
+function liveSummary(view) {
+    const run = view.run;
+    if (!run) return { workspace: view.workspace, run: null, gates: [] };
+    const tests = run.suites.flatMap((suite) => suite.tests);
+    return {
+        runId: run.runId,
+        status: run.status,
+        totals: run.totals,
+        durationMs: run.durationMs,
+        running: tests.filter((test) => test.result === "running").map((test) => test.title),
+        failed: tests
+            .filter((test) => test.result === "failed")
+            .map((test) => ({ title: test.title, error: test.attempts.at(-1)?.error ?? null })),
+        gates: view.gates.map(({ requestId, test, name, instructions, choices, inputs }) => ({
+            requestId,
+            test,
+            name,
+            instructions,
+            choices,
+            inputs: inputs.map(({ id, label, kind, required }) => ({ id, label, kind, required })),
+        })),
+    };
 }
 
 const EXPLORER_HTML = String.raw`<!doctype html>
@@ -697,6 +1026,280 @@ load();
 
 sweepOrphanLogs();
 
+const LIVE_HTML = String.raw`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Drill run</title>
+<style>
+  body {
+    margin: 0;
+    background: var(--background-color-default, #fff);
+    color: var(--text-color-default, #1f2328);
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    font-size: var(--text-body-medium, 14px);
+    line-height: var(--leading-body-medium, 20px);
+  }
+  header { position: sticky; top: 0; z-index: 1; background: var(--background-color-default, #fff); padding: 12px 16px 8px; border-bottom: 1px solid var(--border-color-default, #d0d7de); }
+  h1 { margin: 0; font-size: 16px; font-weight: var(--font-weight-semibold, 600); }
+  h2 { margin: 0 0 4px; font-size: 14px; font-weight: var(--font-weight-semibold, 600); }
+  .muted { color: var(--text-color-muted, #656d76); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  button, select, input {
+    font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 6px; color: inherit;
+    border: 1px solid var(--border-color-default, #d0d7de); background: transparent;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--text-color-muted, #656d76); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--true-color-blue, #0969da); border-color: var(--true-color-blue, #0969da); color: var(--color-white, #fff); }
+  button:focus-visible, select:focus-visible, input:focus-visible, .test:focus-visible { outline: 2px solid var(--color-focus-outline, #0969da); outline-offset: 1px; }
+  main { padding: 0 16px 24px; }
+  .path { font-family: var(--font-mono, Consolas, monospace); font-size: 11px; }
+  .banner { margin-top: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
+  .banner.error { background: var(--true-color-red-muted, #ffebe9); }
+  .bar { height: 4px; border-radius: 2px; background: var(--border-color-default, #d0d7de); margin-top: 8px; overflow: hidden; display: flex; }
+  .bar > div { height: 100%; transition: width .3s; }
+  .gate { margin-top: 12px; padding: 10px 12px; border-radius: 8px; border: 2px solid var(--true-color-orange, #bc4c00); background: var(--true-color-orange-muted, #fff1e5); }
+  .gate p { margin: 4px 0; white-space: pre-wrap; }
+  .gate label { display: block; font-size: 12px; margin-top: 6px; }
+  .gate input { display: block; width: 100%; box-sizing: border-box; margin-top: 2px; padding: 4px 8px; }
+  .gate .row { margin-top: 8px; }
+  .suite { margin-top: 12px; }
+  .suite-head { padding: 6px 0; border-bottom: 1px solid var(--border-color-default, #d0d7de); }
+  .suite-name { font-weight: var(--font-weight-semibold, 600); }
+  .test { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: center; padding: 4px 0 4px 4px; border-bottom: 1px solid var(--border-color-default, #d0d7de); cursor: pointer; }
+  .test:hover { background: color-mix(in srgb, var(--text-color-muted, #656d76) 8%, transparent); }
+  .icon { text-align: center; font-weight: 700; }
+  .tag { font-size: 11px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--border-color-default, #d0d7de); margin-left: 4px; white-space: nowrap; }
+  .duration { font-size: 11px; min-width: 48px; text-align: right; }
+  .detail { font-size: 12px; padding: 2px 0 8px 30px; border-bottom: 1px solid var(--border-color-default, #d0d7de); }
+  .attempt-head { margin-top: 4px; font-weight: var(--font-weight-semibold, 600); }
+  .step { display: grid; grid-template-columns: 16px auto 1fr auto; gap: 6px; align-items: baseline; padding: 1px 0; }
+  .phase { font-size: 11px; }
+  .error { color: var(--true-color-red, #cf222e); white-space: pre-wrap; font-family: var(--font-mono, Consolas, monospace); font-size: 11px; }
+  .step .error { grid-column: 3 / 5; }
+  .passed { color: var(--true-color-green, #1a7f37); }
+  .failed, .timedOut { color: var(--true-color-red, #cf222e); }
+  .flaky { color: var(--true-color-orange, #bc4c00); }
+  .interrupted { color: var(--true-color-yellow, #9a6700); }
+  .running { color: var(--true-color-blue, #0969da); }
+  .skipped, .notRun, .pending { color: var(--text-color-muted, #656d76); }
+  .empty { padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Drill run</h1>
+    <span id="status"></span>
+    <span class="spacer"></span>
+    <select id="pick" aria-label="Run to show"></select>
+    <button id="cancel" hidden>Cancel run</button>
+  </div>
+  <div id="summary" class="muted" style="font-size:12px;margin-top:4px"></div>
+  <div id="bar" class="bar" hidden></div>
+  <div id="banners" aria-live="polite"></div>
+</header>
+<main>
+  <div id="gates" aria-live="assertive"></div>
+  <div id="tree"><div class="empty muted">Loading…</div></div>
+</main>
+<script>
+const ICONS = { passed: "✓", failed: "✗", timedOut: "⏱", flaky: "◐", interrupted: "!", running: "●", skipped: "⊘", notRun: "·", pending: "·" };
+const toggled = new Map();
+let view = null;
+let actionError = null;
+let gateSig = null;
+let timer = null;
+
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const ms = (raw) => { const value = Number(raw); return raw == null || Number.isNaN(value) ? "" : value < 1000 ? Math.round(value) + " ms" : (value / 1000).toFixed(1) + " s"; };
+const since = (ts) => { const start = Date.parse(ts); return Number.isNaN(start) ? null : Math.max(0, Date.now() - start); };
+const cls = (status) => (ICONS[status] ? status : "notRun");
+const icon = (status) => '<span class="icon ' + cls(status) + '" title="' + esc(status) + '">' + ICONS[cls(status)] + "</span>";
+
+async function post(path, body) {
+  actionError = null;
+  try {
+    const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    const value = await res.json();
+    if (!res.ok) throw new Error(value.error);
+    return value;
+  } catch (error) {
+    actionError = error.message;
+    return null;
+  } finally {
+    await load();
+  }
+}
+
+async function load() {
+  clearTimeout(timer);
+  try {
+    view = await (await fetch("/state")).json();
+    if (view.error) throw new Error(view.error);
+  } catch (error) {
+    view = { ...(view ?? { runs: [], gates: [], run: null }), loadError: "Canvas server unreachable: " + error.message };
+  }
+  render();
+  timer = setTimeout(load, view.run?.status === "running" ? 500 : 3000);
+}
+
+function stepRow(step) {
+  const duration = step.status === "running" ? since(step.startedAt) : step.durationMs;
+  return '<div class="step">' + icon(step.status) +
+    '<span class="phase muted">' + esc(step.phase === "test" ? "" : step.phase) + "</span>" +
+    "<span>" + esc(step.title) + (step.soft ? ' <span class="tag">soft</span>' : "") + "</span>" +
+    '<span class="duration muted">' + ms(duration) + "</span>" +
+    (step.error ? '<div class="error">' + esc(step.error) + "</div>" : "") + "</div>";
+}
+
+function isOpen(id, auto) {
+  return toggled.has(id) ? toggled.get(id) : auto;
+}
+
+function testRows(suite) {
+  return suite.tests.map((test) => {
+    const last = test.attempts.at(-1);
+    const auto = test.result === "running" || test.result === "failed" || test.result === "interrupted";
+    const open = isOpen(test.id, auto);
+    const live = last?.status === "running" ? since(last?.steps?.[0]?.startedAt) : null;
+    let html = '<div class="test" data-id="' + esc(test.id) + '" role="button" tabindex="0" aria-expanded="' + open + '">' +
+      icon(test.result) + "<span>" + esc(test.name) + test.tags.map((tag) => '<span class="tag">@' + esc(tag) + "</span>").join("") +
+      (test.attempts.length > 1 ? '<span class="tag">' + test.attempts.length + " attempts</span>" : "") + "</span>" +
+      '<span class="duration muted">' + ms(live ?? test.durationMs) + "</span></div>";
+    if (open) {
+      html += '<div class="detail">' + (test.attempts.length ? test.attempts.map((attempt) =>
+        (test.attempts.length > 1 ? '<div class="attempt-head ' + cls(attempt.status) + '">Attempt ' + (Number(attempt.attempt) + 1) + " · " + esc(attempt.status) + "</div>" : "") +
+        (attempt.steps.length ? attempt.steps.map(stepRow).join("") : '<div class="muted">No steps yet.</div>') +
+        (attempt.error && !attempt.steps.some((step) => step.error) ? '<div class="error">' + esc(attempt.error) + "</div>" : "")
+      ).join("") : '<div class="muted">Not started.</div>') + "</div>";
+    }
+    return html;
+  }).join("");
+}
+
+function gateCard(gate) {
+  const choices = gate.choices.length ? gate.choices : [{ id: "", label: "Continue", outcome: "continue" }];
+  const clip = gate.clipboard;
+  return '<form class="gate" data-request="' + esc(gate.requestId) + '">' +
+    "<h2>⏸ " + esc(gate.name) + "</h2>" +
+    '<div class="muted" style="font-size:12px">' + esc(gate.test) + " · waiting since " + esc(new Date(gate.since).toLocaleTimeString()) +
+    (gate.timeoutMs ? " · times out after " + ms(gate.timeoutMs) : "") + "</div>" +
+    "<p>" + esc(gate.instructions) + "</p>" +
+    (gate.selector ? '<p class="muted">Continues on its own when <span class="path">' + esc(gate.selector) + "</span>" +
+      (gate.expectText ? " shows “" + esc(gate.expectText) + "”" : " appears") + ".</p>" : "") +
+    (clip ? '<p class="muted">' + esc(clip.label) + ": " + (clip.value && !clip.sensitive && !clip.redacted ? '<span class="path">' + esc(clip.value) + "</span>" : "(hidden)") +
+      " · clipboard " + esc(clip.status) + "</p>" : "") +
+    gate.inputs.map((input) => "<label>" + esc(input.label ?? input.id) + (input.required ? " *" : "") +
+      '<input name="' + esc(input.id) + '" type="' + (input.sensitive ? "password" : "text") + '" autocomplete="off"' + (input.required ? " required" : "") + "></label>").join("") +
+    (gate.requestId
+      ? '<div class="row">' + choices.map((choice, index) => '<button type="submit" value="' + esc(choice.id) + '" data-outcome="' + esc(choice.outcome) + '"' +
+          (index === 0 ? ' class="primary"' : "") + ">" + esc(choice.label) + "</button>").join("") + "</div>"
+      : '<p class="muted">This gate has no answer queue; answer it in the terminal running the drill.</p>') +
+    "</form>";
+}
+
+function render() {
+  if (!view) return;
+  const pick = document.getElementById("pick");
+  const options = '<option value="">Follow latest</option>' + view.runs.map((run) =>
+    '<option value="' + esc(run.runId) + '">' + esc(run.runId) + " · " + esc(run.status) + "</option>").join("");
+  if (pick.dataset.options !== options) {
+    pick.innerHTML = options;
+    pick.dataset.options = options;
+  }
+  if (document.activeElement !== pick) pick.value = view.pinned ?? "";
+
+  const run = view.run;
+  const banners = [];
+  if (actionError) banners.push('<div class="banner error">' + esc(actionError) + "</div>");
+  if (view.loadError) banners.push('<div class="banner error">' + esc(view.loadError) + "</div>");
+  document.getElementById("banners").innerHTML = banners.join("");
+  document.getElementById("cancel").hidden = run?.status !== "running";
+
+  const sig = JSON.stringify(view.gates.map((gate) => gate.requestId + ":" + gate.since));
+  if (sig !== gateSig) {
+    gateSig = sig;
+    document.getElementById("gates").innerHTML = view.gates.map(gateCard).join("");
+    document.querySelector("#gates input")?.focus();
+  }
+
+  if (!run) {
+    document.getElementById("status").innerHTML = "";
+    document.getElementById("summary").textContent = "";
+    document.getElementById("bar").hidden = true;
+    document.getElementById("tree").innerHTML = '<div class="empty muted">' +
+      (view.pinned ? "Run " + esc(view.pinned) + " was not found." : 'No drill runs in <span class="path">.auditaur/drill-runs</span> yet.') + "</div>";
+    return;
+  }
+  const tests = run.suites.flatMap((suite) => suite.tests);
+  const count = (result) => tests.filter((test) => test.result === result).length;
+  const done = tests.filter((test) => !["running", "notRun"].includes(test.result)).length;
+  document.getElementById("status").innerHTML = '<span class="' + cls(run.status) + '">' + esc(run.status) + "</span>";
+  document.getElementById("summary").innerHTML = ['<span class="path">' + esc(run.runId) + "</span>", done + "/" + tests.length + " done"]
+    .concat(["passed", "failed", "flaky", "skipped", "interrupted"].filter((result) => count(result))
+      .map((result) => '<span class="' + result + '">' + count(result) + " " + result + "</span>"))
+    .concat([ms(run.status === "running" ? since(run.startedAt) : run.durationMs)]).filter(Boolean).join(" · ");
+  const bar = document.getElementById("bar");
+  bar.hidden = !tests.length;
+  bar.innerHTML = ["passed", "flaky", "failed", "interrupted", "skipped"].map((result) =>
+    '<div style="width:' + (100 * count(result) / Math.max(1, tests.length)) + '%;background:currentColor" class="' + result + '"></div>').join("");
+
+  document.getElementById("tree").innerHTML = run.suites.map((suite) => {
+    const hooksOpen = isOpen("hooks:" + suite.id, suite.hooks.some((step) => step.status !== "passed"));
+    return '<section class="suite"><div class="suite-head row">' + icon(suite.status === "passed" ? "passed" : suite.status) +
+      '<span class="suite-name">' + esc(suite.suite) + '</span><span class="muted path">' + esc(suite.path) + "</span>" +
+      '<span class="spacer"></span><span class="duration muted">' + ms(suite.durationMs) + "</span></div>" +
+      (suite.error ? '<div class="error">' + esc(suite.error) + "</div>" : "") +
+      (suite.hooks.length ? '<div class="test" data-id="' + esc("hooks:" + suite.id) + '" role="button" tabindex="0" aria-expanded="' + hooksOpen + '">' +
+        icon(suite.hooks.some((step) => step.status === "running") ? "running" : suite.hooks.some((step) => ["failed", "timedOut"].includes(step.status)) ? "failed" : "passed") +
+        '<span class="muted">Suite hooks</span><span></span></div>' +
+        (hooksOpen ? '<div class="detail">' + suite.hooks.map(stepRow).join("") + "</div>" : "") : "") +
+      testRows(suite) + "</section>";
+  }).join("");
+}
+
+document.addEventListener("click", (event) => {
+  const target = event.target.closest("button, .test[data-id]");
+  if (!target || target.disabled) return;
+  if (target.id === "cancel") return post("/cancel");
+  if (target.classList.contains("test")) {
+    const auto = target.getAttribute("aria-expanded") === "true";
+    toggled.set(target.dataset.id, !auto);
+    render();
+  }
+});
+document.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const button = event.submitter;
+  const retry = button?.dataset.outcome === "retry";
+  if (!retry && !form.reportValidity()) return;
+  const inputs = [...form.querySelectorAll("input")].map((input) => ({ id: input.name, value: input.value }));
+  form.querySelectorAll("button").forEach((each) => { each.disabled = true; });
+  const answered = await post("/gate", { requestId: form.dataset.request, choiceId: button?.value || null, inputs });
+  // Keep the card answerable when the answer was rejected; a retry answer re-arms the same gate.
+  if (!answered || retry) {
+    gateSig = null;
+    render();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  const row = event.target.closest?.(".test[data-id]");
+  if (row && event.target === row && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    row.click();
+  }
+});
+document.getElementById("pick").addEventListener("change", (event) => post("/follow", { runId: event.target.value || null }));
+load();
+</script>
+</body>
+</html>`;
+
 await joinSession({
     canvases: [
         createCanvas({
@@ -731,7 +1334,7 @@ await joinSession({
                 let entry = servers.get(ctx.instanceId);
                 if (!entry) {
                     const state = configure({ launch: null }, ctx.input);
-                    entry = { state, ...(await startServer(state)) };
+                    entry = { state, ...(await startServer(explorerRoutes(state), EXPLORER_HTML)) };
                     servers.set(ctx.instanceId, entry);
                 } else if (ctx.input && Object.keys(ctx.input).length > 0) {
                     // Empty input just focuses the panel and keeps its configuration.
@@ -742,13 +1345,60 @@ await joinSession({
                 }
                 return { title: "Drill tests", url: entry.url };
             },
-            onClose: async (ctx) => {
-                const entry = servers.get(ctx.instanceId);
-                if (entry) {
-                    servers.delete(ctx.instanceId);
-                    await new Promise((resolvePromise) => entry.server.close(() => resolvePromise()));
+            onClose: closeEntry,
+        }),
+        createCanvas({
+            id: "auditaur-drill-run",
+            displayName: "Auditaur Drill Run",
+            description: "Watch an Auditaur drill run live, step by step, and answer its human gates; follows the newest run unless given a runId.",
+            inputSchema: liveSchema,
+            actions: [
+                {
+                    name: "get_status",
+                    description: "The shown run's status, totals, running and failed tests, and gates waiting for an answer.",
+                    handler: async (ctx) => liveSummary(await liveView(entryFor(ctx).state)),
+                },
+                {
+                    name: "respond_gate",
+                    description: "Answer a gate the shown run is waiting on. Omit choiceId for gates without choices.",
+                    inputSchema: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["requestId"],
+                        properties: {
+                            requestId: { type: "string" },
+                            choiceId: { type: "string" },
+                            inputs: {
+                                type: "array",
+                                items: {
+                                    type: "object",
+                                    additionalProperties: false,
+                                    required: ["id", "value"],
+                                    properties: { id: { type: "string" }, value: { type: "string" } },
+                                },
+                            },
+                        },
+                    },
+                    handler: async (ctx) => respondGate(entryFor(ctx).state, ctx.input ?? {}),
+                },
+                {
+                    name: "cancel",
+                    description: "Stop the shown run; it finishes as interrupted.",
+                    handler: async (ctx) => liveRoutes(entryFor(ctx).state)["POST /cancel"](),
+                },
+            ],
+            open: async (ctx) => {
+                let entry = servers.get(ctx.instanceId);
+                if (!entry) {
+                    const state = configureLive({}, ctx.input);
+                    entry = { state, ...(await startServer(liveRoutes(state), LIVE_HTML)) };
+                    servers.set(ctx.instanceId, entry);
+                } else if (ctx.input && Object.keys(ctx.input).length > 0) {
+                    configureLive(entry.state, ctx.input);
                 }
+                return { title: "Drill run", url: entry.url };
             },
+            onClose: closeEntry,
         }),
     ],
 });

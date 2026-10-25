@@ -61,11 +61,13 @@ Save a script such as `.auditaur\drills\github-login.json`:
 
 ## Run the drill
 
-Human gate scripts currently use the explicit `drill run --script` form:
+Human gate scripts use the explicit `drill run --script` form:
 
 ```powershell
 auditaur drill run --app my-tauri-app --require-frontend --require-drive-bridge --script .auditaur\drills\github-login.json -- npm run tauri dev
 ```
+
+Gates also work as `gate` steps inside [drill tests](/getting-started/drill-tests/#human-gates), answered from the `auditaur-drill-run` canvas or MCP.
 
 During the gate, complete the manual action in the real app, browser, OS dialog, installer, or hardware device. Do not restart the app or switch sessions; the gate is deliberately tied to the pinned session.
 

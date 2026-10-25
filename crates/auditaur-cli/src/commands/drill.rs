@@ -1090,7 +1090,8 @@ fn execute_gate(
     let started = Instant::now();
     let deadline = started + Duration::from_millis(gate.timeout_ms);
     let clipboard = prepare_gate_clipboard(gate)?;
-    let gate_request = publish_gate_request(gate, app, &clipboard, started, deadline)?;
+    let target = GateTarget::from(app);
+    let gate_request = publish_gate_request(gate, &target, &clipboard, started, deadline)?;
     print_gate_prompt(gate, gate_request.as_ref())?;
     let mut child = child;
     let mut observed_text = None;
@@ -1114,7 +1115,7 @@ fn execute_gate(
                 print_gate_prompt(gate, gate_request.as_ref())?;
             }
         }
-        match poll_gate_selector(gate, app) {
+        match poll_gate_selector(gate, &target) {
             Ok(Some(text)) => {
                 observed_error = None;
                 observed_text = Some(text.clone());
@@ -1187,9 +1188,224 @@ fn execute_gate(
     }
 }
 
+/// The app session a gate waits on.
+pub(crate) struct GateTarget {
+    pub session_id: String,
+    pub instance_id: String,
+    pub pid: u32,
+    pub database_path: String,
+}
+
+impl From<&DiscoveredApp> for GateTarget {
+    fn from(app: &DiscoveredApp) -> Self {
+        Self {
+            session_id: app.session_id.clone(),
+            instance_id: app.instance_id.clone(),
+            pid: app.pid,
+            database_path: app.database_path.clone(),
+        }
+    }
+}
+
+impl GateTarget {
+    fn drive_selector(&self) -> drive::DriveAppSelector {
+        drive::DriveAppSelector {
+            app: None,
+            session_id: Some(self.session_id.clone()),
+            instance_id: Some(self.instance_id.clone()),
+            pid: Some(self.pid),
+            latest: false,
+            active: false,
+        }
+    }
+}
+
+/// How a gate step in `auditaur drill test` ended.
+#[derive(Debug)]
+pub(crate) enum TestGateOutcome {
+    Passed(Value),
+    Skipped(Value),
+    Failed(String, Value),
+    TimedOut(String),
+    Stopped(String),
+}
+
+/// Run a gate inside a drill test: publish a request to the gate queue (answered by the drill
+/// canvas, the `respond_human_gate` MCP tool, or a response file) and wait for a response, the
+/// gate selector, `stop`, or the deadline. Unlike legacy drills, stdin is never read.
+pub(crate) fn run_test_gate(
+    raw: &Value,
+    target: &GateTarget,
+    deadline: Instant,
+    stop: &mut dyn FnMut() -> Option<String>,
+    on_waiting: &mut dyn FnMut(Value) -> Result<()>,
+) -> Result<TestGateOutcome> {
+    let gate = resolve_gate(serde_json::from_value(raw.clone())?)?;
+    let started = Instant::now();
+    let deadline = deadline.min(started + Duration::from_millis(gate.timeout_ms));
+    let clipboard = prepare_gate_clipboard(&gate)?;
+    let request = publish_gate_request(&gate, target, &clipboard, started, deadline)?;
+    let announced = on_waiting(json!({
+        "name": gate.name,
+        "instructions": gate.instructions,
+        "selector": gate.selector,
+        "expectText": gate.expect_text,
+        "manualContinue": gate.manual_continue,
+        // The test timeout can cut a gate's own timeout short; report what actually applies.
+        "timeoutMs": deadline.saturating_duration_since(started).as_millis() as u64,
+        "choices": gate.choices,
+        "inputs": gate.inputs,
+        "clipboard": clipboard,
+        "request": request.as_ref().map(|request| json!({
+            "requestId": request.request_id,
+            "runId": request.run_id,
+            "gateId": request.gate_id,
+            "attempt": request.attempt,
+            "nonce": request.nonce,
+            "requestPath": request.request_path,
+            "responsePath": request.response_path,
+        })),
+    }));
+    if let Err(error) = announced {
+        // Nobody can discover an unannounced gate, so don't wait on it.
+        if let Some(request) = &request {
+            cleanup_gate_request(request);
+        }
+        return Err(error.context(format!("could not announce gate `{}`", gate.name)));
+    }
+    eprintln!("Auditaur gate `{}`: {}", gate.name, gate.instructions);
+    if let Some(request) = &request {
+        eprintln!(
+            "Answer it in the drill live-run canvas, with the `respond_human_gate` MCP tool, or by writing {}",
+            request.response_path.display()
+        );
+    }
+    let outcome = wait_test_gate(
+        &gate,
+        target,
+        request.as_ref(),
+        &clipboard,
+        started,
+        deadline,
+        stop,
+    );
+    if let Some(request) = &request {
+        cleanup_gate_request(request);
+    }
+    outcome
+}
+
+fn wait_test_gate(
+    gate: &ResolvedDrillGate,
+    target: &GateTarget,
+    request: Option<&PublishedGateRequest>,
+    clipboard: &Option<DrillGateClipboardReport>,
+    started: Instant,
+    deadline: Instant,
+    stop: &mut dyn FnMut() -> Option<String>,
+) -> Result<TestGateOutcome> {
+    let name = &gate.name;
+    let mut observed_text = None;
+    let mut observed_error = None;
+    loop {
+        if let Some(request) = request {
+            let response = match read_gate_queue_response(request) {
+                Ok(response) => response,
+                Err(error) => {
+                    // A bad answer is rejected; the gate keeps waiting for a good one.
+                    eprintln!("{error:#}");
+                    remove_gate_response(request);
+                    None
+                }
+            };
+            if let Some(response) = response {
+                let applied = apply_gate_queue_response(
+                    gate,
+                    response,
+                    request,
+                    started,
+                    observed_text.clone(),
+                    clipboard.clone(),
+                );
+                let report = |report: DrillGateReport| serde_json::to_value(report);
+                match applied {
+                    Ok(GateOutcome::Retry) => remove_gate_response(request),
+                    Ok(GateOutcome::Passed(r)) => return Ok(TestGateOutcome::Passed(report(r)?)),
+                    Ok(GateOutcome::Skipped(r)) => {
+                        return Ok(TestGateOutcome::Skipped(report(r)?));
+                    }
+                    Ok(GateOutcome::FailedChoice(r)) => {
+                        return Ok(TestGateOutcome::Failed(
+                            format!("gate `{name}` failed by the selected choice"),
+                            report(r)?,
+                        ));
+                    }
+                    Ok(GateOutcome::Aborted(r)) => {
+                        return Ok(TestGateOutcome::Failed(
+                            format!("gate `{name}` aborted by the selected choice"),
+                            report(r)?,
+                        ));
+                    }
+                    Ok(_) => unreachable!("queue responses only resolve to choices"),
+                    Err(error) => {
+                        eprintln!("{error:#}");
+                        remove_gate_response(request);
+                    }
+                }
+            }
+        }
+        match poll_gate_selector(gate, target) {
+            Ok(Some(text)) => {
+                observed_error = None;
+                observed_text = Some(text.clone());
+                if gate_text_matches(gate, &text) {
+                    let report = gate_report(
+                        gate,
+                        started,
+                        DrillGateSatisfiedBy::SelectorText,
+                        observed_text,
+                        None,
+                        Vec::new(),
+                        clipboard.clone(),
+                        None,
+                    );
+                    return Ok(TestGateOutcome::Passed(serde_json::to_value(report)?));
+                }
+            }
+            Ok(None) => {}
+            Err(error) if gate_accepts_terminal_response(gate) => {
+                observed_error = Some(error.to_string());
+            }
+            Err(error) => {
+                return Ok(TestGateOutcome::Failed(
+                    format!("gate `{name}`: {error:#}"),
+                    json!({ "observedText": observed_text }),
+                ));
+            }
+        }
+        if let Some(reason) = stop() {
+            return Ok(TestGateOutcome::Stopped(reason));
+        }
+        if Instant::now() >= deadline {
+            let mut message = format!(
+                "gate `{name}` timed out after {}ms",
+                started.elapsed().as_millis()
+            );
+            if let Some(text) = observed_text {
+                message.push_str(&format!("; last text: {text:?}"));
+            }
+            if let Some(error) = observed_error {
+                message.push_str(&format!("; last error: {error}"));
+            }
+            return Ok(TestGateOutcome::TimedOut(message));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
 fn publish_gate_request(
     gate: &ResolvedDrillGate,
-    app: &DiscoveredApp,
+    app: &GateTarget,
     clipboard: &Option<DrillGateClipboardReport>,
     started: Instant,
     deadline: Instant,
@@ -1259,7 +1475,9 @@ fn publish_gate_request(
         request_id,
         request_path: request_path.clone(),
         response_path: response_path.clone(),
-        cleanup_paths: vec![request_path, response_path],
+        // Response first: once the request is gone, so is any answer the runner saw. The drill
+        // canvases rely on this to tell a consumed answer from one that arrived too late.
+        cleanup_paths: vec![response_path, request_path],
         nonce,
         run_id,
         gate_id,
@@ -2068,12 +2286,12 @@ fn choice_outcome_name(outcome: DrillGateChoiceOutcome) -> &'static str {
     }
 }
 
-fn poll_gate_selector(gate: &ResolvedDrillGate, app: &DiscoveredApp) -> Result<Option<String>> {
+fn poll_gate_selector(gate: &ResolvedDrillGate, app: &GateTarget) -> Result<Option<String>> {
     let Some(selector) = &gate.selector else {
         return Ok(None);
     };
     let value = drive::text_json_value(
-        drive_selector(app),
+        app.drive_selector(),
         drive::SelectorActionOptions {
             selector: selector.clone(),
             target_id: Some("auditaur-bridge".to_string()),
@@ -2999,6 +3217,147 @@ impl DrillPhase {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn answer_gate(choice: &'static str, value: &'static str) -> impl FnMut(Value) {
+        move |waiting: Value| {
+            let request = &waiting["request"];
+            let response = json!({
+                "schemaVersion": 1,
+                "requestId": request["requestId"],
+                "runId": request["runId"],
+                "gateId": request["gateId"],
+                "attempt": request["attempt"],
+                "nonce": request["nonce"],
+                "responder": "test",
+                "choiceId": choice,
+                "inputs": [{ "id": "note", "value": value }],
+            });
+            let path = PathBuf::from(request["responsePath"].as_str().unwrap());
+            write_json_atomic(&path, &response).unwrap();
+        }
+    }
+
+    fn test_gate(
+        temp: &TempDir,
+        mut on_waiting: impl FnMut(Value),
+        timeout_ms: u64,
+    ) -> TestGateOutcome {
+        let gate = json!({
+            "name": "Check the colors",
+            "instructions": "Do they look right?",
+            "timeoutMs": timeout_ms,
+            "choices": [
+                { "id": "ok", "label": "Looks right", "outcome": "continue" },
+                { "id": "na", "label": "Not applicable", "outcome": "skip" },
+                { "id": "bad", "label": "Wrong", "outcome": "fail" }
+            ],
+            "inputs": [{ "id": "note", "label": "Note", "required": false, "sensitive": false }]
+        });
+        let target = GateTarget {
+            session_id: "s".into(),
+            instance_id: "i".into(),
+            pid: 1,
+            database_path: temp.path().join("telemetry.db").display().to_string(),
+        };
+        run_test_gate(
+            &gate,
+            &target,
+            Instant::now() + Duration::from_secs(10),
+            &mut || None,
+            &mut |waiting| {
+                on_waiting(waiting);
+                Ok(())
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_gates_that_cannot_be_announced_fail_and_clean_up() {
+        let temp = TempDir::new().unwrap();
+        let gate = json!({ "name": "g", "instructions": "wait", "timeoutMs": 60_000 });
+        let target = GateTarget {
+            session_id: "s".into(),
+            instance_id: "i".into(),
+            pid: 1,
+            database_path: temp.path().join("telemetry.db").display().to_string(),
+        };
+        let started = Instant::now();
+        let error = run_test_gate(
+            &gate,
+            &target,
+            Instant::now() + Duration::from_secs(60),
+            &mut || None,
+            &mut |_| Err(anyhow!("disk full")),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("could not announce gate `g`: disk full"));
+        let requests = temp.path().join("human-gates").join("requests");
+        assert_eq!(requests.read_dir().unwrap().count(), 0);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_gates_resolve_through_the_queue_and_clean_up() {
+        let temp = TempDir::new().unwrap();
+        let requests = temp.path().join("human-gates").join("requests");
+        let mut seen = None;
+        let outcome = test_gate(
+            &temp,
+            |waiting: Value| {
+                seen = Some(waiting.clone());
+                assert!(requests.read_dir().unwrap().count() == 1);
+                answer_gate("ok", "fine")(waiting);
+            },
+            5_000,
+        );
+        let TestGateOutcome::Passed(report) = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(report["selectedChoice"]["id"], "ok");
+        assert_eq!(report["inputs"][0]["value"], "fine");
+        assert_eq!(seen.unwrap()["choices"][1]["id"], "na");
+        assert_eq!(requests.read_dir().unwrap().count(), 0);
+
+        assert!(matches!(
+            test_gate(&temp, answer_gate("na", ""), 5_000),
+            TestGateOutcome::Skipped(_)
+        ));
+        let failed = test_gate(&temp, answer_gate("bad", ""), 5_000);
+        assert!(
+            matches!(&failed, TestGateOutcome::Failed(message, _) if message.contains("failed by the selected choice")),
+            "{failed:?}"
+        );
+        // A bogus answer is discarded and the gate keeps waiting.
+        let timed_out = test_gate(&temp, answer_gate("nope", ""), 600);
+        assert!(
+            matches!(timed_out, TestGateOutcome::TimedOut(_)),
+            "{timed_out:?}"
+        );
+    }
+
+    #[test]
+    fn test_gates_stop_when_asked() {
+        let temp = TempDir::new().unwrap();
+        let gate = json!({ "name": "g", "instructions": "wait", "timeoutMs": 60_000 });
+        let target = GateTarget {
+            session_id: "s".into(),
+            instance_id: "i".into(),
+            pid: 1,
+            database_path: temp.path().join("telemetry.db").display().to_string(),
+        };
+        let started = Instant::now();
+        let outcome = run_test_gate(
+            &gate,
+            &target,
+            Instant::now() + Duration::from_secs(60),
+            &mut || Some("interrupted".to_string()),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        assert!(matches!(outcome, TestGateOutcome::Stopped(ref reason) if reason == "interrupted"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn exit_codes_map_to_status() {

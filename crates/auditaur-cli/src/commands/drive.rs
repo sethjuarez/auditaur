@@ -1284,6 +1284,15 @@ impl BridgeSession {
         &self.attach.session_id
     }
 
+    pub(crate) fn gate_target(&self) -> super::drill::GateTarget {
+        super::drill::GateTarget {
+            session_id: self.attach.session_id.clone(),
+            instance_id: self.attach.instance_id.clone(),
+            pid: self.attach.pid,
+            database_path: self.attach.db_path.clone(),
+        }
+    }
+
     pub(crate) fn app_info(&self) -> Value {
         json!({
             "serviceName": self.attach.service_name,

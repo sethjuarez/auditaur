@@ -91,6 +91,22 @@ Assertions retry until they pass or `expectTimeoutMs` (default 5s) runs out. Add
 
 Telemetry assertions only see what the app recorded after the test started. Negative, exact-count, and `expectNoErrors` assertions check what has been recorded so far, so place them after the actions they cover.
 
+### Human gates
+
+A `gate` step pauses the test until a person acts. It takes the same object as a [human-in-the-loop](/getting-started/human-in-the-loop-drills/) gate:
+
+```json
+{ "gate": {
+    "name": "Approve sign-in",
+    "instructions": "Finish the device-code sign-in in the browser.",
+    "choices": [
+      { "id": "done", "label": "Done", "outcome": "continue" },
+      { "id": "blocked", "label": "Blocked", "outcome": "fail" }
+    ] } }
+```
+
+Answer it from the `auditaur-drill-run` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait also counts against the test timeout, so raise `timeoutMs` on tests with gates.
+
 ### Locators
 
 A locator is a CSS string or an object:
@@ -166,6 +182,8 @@ Open input, all optional:
 | `run` | `{ app, command, args }` for the run buttons: `--app`, the launch command after `--`, and extra `drill test` arguments. |
 
 Agents can call its `get_summary`, `refresh`, `run`, and `cancel` actions.
+
+The `auditaur-drill-run` canvas watches one run live: suites, tests, and each step ticking with its status and duration. Gates waiting for an answer appear at the top with their instructions, inputs, and choice buttons. It follows the newest run unless opened with `{ "runId": "..." }` or switched with its run picker. Agents can call its `get_status`, `respond_gate`, and `cancel` actions.
 
 ## CI
 

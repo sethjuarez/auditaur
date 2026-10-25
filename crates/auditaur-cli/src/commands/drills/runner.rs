@@ -47,6 +47,8 @@ pub struct StepCtx<'a> {
     /// Set by the driver when it created a missing baseline. The failure is soft, and the test
     /// is not retried: a retry would compare the app against itself.
     pub wrote_baseline: bool,
+    /// Set by Ctrl+C or a canvas cancel; long waits (gates) give up when it is.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl StepCtx<'_> {
@@ -65,6 +67,8 @@ pub enum StepResult {
     Failed(ErrorInfo),
     /// The step ran out of time.
     TimedOut(ErrorInfo),
+    /// The step skipped the rest of the test (a gate's `skip` choice), like `test.skip()`.
+    Skipped,
 }
 
 pub trait AppDriver {
@@ -216,6 +220,8 @@ struct Tally {
     soft: Option<ErrorInfo>,
     /// Every failure, in the order it happened.
     all: Vec<ErrorInfo>,
+    /// A step skipped the rest of the test.
+    skipped: bool,
 }
 
 impl Tally {
@@ -234,6 +240,7 @@ impl Tally {
             self.soft = other.soft;
         }
         self.all.extend(other.all);
+        self.skipped |= other.skipped;
     }
 
     /// Failures other than [`Tally::first_error`].
@@ -255,6 +262,7 @@ impl Tally {
         match &self.hard {
             Some((status, _)) => *status,
             None if self.soft.is_some() => Status::Failed,
+            None if self.skipped => Status::Skipped,
             None => Status::Passed,
         }
     }
@@ -371,11 +379,17 @@ impl SuiteRun<'_, '_> {
         }
         self.probe_exit(driver);
 
+        // A skip in `beforeAll` skips every test in the suite, like `test.skip()` there.
+        let skip_all = tally.skipped;
         if self.error.is_none() && self.exited.is_none() {
             for (index, test) in self.selected.tests.iter().enumerate() {
                 if let Some(stopped) = stop_reason(self.writer, self.options) {
                     self.stopped = Some(stopped);
                     break;
+                }
+                if skip_all {
+                    self.skip_test(index, test)?;
+                    continue;
                 }
                 self.run_test(driver, index, test)?;
                 if self.exited.is_some() {
@@ -404,6 +418,20 @@ impl SuiteRun<'_, '_> {
         Ok(())
     }
 
+    fn skip_test(&mut self, index: usize, test: &TestCase) -> Result<()> {
+        self.writer.test_skipped(self.index, index)?;
+        self.reporter.test_finished(&TestDone {
+            title: title(self.selected.suite, test),
+            status: Status::Skipped,
+            outcome: Some(Outcome::Skipped),
+            attempt: 0,
+            duration: Duration::ZERO,
+            error: None,
+            other_errors: &[],
+        });
+        Ok(())
+    }
+
     fn run_test(
         &mut self,
         driver: &mut dyn AppDriver,
@@ -412,17 +440,7 @@ impl SuiteRun<'_, '_> {
     ) -> Result<()> {
         let suite = self.selected.suite;
         if matches!(test.mode, TestMode::Skip | TestMode::Fixme) {
-            self.writer.test_skipped(self.index, index)?;
-            self.reporter.test_finished(&TestDone {
-                title: title(suite, test),
-                status: Status::Skipped,
-                outcome: Some(Outcome::Skipped),
-                attempt: 0,
-                duration: Duration::ZERO,
-                error: None,
-                other_errors: &[],
-            });
-            return Ok(());
+            return self.skip_test(index, test);
         }
         let retries = test
             .retries
@@ -479,6 +497,7 @@ impl SuiteRun<'_, '_> {
                 status = Status::Interrupted;
             }
             let will_retry = status != expected
+                && status != Status::Skipped
                 && attempt < retries
                 && self.exited.is_none()
                 && !self.wrote_baseline
@@ -519,7 +538,7 @@ impl SuiteRun<'_, '_> {
         let budget = Budget::new(Phase::BeforeEach, timeout_ms, Some(id.to_string()), since)
             .for_test(&test.name);
         let mut tally = self.run_steps(driver, &suite.before_each, &budget)?;
-        if tally.hard.is_none() && self.exited.is_none() {
+        if tally.hard.is_none() && !tally.skipped && self.exited.is_none() {
             let budget = Budget {
                 phase: Phase::Test,
                 ..budget
@@ -590,6 +609,7 @@ impl SuiteRun<'_, '_> {
                 since_unix_nanos: budget.since_unix_nanos,
                 snapshot,
                 wrote_baseline: false,
+                cancel: self.options.cancel.clone(),
             };
             let result = driver.run_step(step, &mut ctx);
             if ctx.wrote_baseline {
@@ -600,6 +620,11 @@ impl SuiteRun<'_, '_> {
                 StepResult::Passed => {
                     self.writer.step_finished(Status::Passed, false, None)?;
                     continue;
+                }
+                StepResult::Skipped => {
+                    self.writer.step_finished(Status::Skipped, false, None)?;
+                    tally.skipped = true;
+                    break;
                 }
                 StepResult::Failed(error) => (Status::Failed, error),
                 StepResult::TimedOut(error) => (Status::TimedOut, error),

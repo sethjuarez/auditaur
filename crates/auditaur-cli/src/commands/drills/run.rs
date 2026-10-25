@@ -986,8 +986,6 @@ impl RunWriter {
         Ok(attachment)
     }
 
-    // Manual gates run through the drill runner in a later step.
-    #[allow(dead_code)]
     fn gate_scope(&self) -> Result<(Scope, usize)> {
         let step = self
             .step
@@ -998,7 +996,6 @@ impl RunWriter {
     }
 
     /// A manual gate in the running step is waiting for a human.
-    #[allow(dead_code)]
     pub fn gate_waiting(&mut self, gate: Value) -> Result<()> {
         let (scope, step) = self.gate_scope()?;
         self.commit(
@@ -1013,7 +1010,6 @@ impl RunWriter {
         )
     }
 
-    #[allow(dead_code)]
     pub fn gate_resolved(&mut self, response: Value) -> Result<()> {
         let (scope, step) = self.gate_scope()?;
         self.commit(
