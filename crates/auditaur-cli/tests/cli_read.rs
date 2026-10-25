@@ -805,6 +805,90 @@ fn simplified_drill_and_inspect_use_config_and_session_file() {
 }
 
 #[test]
+fn drill_list_and_validate_suite_files() {
+    let temp = TempDir::new().unwrap();
+    let drills = temp.path().join(".auditaur").join("drills");
+    fs::create_dir_all(drills.join("nested")).unwrap();
+    fs::write(
+        drills.join("greet.drill.json"),
+        serde_json::to_vec_pretty(&json!({
+            "tags": ["@smoke"],
+            "tests": [
+                { "name": "greets", "tags": ["fast"], "steps": [
+                    { "fill": { "testId": "name" }, "value": "Seth" },
+                    { "click": { "role": "button", "name": "Greet" } },
+                    { "expect": "#output", "toContainText": "Hello" }
+                ] },
+                { "name": "later", "fixme": "needs auth" }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        drills.join("nested").join("errors.drill.json"),
+        r##"{ "tests": [{ "name": "fails", "steps": [{ "expectIpc": "failing_command", "status": "error" }] }] }"##,
+    )
+    .unwrap();
+
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+        command.args(args).current_dir(temp.path());
+        command
+    };
+
+    let listed = run_json_command(&mut run(&["drill", "list", "--json"]));
+    assert_eq!(listed["totals"]["suites"], 2);
+    assert_eq!(listed["totals"]["tests"], 3);
+    let greet = &listed["suites"][0];
+    assert_eq!(greet["suite"], "greet");
+    assert_eq!(greet["path"], ".auditaur/drills/greet.drill.json");
+    assert_eq!(greet["tests"][0]["title"], "greet > greets");
+    assert_eq!(greet["tests"][0]["tags"], json!(["smoke", "fast"]));
+    assert_eq!(
+        greet["tests"][0]["steps"][1]["title"],
+        "click role=button[name=\"Greet\"i]"
+    );
+    assert_eq!(greet["tests"][1]["mode"], "fixme");
+
+    let tagged = run_json_command(&mut run(&["drill", "list", "--tag", "fast", "--json"]));
+    assert_eq!(tagged["totals"]["tests"], 1);
+    let filtered = run_json_command(&mut run(&["drill", "list", "errors", "--json"]));
+    assert_eq!(filtered["suites"][0]["suite"], "errors");
+    let text = run_command(&mut run(&["drill", "list"]));
+    assert!(text.contains("greets  (3 steps)  @fast"), "{text}");
+    assert!(text.contains("[fixme: needs auth]"), "{text}");
+    assert!(text.contains("3 tests in 2 suites"), "{text}");
+
+    let valid = run_json_command(&mut run(&["drill", "validate", "--json"]));
+    assert_eq!(valid["valid"], true);
+    assert_eq!(valid["files"], 2);
+
+    fs::write(
+        drills.join("broken.drill.json"),
+        r##"{ "tests": [{ "name": "a", "steps": [{ "clik": "#x" }] }] }"##,
+    )
+    .unwrap();
+    let invalid = run_failure_command(&mut run(&["drill", "validate"]));
+    assert!(invalid.contains("broken.drill.json"), "{invalid}");
+    assert!(invalid.contains("did you mean `click`"), "{invalid}");
+    let listed_with_invalid = run_failure_command(&mut run(&["drill", "list"]));
+    assert!(
+        listed_with_invalid.contains("1 invalid drill file"),
+        "{listed_with_invalid}"
+    );
+    let explicit = run_json_command(&mut run(&[
+        "drill",
+        "validate",
+        ".auditaur/drills/greet.drill.json",
+        "--json",
+    ]));
+    assert_eq!(explicit["files"], 1);
+    let missing = run_failure_command(&mut run(&["drill", "validate", "nope"]));
+    assert!(missing.contains("does not exist"), "{missing}");
+}
+
+#[test]
 fn init_skill_installs_auditaur_debug_skill() {
     let repo = TempDir::new().unwrap();
     let skill_path = repo

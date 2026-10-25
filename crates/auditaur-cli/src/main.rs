@@ -565,6 +565,30 @@ enum DebugCommand {
 
 #[derive(Debug, Subcommand)]
 enum DrillCommand {
+    /// List drill suites and tests under .auditaur/drills.
+    List {
+        /// Match a file path substring or suite name.
+        #[arg()]
+        filters: Vec<String>,
+        /// Only tests whose title or tags match this regex.
+        #[arg(long, short = 'g')]
+        grep: Option<String>,
+        /// Skip tests whose title or tags match this regex.
+        #[arg(long)]
+        grep_invert: Option<String>,
+        /// Only tests with this tag (repeatable; any may match).
+        #[arg(long)]
+        tag: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check drill files for errors (defaults to .auditaur/drills).
+    Validate {
+        #[arg()]
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     Run {
         #[arg(long)]
         app: String,
@@ -977,6 +1001,34 @@ fn inner_main() -> Result<()> {
             session_file,
             json,
         } => match command {
+            Some(DrillCommand::List {
+                filters,
+                grep,
+                grep_invert,
+                tag,
+                json,
+            }) => {
+                let filters = commands::drills::Filters::new(
+                    filters,
+                    grep.as_deref(),
+                    grep_invert.as_deref(),
+                    tag,
+                )?;
+                let exit_code =
+                    commands::drills::list(commands::drills::ListOptions { filters, json })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
+            Some(DrillCommand::Validate { paths, json }) => {
+                let exit_code =
+                    commands::drills::validate(commands::drills::ValidateOptions { paths, json })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
             Some(DrillCommand::Run {
                 app,
                 require_frontend,

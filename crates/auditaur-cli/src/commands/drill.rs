@@ -649,6 +649,30 @@ fn resolve_gates(gates: Vec<DrillGate>) -> Result<Vec<ResolvedDrillGate>> {
     gates.into_iter().map(resolve_gate).collect()
 }
 
+/// Validate a gate object as used inside drill suite files.
+pub(crate) fn check_gate_json(value: &Value) -> Result<()> {
+    let gate: DrillGate = serde_json::from_value(value.clone())?;
+    resolve_gate(gate).map(|_| ())
+}
+
+/// Validate a hook object's structure; `cwd` is resolved when the hook runs.
+pub(crate) fn check_hook_json(value: &Value) -> Result<()> {
+    let hook: DrillHook = serde_json::from_value(value.clone())?;
+    if hook.name.trim().is_empty() {
+        return Err(anyhow!("hook name must not be empty"));
+    }
+    if hook.run.trim().is_empty() {
+        return Err(anyhow!("hook `{}` run must not be empty", hook.name));
+    }
+    if hook.timeout_ms == 0 {
+        return Err(anyhow!(
+            "hook `{}` timeoutMs must be greater than 0",
+            hook.name
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_gate(gate: DrillGate) -> Result<ResolvedDrillGate> {
     if gate.name.trim().is_empty() {
         return Err(anyhow!("gate name must not be empty"));

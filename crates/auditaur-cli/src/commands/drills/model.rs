@@ -1,0 +1,1894 @@
+//! Drill file model and parser.
+//!
+//! Drill files are parsed by hand rather than through serde so `drill validate`
+//! can report every problem with a precise path and a "did you mean" hint.
+
+use std::{
+    collections::HashSet,
+    fmt,
+    path::{Path, PathBuf},
+};
+
+use regex::Regex;
+use serde::Serialize;
+use serde_json::{Map, Value};
+
+use crate::commands::drill;
+
+pub const SUITE_KEYS: &[&str] = &[
+    "$schema",
+    "suite",
+    "description",
+    "tags",
+    "timeoutMs",
+    "expectTimeoutMs",
+    "retries",
+    "setup",
+    "teardown",
+    "beforeAll",
+    "beforeEach",
+    "afterEach",
+    "afterAll",
+    "tests",
+];
+
+pub const TEST_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "tags",
+    "timeoutMs",
+    "retries",
+    "skip",
+    "fixme",
+    "only",
+    "slow",
+    "expectFail",
+    "steps",
+];
+
+pub const STEP_COMMON_KEYS: &[&str] = &["name", "timeoutMs"];
+
+pub const ACTION_KEYS: &[&str] = &[
+    "click",
+    "dblclick",
+    "fill",
+    "type",
+    "press",
+    "hover",
+    "select",
+    "check",
+    "uncheck",
+    "waitFor",
+    "evaluate",
+    "reload",
+    "sleep",
+    "screenshot",
+    "gate",
+    "expect",
+    "expectIpc",
+    "expectEvent",
+    "expectLog",
+    "expectNoErrors",
+];
+
+pub const MATCHER_KEYS: &[&str] = &[
+    "toExist",
+    "toBeVisible",
+    "toBeHidden",
+    "toHaveText",
+    "toContainText",
+    "toHaveCount",
+    "toHaveValue",
+    "toBeChecked",
+    "toMatchAriaSnapshot",
+    "toHaveScreenshot",
+];
+
+pub const SCREENSHOT_OPTION_KEYS: &[&str] =
+    &["maxDiffPixels", "maxDiffPixelRatio", "threshold", "mask"];
+
+/// Step option keys that only apply to some actions.
+pub const STEP_OPTION_KEYS: &[&str] = &[
+    "value", "values", "target", "state", "soft", "not", "status", "count", "maxMs", "level",
+    "ignore",
+];
+
+pub const LOCATOR_KEYS: &[&str] = &[
+    "css",
+    "role",
+    "text",
+    "testId",
+    "label",
+    "placeholder",
+    "name",
+    "exact",
+    "nth",
+];
+
+const LOCATOR_KINDS: &[&str] = &["css", "role", "text", "testId", "label", "placeholder"];
+
+/// Every key the parser understands, used by the schema drift test.
+pub fn all_known_keys() -> Vec<&'static str> {
+    let mut keys = Vec::new();
+    for group in [
+        SUITE_KEYS,
+        TEST_KEYS,
+        STEP_COMMON_KEYS,
+        ACTION_KEYS,
+        MATCHER_KEYS,
+        SCREENSHOT_OPTION_KEYS,
+        STEP_OPTION_KEYS,
+        LOCATOR_KEYS,
+        &["pattern"],
+    ] {
+        keys.extend_from_slice(group);
+    }
+    keys
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DrillSuite {
+    pub path: PathBuf,
+    pub suite: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expect_timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retries: Option<u32>,
+    /// Process hooks validated against the existing drill hook schema.
+    pub setup: Vec<Value>,
+    pub teardown: Vec<Value>,
+    pub before_all: Vec<Step>,
+    pub before_each: Vec<Step>,
+    pub after_each: Vec<Step>,
+    pub after_all: Vec<Step>,
+    pub tests: Vec<TestCase>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCase {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retries: Option<u32>,
+    pub mode: TestMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_reason: Option<String>,
+    pub slow: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expect_fail: Option<String>,
+    pub steps: Vec<Step>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TestMode {
+    Run,
+    Only,
+    Skip,
+    Fixme,
+}
+
+impl TestMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Only => "only",
+            Self::Skip => "skip",
+            Self::Fixme => "fixme",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Step {
+    pub title: String,
+    pub action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip)]
+    pub kind: StepKind,
+    /// Original JSON, kept for reporters and canvases.
+    pub spec: Value,
+}
+
+#[derive(Debug, Clone)]
+pub enum StepKind {
+    Click(Locator),
+    Dblclick(Locator),
+    Fill {
+        target: Locator,
+        value: String,
+    },
+    Type {
+        target: Locator,
+        value: String,
+    },
+    Press {
+        key: String,
+        target: Option<Locator>,
+    },
+    Hover(Locator),
+    Select {
+        target: Locator,
+        values: Vec<String>,
+    },
+    Check(Locator),
+    Uncheck(Locator),
+    WaitFor {
+        target: Locator,
+        state: WaitState,
+    },
+    Evaluate(String),
+    Reload,
+    Sleep(u64),
+    Screenshot {
+        name: String,
+        target: Option<Locator>,
+    },
+    Gate(Value),
+    Expect(Expectation),
+    Telemetry(TelemetryExpectation),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitState {
+    Attached,
+    Detached,
+    Visible,
+    Hidden,
+}
+
+impl WaitState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Attached => "attached",
+            Self::Detached => "detached",
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Expectation {
+    pub target: Locator,
+    pub matcher: Matcher,
+    pub not: bool,
+    pub soft: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum Matcher {
+    ToExist,
+    ToBeVisible,
+    ToBeHidden,
+    ToHaveText(TextMatch),
+    ToContainText(String),
+    ToHaveCount(u64),
+    ToHaveValue(TextMatch),
+    ToBeChecked,
+    /// Snapshot name; `None` derives one from the test and step.
+    ToMatchAriaSnapshot(Option<String>),
+    ToHaveScreenshot(ScreenshotMatch),
+}
+
+impl Matcher {
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::ToExist => "toExist",
+            Self::ToBeVisible => "toBeVisible",
+            Self::ToBeHidden => "toBeHidden",
+            Self::ToHaveText(_) => "toHaveText",
+            Self::ToContainText(_) => "toContainText",
+            Self::ToHaveCount(_) => "toHaveCount",
+            Self::ToHaveValue(_) => "toHaveValue",
+            Self::ToBeChecked => "toBeChecked",
+            Self::ToMatchAriaSnapshot(_) => "toMatchAriaSnapshot",
+            Self::ToHaveScreenshot(_) => "toHaveScreenshot",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScreenshotMatch {
+    pub name: Option<String>,
+    pub max_diff_pixels: Option<u64>,
+    pub max_diff_pixel_ratio: Option<f64>,
+    pub threshold: f64,
+    pub mask: Vec<Locator>,
+}
+
+pub const DEFAULT_SCREENSHOT_THRESHOLD: f64 = 0.2;
+
+#[derive(Debug, Clone)]
+pub enum TextMatch {
+    Exact(String),
+    Pattern(Regex),
+}
+
+impl TextMatch {
+    pub fn matches(&self, actual: &str) -> bool {
+        match self {
+            Self::Exact(expected) => normalize_whitespace(actual) == normalize_whitespace(expected),
+            Self::Pattern(pattern) => pattern.is_match(actual),
+        }
+    }
+}
+
+impl fmt::Display for TextMatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(text) => write!(f, "{text:?}"),
+            Self::Pattern(pattern) => write!(f, "/{}/", pattern.as_str()),
+        }
+    }
+}
+
+pub fn normalize_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[derive(Debug, Clone)]
+pub enum TelemetryExpectation {
+    Ipc {
+        command: String,
+        status: Option<IpcStatus>,
+        count: Option<u64>,
+        max_ms: Option<u64>,
+        not: bool,
+        soft: bool,
+    },
+    Event {
+        name: String,
+        count: Option<u64>,
+        not: bool,
+        soft: bool,
+    },
+    Log {
+        contains: String,
+        level: Option<String>,
+        count: Option<u64>,
+        not: bool,
+        soft: bool,
+    },
+    NoErrors {
+        ignore: Vec<String>,
+        soft: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcStatus {
+    Ok,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Locator {
+    Css(String),
+    CssNth {
+        css: String,
+        nth: i64,
+    },
+    Role {
+        role: String,
+        name: Option<String>,
+        exact: bool,
+        nth: Option<i64>,
+    },
+    Text {
+        text: String,
+        exact: bool,
+        nth: Option<i64>,
+    },
+    TestId {
+        id: String,
+        nth: Option<i64>,
+    },
+    Label {
+        label: String,
+        exact: bool,
+        nth: Option<i64>,
+    },
+    Placeholder {
+        placeholder: String,
+        exact: bool,
+        nth: Option<i64>,
+    },
+}
+
+impl fmt::Display for Locator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn nth(f: &mut fmt::Formatter<'_>, nth: &Option<i64>) -> fmt::Result {
+            match nth {
+                Some(nth) => write!(f, " >> nth={nth}"),
+                None => Ok(()),
+            }
+        }
+        fn flag(exact: bool) -> &'static str {
+            if exact {
+                "s"
+            } else {
+                "i"
+            }
+        }
+        match self {
+            Self::Css(css) => write!(f, "{css}"),
+            Self::CssNth { css, nth } => write!(f, "{css} >> nth={nth}"),
+            Self::Role {
+                role,
+                name,
+                exact,
+                nth: n,
+            } => {
+                write!(f, "role={role}")?;
+                if let Some(name) = name {
+                    write!(f, "[name={name:?}{}]", flag(*exact))?;
+                }
+                nth(f, n)
+            }
+            Self::Text {
+                text,
+                exact,
+                nth: n,
+            } => {
+                write!(f, "text={text:?}{}", flag(*exact))?;
+                nth(f, n)
+            }
+            Self::TestId { id, nth: n } => {
+                write!(f, "testId={id}")?;
+                nth(f, n)
+            }
+            Self::Label {
+                label,
+                exact,
+                nth: n,
+            } => {
+                write!(f, "label={label:?}{}", flag(*exact))?;
+                nth(f, n)
+            }
+            Self::Placeholder {
+                placeholder,
+                exact,
+                nth: n,
+            } => {
+                write!(f, "placeholder={placeholder:?}{}", flag(*exact))?;
+                nth(f, n)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Issue {
+    pub path: String,
+    pub message: String,
+}
+
+impl fmt::Display for Issue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.path.is_empty() {
+            write!(f, "{}", self.message)
+        } else {
+            write!(f, "{}: {}", self.path, self.message)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParsedFile {
+    pub path: PathBuf,
+    pub suite: Option<DrillSuite>,
+    pub issues: Vec<Issue>,
+}
+
+pub fn parse_file(path: &Path) -> ParsedFile {
+    match std::fs::read_to_string(path) {
+        Ok(text) => parse_str(path, &text),
+        Err(error) => ParsedFile {
+            path: path.to_path_buf(),
+            suite: None,
+            issues: vec![Issue {
+                path: String::new(),
+                message: format!("failed to read file: {error}"),
+            }],
+        },
+    }
+}
+
+pub fn parse_str(path: &Path, text: &str) -> ParsedFile {
+    let mut ctx = Ctx::default();
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let suite = match serde_json::from_str::<Value>(text) {
+        Ok(value) => parse_suite(&mut ctx, path, &value),
+        Err(error) => {
+            ctx.err("", format!("invalid JSON: {error}"));
+            None
+        }
+    };
+    let suite = if ctx.issues.is_empty() { suite } else { None };
+    ParsedFile {
+        path: path.to_path_buf(),
+        suite,
+        issues: ctx.issues,
+    }
+}
+
+/// Suite name derived from `name.drill.json`.
+pub fn default_suite_name(path: &Path) -> String {
+    let file = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    file.strip_suffix(".drill.json")
+        .or_else(|| file.strip_suffix(".json"))
+        .unwrap_or(&file)
+        .to_string()
+}
+
+#[derive(Default)]
+struct Ctx {
+    issues: Vec<Issue>,
+}
+
+impl Ctx {
+    fn err(&mut self, path: &str, message: impl Into<String>) {
+        self.issues.push(Issue {
+            path: path.to_string(),
+            message: message.into(),
+        });
+    }
+}
+
+fn join(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{path}.{key}")
+    }
+}
+
+fn index(path: &str, key: &str, index: usize) -> String {
+    format!("{}[{index}]", join(path, key))
+}
+
+fn as_object<'a>(
+    ctx: &mut Ctx,
+    value: &'a Value,
+    path: &str,
+    what: &str,
+) -> Option<&'a Map<String, Value>> {
+    match value {
+        Value::Object(map) => Some(map),
+        other => {
+            ctx.err(
+                path,
+                format!("expected {what} object, found {}", type_name(other)),
+            );
+            None
+        }
+    }
+}
+
+fn type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn check_keys(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    path: &str,
+    allowed: &[&str],
+    context: &str,
+) {
+    let known = all_known_keys();
+    for key in map.keys() {
+        if allowed.contains(&key.as_str()) {
+            continue;
+        }
+        let message = if known.contains(&key.as_str()) {
+            format!("`{key}` is not valid {context}")
+        } else {
+            match suggest(key, allowed) {
+                Some(hint) => format!("unknown key `{key}` {context} (did you mean `{hint}`?)"),
+                None => format!("unknown key `{key}` {context}"),
+            }
+        };
+        ctx.err(&join(path, key), message);
+    }
+}
+
+fn suggest<'a>(key: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let lower = key.to_ascii_lowercase();
+    candidates
+        .iter()
+        .map(|candidate| {
+            (
+                edit_distance(&lower, &candidate.to_ascii_lowercase()),
+                *candidate,
+            )
+        })
+        .filter(|(distance, candidate)| *distance <= (candidate.len() / 3).max(2))
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| candidate)
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut current = vec![i + 1; b.len() + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != *cb);
+            current[j + 1] = (previous[j] + cost)
+                .min(previous[j + 1] + 1)
+                .min(current[j] + 1);
+        }
+        previous = current;
+    }
+    previous[b.len()]
+}
+
+fn get_string(ctx: &mut Ctx, map: &Map<String, Value>, key: &str, path: &str) -> Option<String> {
+    let value = map.get(key)?;
+    string_value(ctx, value, &join(path, key))
+}
+
+fn string_value(ctx: &mut Ctx, value: &Value, path: &str) -> Option<String> {
+    match value {
+        Value::String(text) if text.trim().is_empty() => {
+            ctx.err(path, "must not be empty");
+            None
+        }
+        Value::String(text) => Some(text.clone()),
+        other => {
+            ctx.err(path, format!("expected string, found {}", type_name(other)));
+            None
+        }
+    }
+}
+
+fn get_u64(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    key: &str,
+    path: &str,
+    min: u64,
+) -> Option<u64> {
+    let value = map.get(key)?;
+    let path = join(path, key);
+    match value.as_u64() {
+        Some(number) if number >= min => Some(number),
+        Some(_) => {
+            ctx.err(&path, format!("must be at least {min}"));
+            None
+        }
+        None => {
+            ctx.err(
+                &path,
+                format!("expected non-negative integer, found {}", type_name(value)),
+            );
+            None
+        }
+    }
+}
+
+fn get_retries(ctx: &mut Ctx, map: &Map<String, Value>, path: &str) -> Option<u32> {
+    let retries = get_u64(ctx, map, "retries", path, 0)?;
+    if retries > 10 {
+        ctx.err(&join(path, "retries"), "must be at most 10");
+        return None;
+    }
+    Some(retries as u32)
+}
+
+fn get_bool(ctx: &mut Ctx, map: &Map<String, Value>, key: &str, path: &str) -> bool {
+    match map.get(key) {
+        None => false,
+        Some(Value::Bool(flag)) => *flag,
+        Some(other) => {
+            ctx.err(
+                &join(path, key),
+                format!("expected boolean, found {}", type_name(other)),
+            );
+            false
+        }
+    }
+}
+
+fn get_tags(ctx: &mut Ctx, map: &Map<String, Value>, path: &str) -> Vec<String> {
+    let Some(value) = map.get("tags") else {
+        return Vec::new();
+    };
+    let path = join(path, "tags");
+    let Some(items) = value.as_array() else {
+        ctx.err(
+            &path,
+            format!("expected array of strings, found {}", type_name(value)),
+        );
+        return Vec::new();
+    };
+    let mut tags = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let item_path = format!("{path}[{i}]");
+        let Some(tag) = string_value(ctx, item, &item_path) else {
+            continue;
+        };
+        let tag = tag.trim_start_matches('@').to_string();
+        if tag.is_empty() || tag.chars().any(char::is_whitespace) {
+            ctx.err(
+                &item_path,
+                "tags must be non-empty and contain no whitespace",
+            );
+        } else if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags
+}
+
+/// `true` or a non-empty reason string, as used by `skip`, `fixme` and `expectFail`.
+fn get_flag_reason(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Option<Option<String>> {
+    match map.get(key)? {
+        Value::Bool(true) => Some(None),
+        Value::Bool(false) => None,
+        Value::String(reason) if !reason.trim().is_empty() => Some(Some(reason.clone())),
+        other => {
+            ctx.err(
+                &join(path, key),
+                format!(
+                    "expected `true` or a reason string, found {}",
+                    type_name(other)
+                ),
+            );
+            None
+        }
+    }
+}
+
+fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> {
+    let map = as_object(ctx, value, "", "drill file")?;
+    check_keys(ctx, map, "", SUITE_KEYS, "at the top level of a drill file");
+    if let Some(schema) = map.get("$schema").filter(|value| !value.is_string()) {
+        ctx.err(
+            "$schema",
+            format!("expected string, found {}", type_name(schema)),
+        );
+    }
+    let suite = get_string(ctx, map, "suite", "").unwrap_or_else(|| default_suite_name(path));
+    let description = get_string(ctx, map, "description", "");
+    let tags = get_tags(ctx, map, "");
+    let timeout_ms = get_u64(ctx, map, "timeoutMs", "", 1);
+    let expect_timeout_ms = get_u64(ctx, map, "expectTimeoutMs", "", 1);
+    let retries = get_retries(ctx, map, "");
+    let setup = parse_hooks(ctx, map, "setup");
+    let teardown = parse_hooks(ctx, map, "teardown");
+    let before_all = parse_steps(ctx, map, "beforeAll", "");
+    let before_each = parse_steps(ctx, map, "beforeEach", "");
+    let after_each = parse_steps(ctx, map, "afterEach", "");
+    let after_all = parse_steps(ctx, map, "afterAll", "");
+
+    let mut tests = Vec::new();
+    match map.get("tests") {
+        None => ctx.err("tests", "is required"),
+        Some(Value::Array(items)) if items.is_empty() => {
+            ctx.err("tests", "must contain at least one test")
+        }
+        Some(Value::Array(items)) => {
+            let mut names = HashSet::new();
+            for (i, item) in items.iter().enumerate() {
+                if let Some(test) = parse_test(ctx, item, &index("", "tests", i)) {
+                    if !names.insert(test.name.clone()) {
+                        ctx.err(
+                            &index("", "tests", i),
+                            format!("duplicate test name {:?} in suite {suite:?}", test.name),
+                        );
+                    }
+                    tests.push(test);
+                }
+            }
+        }
+        Some(other) => ctx.err(
+            "tests",
+            format!("expected array, found {}", type_name(other)),
+        ),
+    }
+
+    Some(DrillSuite {
+        path: path.to_path_buf(),
+        suite,
+        description,
+        tags,
+        timeout_ms,
+        expect_timeout_ms,
+        retries,
+        setup,
+        teardown,
+        before_all,
+        before_each,
+        after_each,
+        after_all,
+        tests,
+    })
+}
+
+fn parse_hooks(ctx: &mut Ctx, map: &Map<String, Value>, key: &str) -> Vec<Value> {
+    let Some(value) = map.get(key) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        ctx.err(
+            key,
+            format!("expected array of hooks, found {}", type_name(value)),
+        );
+        return Vec::new();
+    };
+    let mut hooks = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        match drill::check_hook_json(item) {
+            Ok(()) => hooks.push(item.clone()),
+            Err(error) => ctx.err(&index("", key, i), format!("invalid hook: {error:#}")),
+        }
+    }
+    hooks
+}
+
+fn parse_steps(ctx: &mut Ctx, map: &Map<String, Value>, key: &str, path: &str) -> Vec<Step> {
+    let Some(value) = map.get(key) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        ctx.err(
+            &join(path, key),
+            format!("expected array of steps, found {}", type_name(value)),
+        );
+        return Vec::new();
+    };
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| parse_step(ctx, item, &index(path, key, i)))
+        .collect()
+}
+
+fn parse_test(ctx: &mut Ctx, value: &Value, path: &str) -> Option<TestCase> {
+    let map = as_object(ctx, value, path, "test")?;
+    let name = get_string(ctx, map, "name", path);
+    if !map.contains_key("name") {
+        ctx.err(path, "test `name` is required");
+    }
+    let path = match &name {
+        Some(name) => format!("{path} ({name:?})"),
+        None => path.to_string(),
+    };
+    check_keys(ctx, map, &path, TEST_KEYS, "in a test");
+    let description = get_string(ctx, map, "description", &path);
+    let tags = get_tags(ctx, map, &path);
+    let timeout_ms = get_u64(ctx, map, "timeoutMs", &path, 1);
+    let retries = get_retries(ctx, map, &path);
+    let slow = get_bool(ctx, map, "slow", &path);
+    let only = get_bool(ctx, map, "only", &path);
+    let skip = get_flag_reason(ctx, map, "skip", &path);
+    let fixme = get_flag_reason(ctx, map, "fixme", &path);
+    let expect_fail = get_flag_reason(ctx, map, "expectFail", &path)
+        .map(|reason| reason.unwrap_or_else(|| "expected to fail".to_string()));
+
+    if [only, skip.is_some(), fixme.is_some()]
+        .iter()
+        .filter(|set| **set)
+        .count()
+        > 1
+    {
+        ctx.err(&path, "use only one of `only`, `skip` and `fixme`");
+    }
+    let (mode, mode_reason) = if let Some(reason) = skip {
+        (TestMode::Skip, reason)
+    } else if let Some(reason) = fixme {
+        (TestMode::Fixme, reason)
+    } else if only {
+        (TestMode::Only, None)
+    } else {
+        (TestMode::Run, None)
+    };
+
+    let steps = parse_steps(ctx, map, "steps", &path);
+    let parked = matches!(mode, TestMode::Skip | TestMode::Fixme);
+    if !map.contains_key("steps") && !parked {
+        ctx.err(
+            &path,
+            "`steps` is required (or mark the test `skip`/`fixme`)",
+        );
+    } else if map
+        .get("steps")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+        && !parked
+    {
+        ctx.err(&join(&path, "steps"), "must contain at least one step");
+    }
+
+    Some(TestCase {
+        name: name?,
+        description,
+        tags,
+        timeout_ms,
+        retries,
+        mode,
+        mode_reason,
+        slow,
+        expect_fail,
+        steps,
+    })
+}
+
+fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
+    let map = as_object(ctx, value, path, "step")?;
+    let actions: Vec<&'static str> = ACTION_KEYS
+        .iter()
+        .copied()
+        .filter(|action| map.contains_key(*action))
+        .collect();
+    let action = match actions.as_slice() {
+        [action] => *action,
+        [] => {
+            let hint = map
+                .keys()
+                .find_map(|key| {
+                    suggest(key, ACTION_KEYS).map(|hint| format!(" (did you mean `{hint}`?)"))
+                })
+                .unwrap_or_default();
+            ctx.err(
+                path,
+                format!("step needs exactly one action such as `click`, `fill` or `expect`{hint}"),
+            );
+            return None;
+        }
+        many => {
+            ctx.err(
+                path,
+                format!(
+                    "step has several actions ({}); split them into separate steps",
+                    many.iter()
+                        .map(|key| format!("`{key}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+            return None;
+        }
+    };
+    let mut allowed: Vec<&str> = STEP_COMMON_KEYS.to_vec();
+    allowed.push(action);
+    let extra: &[&str] = match action {
+        "fill" | "type" => &["value"],
+        "press" | "screenshot" => &["target"],
+        "select" => &["value", "values"],
+        "waitFor" => &["state"],
+        "expect" => &["not", "soft"],
+        "expectIpc" => &["status", "count", "maxMs", "not", "soft"],
+        "expectEvent" => &["count", "not", "soft"],
+        "expectLog" => &["level", "count", "not", "soft"],
+        "expectNoErrors" => &["ignore", "soft"],
+        _ => &[],
+    };
+    allowed.extend_from_slice(extra);
+    if action == "expect" {
+        allowed.extend_from_slice(MATCHER_KEYS);
+        allowed.extend_from_slice(SCREENSHOT_OPTION_KEYS);
+    }
+    check_keys(ctx, map, path, &allowed, &format!("with `{action}`"));
+
+    let timeout_ms = get_u64(ctx, map, "timeoutMs", path, 1);
+    let custom_name = get_string(ctx, map, "name", path);
+    let kind = parse_step_kind(ctx, map, action, path)?;
+    let title = custom_name.unwrap_or_else(|| describe(&kind));
+    Some(Step {
+        title,
+        action,
+        timeout_ms,
+        kind,
+        spec: value.clone(),
+    })
+}
+
+fn optional_locator(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    key: &str,
+    parent: &str,
+) -> Result<Option<Locator>, ()> {
+    match map.get(key) {
+        None => Ok(None),
+        Some(value) => parse_locator(ctx, value, &join(parent, key))
+            .map(Some)
+            .ok_or(()),
+    }
+}
+
+fn parse_step_kind(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    action: &str,
+    parent: &str,
+) -> Option<StepKind> {
+    let raw = &map[action];
+    let path = join(parent, action);
+    let path = path.as_str();
+    let required_value = |ctx: &mut Ctx| match map.get("value") {
+        None => {
+            ctx.err(parent, format!("`{action}` requires `value`"));
+            None
+        }
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(other) => {
+            ctx.err(
+                &join(parent, "value"),
+                format!("expected string, found {}", type_name(other)),
+            );
+            None
+        }
+    };
+    Some(match action {
+        "click" => StepKind::Click(parse_locator(ctx, raw, path)?),
+        "dblclick" => StepKind::Dblclick(parse_locator(ctx, raw, path)?),
+        "hover" => StepKind::Hover(parse_locator(ctx, raw, path)?),
+        "check" => StepKind::Check(parse_locator(ctx, raw, path)?),
+        "uncheck" => StepKind::Uncheck(parse_locator(ctx, raw, path)?),
+        "fill" | "type" => {
+            let target = parse_locator(ctx, raw, path);
+            let value = required_value(ctx);
+            let (target, value) = (target?, value?);
+            if action == "fill" {
+                StepKind::Fill { target, value }
+            } else {
+                StepKind::Type { target, value }
+            }
+        }
+        "press" => {
+            let key = string_value(ctx, raw, path);
+            let target = optional_locator(ctx, map, "target", parent);
+            StepKind::Press {
+                key: key?,
+                target: target.ok()?,
+            }
+        }
+        "select" => {
+            let target = parse_locator(ctx, raw, path);
+            let values = match (map.get("value"), map.get("values")) {
+                (Some(_), Some(_)) => {
+                    ctx.err(parent, "use either `value` or `values`, not both");
+                    None
+                }
+                (Some(value), None) => {
+                    string_value(ctx, value, &join(parent, "value")).map(|value| vec![value])
+                }
+                (None, Some(Value::Array(items))) if !items.is_empty() => {
+                    let values_path = join(parent, "values");
+                    let parsed: Vec<Option<String>> = items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, item)| string_value(ctx, item, &format!("{values_path}[{i}]")))
+                        .collect();
+                    parsed.into_iter().collect()
+                }
+                (None, Some(_)) => {
+                    ctx.err(
+                        &join(parent, "values"),
+                        "expected a non-empty array of strings",
+                    );
+                    None
+                }
+                (None, None) => {
+                    ctx.err(parent, "`select` requires `value` or `values`");
+                    None
+                }
+            };
+            StepKind::Select {
+                target: target?,
+                values: values?,
+            }
+        }
+        "waitFor" => {
+            let target = parse_locator(ctx, raw, path);
+            let state = match map.get("state") {
+                None => Some(WaitState::Visible),
+                Some(Value::String(state)) => match state.as_str() {
+                    "attached" => Some(WaitState::Attached),
+                    "detached" => Some(WaitState::Detached),
+                    "visible" => Some(WaitState::Visible),
+                    "hidden" => Some(WaitState::Hidden),
+                    other => {
+                        ctx.err(
+                            &join(parent, "state"),
+                            format!(
+                                "unknown state {other:?}; use attached, detached, visible or hidden"
+                            ),
+                        );
+                        None
+                    }
+                },
+                Some(other) => {
+                    ctx.err(
+                        &join(parent, "state"),
+                        format!("expected string, found {}", type_name(other)),
+                    );
+                    None
+                }
+            };
+            StepKind::WaitFor {
+                target: target?,
+                state: state?,
+            }
+        }
+        "evaluate" => StepKind::Evaluate(string_value(ctx, raw, path)?),
+        "reload" => {
+            if raw != &Value::Bool(true) {
+                ctx.err(path, "expected `true`");
+                return None;
+            }
+            StepKind::Reload
+        }
+        "sleep" => match raw.as_u64() {
+            Some(ms) if (1..=60_000).contains(&ms) => StepKind::Sleep(ms),
+            _ => {
+                ctx.err(
+                    path,
+                    "expected milliseconds between 1 and 60000; prefer `waitFor` or `expect`",
+                );
+                return None;
+            }
+        },
+        "screenshot" => {
+            let name = parse_snapshot_name(ctx, raw, path, false);
+            let target = optional_locator(ctx, map, "target", parent);
+            StepKind::Screenshot {
+                name: name??,
+                target: target.ok()?,
+            }
+        }
+        "gate" => {
+            if let Err(error) = drill::check_gate_json(raw) {
+                ctx.err(path, format!("invalid gate: {error:#}"));
+                return None;
+            }
+            StepKind::Gate(raw.clone())
+        }
+        "expect" => StepKind::Expect(parse_expectation(ctx, map, raw, parent, path)?),
+        _ => StepKind::Telemetry(parse_telemetry(ctx, map, action, raw, parent, path)?),
+    })
+}
+
+fn parse_expectation(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    raw: &Value,
+    parent: &str,
+    path: &str,
+) -> Option<Expectation> {
+    let target = parse_locator(ctx, raw, path);
+    let not = get_bool(ctx, map, "not", parent);
+    let soft = get_bool(ctx, map, "soft", parent);
+    let matchers: Vec<&str> = MATCHER_KEYS
+        .iter()
+        .copied()
+        .filter(|key| map.contains_key(*key))
+        .collect();
+    let key = match matchers.as_slice() {
+        [key] => *key,
+        [] => {
+            ctx.err(
+                parent,
+                format!("`expect` needs one matcher: {}", MATCHER_KEYS.join(", ")),
+            );
+            return None;
+        }
+        many => {
+            ctx.err(
+                parent,
+                format!(
+                    "`expect` has several matchers ({}); use one per step",
+                    many.join(", ")
+                ),
+            );
+            return None;
+        }
+    };
+    let matcher_path = join(parent, key);
+    let value = &map[key];
+    let flag = |ctx: &mut Ctx, matcher: Matcher| {
+        if value == &Value::Bool(true) {
+            Some(matcher)
+        } else {
+            ctx.err(&matcher_path, "expected `true`");
+            None
+        }
+    };
+    let matcher = match key {
+        "toExist" => flag(ctx, Matcher::ToExist),
+        "toBeVisible" => flag(ctx, Matcher::ToBeVisible),
+        "toBeHidden" => flag(ctx, Matcher::ToBeHidden),
+        "toBeChecked" => flag(ctx, Matcher::ToBeChecked),
+        "toHaveText" => parse_text_match(ctx, value, &matcher_path).map(Matcher::ToHaveText),
+        "toHaveValue" => parse_text_match(ctx, value, &matcher_path).map(Matcher::ToHaveValue),
+        "toContainText" => string_value(ctx, value, &matcher_path).map(Matcher::ToContainText),
+        "toHaveCount" => match value.as_u64() {
+            Some(count) => Some(Matcher::ToHaveCount(count)),
+            None => {
+                ctx.err(&matcher_path, "expected non-negative integer");
+                None
+            }
+        },
+        "toMatchAriaSnapshot" => {
+            parse_snapshot_name(ctx, value, &matcher_path, true).map(Matcher::ToMatchAriaSnapshot)
+        }
+        "toHaveScreenshot" => {
+            let name = parse_snapshot_name(ctx, value, &matcher_path, true);
+            let options = parse_screenshot_options(ctx, map, parent);
+            match (name, options) {
+                (Some(name), Some(mut options)) => {
+                    options.name = name;
+                    Some(Matcher::ToHaveScreenshot(options))
+                }
+                _ => None,
+            }
+        }
+        _ => unreachable!("matcher keys are exhaustive"),
+    };
+    if key != "toHaveScreenshot" {
+        for option in SCREENSHOT_OPTION_KEYS {
+            if map.contains_key(*option) {
+                ctx.err(&join(parent, option), "only valid with `toHaveScreenshot`");
+            }
+        }
+    }
+    if not && matches!(key, "toMatchAriaSnapshot" | "toHaveScreenshot") {
+        ctx.err(
+            &join(parent, "not"),
+            format!("`not` is not supported with `{key}`"),
+        );
+        return None;
+    }
+    Some(Expectation {
+        target: target?,
+        matcher: matcher?,
+        not,
+        soft,
+    })
+}
+
+/// Snapshot names become file names, so keep them to a safe character set.
+fn parse_snapshot_name(
+    ctx: &mut Ctx,
+    value: &Value,
+    path: &str,
+    allow_auto: bool,
+) -> Option<Option<String>> {
+    match value {
+        Value::Bool(true) if allow_auto => Some(None),
+        Value::String(name) => {
+            let valid = !name.is_empty()
+                && !name.starts_with('.')
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            if valid {
+                Some(Some(name.clone()))
+            } else {
+                ctx.err(
+                    path,
+                    "snapshot names may only use letters, digits, `-`, `_` and `.`",
+                );
+                None
+            }
+        }
+        other => {
+            let expected = if allow_auto {
+                "`true` or a snapshot name"
+            } else {
+                "a snapshot name"
+            };
+            ctx.err(
+                path,
+                format!("expected {expected}, found {}", type_name(other)),
+            );
+            None
+        }
+    }
+}
+
+fn parse_screenshot_options(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    parent: &str,
+) -> Option<ScreenshotMatch> {
+    let mut ok = true;
+    let max_diff_pixels = get_u64(ctx, map, "maxDiffPixels", parent, 0);
+    if map.contains_key("maxDiffPixels") && max_diff_pixels.is_none() {
+        ok = false;
+    }
+    let mut ratio = |ctx: &mut Ctx, key: &str| match map.get(key) {
+        None => None,
+        Some(value) => match value.as_f64() {
+            Some(number) if (0.0..=1.0).contains(&number) => Some(number),
+            _ => {
+                ctx.err(&join(parent, key), "expected a number between 0 and 1");
+                ok = false;
+                None
+            }
+        },
+    };
+    let max_diff_pixel_ratio = ratio(ctx, "maxDiffPixelRatio");
+    let threshold = ratio(ctx, "threshold").unwrap_or(DEFAULT_SCREENSHOT_THRESHOLD);
+    let mut mask = Vec::new();
+    if let Some(value) = map.get("mask") {
+        let mask_path = join(parent, "mask");
+        match value.as_array() {
+            Some(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    match parse_locator(ctx, item, &format!("{mask_path}[{i}]")) {
+                        Some(locator) => mask.push(locator),
+                        None => ok = false,
+                    }
+                }
+            }
+            None => {
+                ctx.err(&mask_path, "expected array of locators");
+                ok = false;
+            }
+        }
+    }
+    ok.then_some(ScreenshotMatch {
+        name: None,
+        max_diff_pixels,
+        max_diff_pixel_ratio,
+        threshold,
+        mask,
+    })
+}
+
+fn parse_text_match(ctx: &mut Ctx, value: &Value, path: &str) -> Option<TextMatch> {
+    match value {
+        Value::String(text) => Some(TextMatch::Exact(text.clone())),
+        Value::Object(map) => {
+            check_keys(ctx, map, path, &["pattern"], "in a text pattern");
+            if !map.contains_key("pattern") {
+                ctx.err(path, "expected `{ \"pattern\": \"...\" }`");
+                return None;
+            }
+            let pattern = get_string(ctx, map, "pattern", path)?;
+            match Regex::new(&pattern) {
+                Ok(regex) => Some(TextMatch::Pattern(regex)),
+                Err(error) => {
+                    ctx.err(
+                        &join(path, "pattern"),
+                        format!("invalid regular expression: {error}"),
+                    );
+                    None
+                }
+            }
+        }
+        other => {
+            ctx.err(
+                path,
+                format!(
+                    "expected string or {{ \"pattern\": ... }}, found {}",
+                    type_name(other)
+                ),
+            );
+            None
+        }
+    }
+}
+
+fn parse_telemetry(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    action: &str,
+    raw: &Value,
+    parent: &str,
+    path: &str,
+) -> Option<TelemetryExpectation> {
+    let not = get_bool(ctx, map, "not", parent);
+    let soft = get_bool(ctx, map, "soft", parent);
+    let count = get_u64(ctx, map, "count", parent, 0);
+    if not && count.is_some() {
+        ctx.err(parent, "use either `not` or `count`, not both");
+        return None;
+    }
+    match action {
+        "expectIpc" => {
+            let command = string_value(ctx, raw, path);
+            let status = match map.get("status") {
+                None => Some(None),
+                Some(Value::String(status)) if status == "ok" => Some(Some(IpcStatus::Ok)),
+                Some(Value::String(status)) if status == "error" => Some(Some(IpcStatus::Error)),
+                Some(_) => {
+                    ctx.err(&join(parent, "status"), "expected \"ok\" or \"error\"");
+                    None
+                }
+            };
+            let max_ms = get_u64(ctx, map, "maxMs", parent, 1);
+            Some(TelemetryExpectation::Ipc {
+                command: command?,
+                status: status?,
+                count,
+                max_ms,
+                not,
+                soft,
+            })
+        }
+        "expectEvent" => Some(TelemetryExpectation::Event {
+            name: string_value(ctx, raw, path)?,
+            count,
+            not,
+            soft,
+        }),
+        "expectLog" => {
+            let contains = string_value(ctx, raw, path);
+            let level =
+                get_string(ctx, map, "level", parent).map(|level| level.to_ascii_lowercase());
+            Some(TelemetryExpectation::Log {
+                contains: contains?,
+                level,
+                count,
+                not,
+                soft,
+            })
+        }
+        "expectNoErrors" => {
+            if raw != &Value::Bool(true) {
+                ctx.err(path, "expected `true`");
+                return None;
+            }
+            let mut ignore = Vec::new();
+            if let Some(value) = map.get("ignore") {
+                let ignore_path = join(parent, "ignore");
+                match value.as_array() {
+                    Some(items) => {
+                        for (i, item) in items.iter().enumerate() {
+                            ignore.extend(string_value(ctx, item, &format!("{ignore_path}[{i}]")));
+                        }
+                    }
+                    None => ctx.err(&ignore_path, "expected array of strings"),
+                }
+            }
+            Some(TelemetryExpectation::NoErrors { ignore, soft })
+        }
+        _ => unreachable!("telemetry actions are exhaustive"),
+    }
+}
+
+/// Parse a standalone locator, e.g. from a CLI flag or MCP tool argument.
+pub fn parse_locator_value(value: &Value) -> Result<Locator, Vec<Issue>> {
+    let mut ctx = Ctx::default();
+    match parse_locator(&mut ctx, value, "") {
+        Some(locator) if ctx.issues.is_empty() => Ok(locator),
+        _ => Err(ctx.issues),
+    }
+}
+
+fn parse_locator(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Locator> {
+    let map = match value {
+        Value::String(css) if css.trim().is_empty() => {
+            ctx.err(path, "locator must not be empty");
+            return None;
+        }
+        Value::String(css) => return Some(Locator::Css(css.clone())),
+        Value::Object(map) => map,
+        other => {
+            ctx.err(
+                path,
+                format!(
+                    "expected a CSS selector string or locator object, found {}",
+                    type_name(other)
+                ),
+            );
+            return None;
+        }
+    };
+    let before = ctx.issues.len();
+    check_keys(ctx, map, path, LOCATOR_KEYS, "in a locator");
+    let kinds: Vec<&str> = LOCATOR_KINDS
+        .iter()
+        .copied()
+        .filter(|key| map.contains_key(*key))
+        .collect();
+    let kind = match kinds.as_slice() {
+        [kind] => *kind,
+        [] => {
+            ctx.err(
+                path,
+                format!("locator needs one of: {}", LOCATOR_KINDS.join(", ")),
+            );
+            return None;
+        }
+        many => {
+            ctx.err(
+                path,
+                format!("locator has several kinds ({}); use one", many.join(", ")),
+            );
+            return None;
+        }
+    };
+    let value = get_string(ctx, map, kind, path);
+    let exact = get_bool(ctx, map, "exact", path);
+    let nth = match map.get("nth") {
+        None => None,
+        Some(value) => match value.as_i64() {
+            Some(nth) => Some(nth),
+            None => {
+                ctx.err(
+                    &join(path, "nth"),
+                    "expected integer (negative counts from the end)",
+                );
+                None
+            }
+        },
+    };
+    let name = get_string(ctx, map, "name", path);
+    if map.contains_key("name") && kind != "role" {
+        ctx.err(&join(path, "name"), "only valid with `role`");
+    }
+    if map.contains_key("exact") && matches!(kind, "css" | "testId") {
+        ctx.err(&join(path, "exact"), format!("not valid with `{kind}`"));
+    }
+    if map.contains_key("exact") && kind == "role" && !map.contains_key("name") {
+        ctx.err(&join(path, "exact"), "requires `name`");
+    }
+    if ctx.issues.len() > before {
+        return None;
+    }
+    let value = value?;
+    Some(match kind {
+        "css" => match nth {
+            Some(nth) => Locator::CssNth { css: value, nth },
+            None => Locator::Css(value),
+        },
+        "role" => Locator::Role {
+            role: value,
+            name,
+            exact,
+            nth,
+        },
+        "text" => Locator::Text {
+            text: value,
+            exact,
+            nth,
+        },
+        "testId" => Locator::TestId { id: value, nth },
+        "label" => Locator::Label {
+            label: value,
+            exact,
+            nth,
+        },
+        "placeholder" => Locator::Placeholder {
+            placeholder: value,
+            exact,
+            nth,
+        },
+        _ => unreachable!("locator kinds are exhaustive"),
+    })
+}
+
+/// Default human-readable title for a step.
+pub fn describe(kind: &StepKind) -> String {
+    match kind {
+        StepKind::Click(target) => format!("click {target}"),
+        StepKind::Dblclick(target) => format!("double-click {target}"),
+        StepKind::Fill { target, value } => format!("fill {target} with {value:?}"),
+        StepKind::Type { target, value } => format!("type {value:?} into {target}"),
+        StepKind::Press {
+            key,
+            target: Some(target),
+        } => format!("press {key} on {target}"),
+        StepKind::Press { key, target: None } => format!("press {key}"),
+        StepKind::Hover(target) => format!("hover {target}"),
+        StepKind::Select { target, values } => format!("select {} in {target}", values.join(", ")),
+        StepKind::Check(target) => format!("check {target}"),
+        StepKind::Uncheck(target) => format!("uncheck {target}"),
+        StepKind::WaitFor { target, state } => {
+            format!("wait for {target} to be {}", state.as_str())
+        }
+        StepKind::Evaluate(expression) => format!("evaluate {}", clip(expression, 60)),
+        StepKind::Reload => "reload page".to_string(),
+        StepKind::Sleep(ms) => format!("sleep {ms}ms"),
+        StepKind::Screenshot { name, .. } => format!("screenshot {name}"),
+        StepKind::Gate(gate) => format!(
+            "gate {}",
+            gate.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("manual step")
+        ),
+        StepKind::Expect(expectation) => {
+            let not = if expectation.not { "not " } else { "" };
+            let matcher = match &expectation.matcher {
+                Matcher::ToExist => "to exist".to_string(),
+                Matcher::ToBeVisible => "to be visible".to_string(),
+                Matcher::ToBeHidden => "to be hidden".to_string(),
+                Matcher::ToBeChecked => "to be checked".to_string(),
+                Matcher::ToHaveText(text) => format!("to have text {text}"),
+                Matcher::ToHaveValue(text) => format!("to have value {text}"),
+                Matcher::ToContainText(text) => format!("to contain text {text:?}"),
+                Matcher::ToHaveCount(count) => format!("to have count {count}"),
+                Matcher::ToMatchAriaSnapshot(_) => "to match ARIA snapshot".to_string(),
+                Matcher::ToHaveScreenshot(_) => "to match screenshot".to_string(),
+            };
+            format!("expect {} {not}{matcher}", expectation.target)
+        }
+        StepKind::Telemetry(expectation) => match expectation {
+            TelemetryExpectation::Ipc { command, not, .. } => format!(
+                "expect IPC `{command}` {}",
+                if *not { "not called" } else { "called" }
+            ),
+            TelemetryExpectation::Event { name, not, .. } => format!(
+                "expect event `{name}` {}",
+                if *not { "not emitted" } else { "emitted" }
+            ),
+            TelemetryExpectation::Log { contains, not, .. } => format!(
+                "expect {}log containing {contains:?}",
+                if *not { "no " } else { "" }
+            ),
+            TelemetryExpectation::NoErrors { .. } => "expect no errors".to_string(),
+        },
+    }
+}
+
+fn clip(value: &str, max: usize) -> String {
+    let line = value.lines().next().unwrap_or_default();
+    if line.chars().count() > max || value.lines().count() > 1 {
+        format!("{}…", line.chars().take(max).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> ParsedFile {
+        parse_str(Path::new("greet.drill.json"), text)
+    }
+
+    fn messages(text: &str) -> Vec<String> {
+        parse(text).issues.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn parses_full_suite() {
+        let parsed = parse(
+            r##"{
+              "$schema": "https://auditaur.dev/schemas/drill.schema.json",
+              "tags": ["@smoke"],
+              "expectTimeoutMs": 2000,
+              "beforeEach": [{ "reload": true }],
+              "tests": [
+                {
+                  "name": "greets",
+                  "tags": ["fast"],
+                  "retries": 1,
+                  "steps": [
+                    { "fill": { "testId": "name" }, "value": "Seth" },
+                    { "click": { "role": "button", "name": "Greet" } },
+                    { "press": "Enter", "target": "#name" },
+                    { "select": "#pick", "values": ["a", "b"] },
+                    { "waitFor": { "text": "Hello", "nth": -1 }, "state": "visible" },
+                    { "expect": "#output", "toContainText": "Hello, Seth" },
+                    { "expect": "#output", "toHaveText": { "pattern": "^Hello" }, "soft": true },
+                    { "expect": "#toast", "not": true, "toBeVisible": true },
+                    { "expect": "body", "toHaveScreenshot": "home", "maxDiffPixels": 10, "mask": ["#clock"] },
+                    { "expect": "main", "toMatchAriaSnapshot": true },
+                    { "expectIpc": "greet", "status": "ok", "maxMs": 200 },
+                    { "expectEvent": "app:greeted", "count": 1 },
+                    { "expectLog": "boom", "not": true },
+                    { "expectNoErrors": true, "ignore": ["ResizeObserver"] },
+                    { "gate": { "name": "Approve", "instructions": "Click approve", "manualContinue": true } },
+                    { "name": "custom title", "sleep": 10 }
+                  ]
+                },
+                { "name": "later", "fixme": "needs auth" }
+              ]
+            }"##,
+        );
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        let suite = parsed.suite.unwrap();
+        assert_eq!(suite.suite, "greet");
+        assert_eq!(suite.tags, ["smoke"]);
+        assert_eq!(suite.before_each.len(), 1);
+        let test = &suite.tests[0];
+        assert_eq!(test.steps.len(), 16);
+        assert_eq!(test.steps[1].title, "click role=button[name=\"Greet\"i]");
+        assert_eq!(
+            test.steps[4].title,
+            "wait for text=\"Hello\"i >> nth=-1 to be visible"
+        );
+        assert_eq!(test.steps[7].title, "expect #toast not to be visible");
+        assert_eq!(test.steps[15].title, "custom title");
+        assert_eq!(suite.tests[1].mode, TestMode::Fixme);
+        assert_eq!(suite.tests[1].mode_reason.as_deref(), Some("needs auth"));
+    }
+
+    #[test]
+    fn reports_unknown_keys_with_suggestions() {
+        let issues =
+            messages(r##"{ "tests": [{ "name": "a", "steps": [{ "clik": "#x" }] }], "tag": [] }"##);
+        assert!(
+            issues
+                .iter()
+                .any(|m| m.contains("unknown key `tag`") && m.contains("did you mean `tags`")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|m| m.contains("did you mean `click`")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn reports_misplaced_known_keys() {
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a.b", "steps": [{ "click": "#x", "value": "y" }] }] }"##,
+        );
+        assert_eq!(
+            issues,
+            ["tests[0] (\"a.b\").steps[0].value: `value` is not valid with `click`"]
+        );
+    }
+
+    #[test]
+    fn collects_every_issue() {
+        let issues = messages(
+            r##"{ "tests": [
+                { "name": "a", "steps": [{ "fill": "#x" }, { "click": "#a", "hover": "#b" }] },
+                { "name": "a", "steps": [{ "expect": "#x" }] },
+                { "steps": [] }
+            ] }"##,
+        );
+        for needle in [
+            "`fill` requires `value`",
+            "several actions",
+            "duplicate test name",
+            "needs one matcher",
+            "test `name` is required",
+        ] {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_locators() {
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "click": { "css": "#a", "role": "button" } },
+                { "click": { "testId": "a", "name": "x" } },
+                { "click": { "rol": "button" } },
+                { "click": "" },
+                { "click": { "role": "button", "exact": true } }
+            ] }] }"##,
+        );
+        for needle in [
+            "several kinds",
+            "name: only valid with `role`",
+            "did you mean `role`",
+            "locator must not be empty",
+            "exact: requires `name`",
+        ] {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_matchers_and_telemetry() {
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "expect": "#a", "toHaveText": { "pattern": "(" } },
+                { "expect": "#a", "toBeVisible": true, "maxDiffPixels": 3 },
+                { "expect": "#a", "toHaveScreenshot": "../x" },
+                { "expect": "#a", "toHaveScreenshot": true, "not": true },
+                { "expectIpc": "greet", "not": true, "count": 2 },
+                { "expectIpc": "greet", "status": "fine" },
+                { "screenshot": true }
+            ] }] }"##,
+        );
+        for needle in [
+            "invalid regular expression",
+            "only valid with `toHaveScreenshot`",
+            "snapshot names",
+            "`not` is not supported",
+            "either `not` or `count`",
+            "\"ok\" or \"error\"",
+            "expected a snapshot name",
+        ] {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_test_modes_and_hooks() {
+        let issues = messages(
+            r##"{ "setup": [{ "name": "seed" }], "tests": [
+                { "name": "a", "skip": true, "only": true },
+                { "name": "b", "skip": 3 },
+                { "name": "c", "skip": "later" }
+            ] }"##,
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|m| m.starts_with("setup[0]: invalid hook")),
+            "{issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|m| m.contains("only one of `only`, `skip` and `fixme`")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|m| m.contains("reason string")),
+            "{issues:?}"
+        );
+        assert!(!issues.iter().any(|m| m.contains("\"c\"")), "{issues:?}");
+    }
+
+    #[test]
+    fn rejects_invalid_json_and_missing_tests() {
+        assert!(messages("{").iter().any(|m| m.contains("invalid JSON")));
+        assert_eq!(messages("{}"), ["tests: is required"]);
+        assert_eq!(
+            messages(r##"{ "tests": [] }"##),
+            ["tests: must contain at least one test"]
+        );
+        assert!(
+            parse("\u{feff}{ \"tests\": [{ \"name\": \"a\", \"skip\": true }] }")
+                .issues
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn text_matching_normalizes_whitespace() {
+        assert!(TextMatch::Exact("Hello  world".into()).matches(" Hello\nworld "));
+        assert!(!TextMatch::Exact("Hello".into()).matches("Hello world"));
+        assert!(TextMatch::Pattern(Regex::new("^Hel+o").unwrap()).matches("Hello"));
+    }
+
+    #[test]
+    fn default_suite_name_strips_extension() {
+        assert_eq!(default_suite_name(Path::new("a/login.drill.json")), "login");
+        assert_eq!(default_suite_name(Path::new("a/login.json")), "login");
+    }
+}
