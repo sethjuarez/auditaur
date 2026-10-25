@@ -9,6 +9,10 @@ pub mod real;
 pub mod snapshot;
 pub mod telemetry;
 
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -106,19 +110,37 @@ pub struct TestDone<'a> {
     pub outcome: Option<Outcome>,
     pub attempt: u32,
     pub duration: Duration,
+    /// The attempt's first failure.
     pub error: Option<&'a ErrorInfo>,
+    /// Later failures, such as soft assertions after the first.
+    pub other_errors: &'a [ErrorInfo],
 }
-
-#[cfg(test)]
-pub struct NoReporter;
-#[cfg(test)]
-impl Reporter for NoReporter {}
 
 #[derive(Debug, Clone, Default)]
 pub struct RunnerOptions {
     /// Used when neither the test nor its suite sets `retries`.
     pub retries: Option<u32>,
     pub update_snapshots: UpdateMode,
+    /// Stop starting tests once this many have failed (suite errors count too).
+    pub max_failures: Option<usize>,
+    /// Set (e.g. by Ctrl+C) to stop the run: the running test is cut short, remaining
+    /// tests and `afterEach`/`afterAll` are skipped, and teardown hooks still run.
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+impl RunnerOptions {
+    pub fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::SeqCst))
+    }
+}
+
+/// Why a run stopped before every selected test ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    Cancelled,
+    MaxFailures,
 }
 
 /// Run every selected test. Writer errors abort the run; everything else is recorded.
@@ -128,9 +150,12 @@ pub fn execute(
     host: &mut dyn Host,
     reporter: &mut dyn Reporter,
     options: &RunnerOptions,
-) -> Result<()> {
+) -> Result<Option<Stopped>> {
     for (index, selected) in plan.iter().enumerate() {
-        SuiteRun {
+        if let Some(stopped) = stop_reason(writer, options) {
+            return Ok(Some(stopped));
+        }
+        let stopped = SuiteRun {
             writer: &mut *writer,
             host: &mut *host,
             reporter: &mut *reporter,
@@ -141,10 +166,28 @@ pub fn execute(
             exited: None,
             auto_snapshots: 0,
             wrote_baseline: false,
+            stopped: None,
         }
         .run()?;
+        if stopped.is_some() {
+            return Ok(stopped);
+        }
     }
-    Ok(())
+    Ok(options.cancelled().then_some(Stopped::Cancelled))
+}
+
+fn stop_reason(writer: &RunWriter, options: &RunnerOptions) -> Option<Stopped> {
+    if options.cancelled() {
+        return Some(Stopped::Cancelled);
+    }
+    let max = options.max_failures?;
+    let report = writer.report();
+    let suite_errors = report
+        .suites
+        .iter()
+        .filter(|suite| suite.error.is_some())
+        .count();
+    (report.totals.failed + suite_errors >= max).then_some(Stopped::MaxFailures)
 }
 
 struct SuiteRun<'r, 'p> {
@@ -162,6 +205,8 @@ struct SuiteRun<'r, 'p> {
     auto_snapshots: u32,
     /// A missing baseline was written during the current test.
     wrote_baseline: bool,
+    /// Set when the suite stopped starting tests early.
+    stopped: Option<Stopped>,
 }
 
 /// Failures collected while running a list of steps.
@@ -169,6 +214,8 @@ struct SuiteRun<'r, 'p> {
 struct Tally {
     hard: Option<(Status, ErrorInfo)>,
     soft: Option<ErrorInfo>,
+    /// Every failure, in the order it happened.
+    all: Vec<ErrorInfo>,
 }
 
 impl Tally {
@@ -186,6 +233,22 @@ impl Tally {
         if self.soft.is_none() {
             self.soft = other.soft;
         }
+        self.all.extend(other.all);
+    }
+
+    /// Failures other than [`Tally::first_error`].
+    fn other_errors(&self) -> Vec<ErrorInfo> {
+        let first = self.first_error();
+        let mut skipped = false;
+        self.all
+            .iter()
+            .filter(|error| {
+                let is_first = !skipped && Some(*error) == first.as_ref();
+                skipped |= is_first;
+                !is_first
+            })
+            .cloned()
+            .collect()
     }
 
     fn status(&self) -> Status {
@@ -213,19 +276,26 @@ impl SuiteRun<'_, '_> {
         self.selected.suite
     }
 
-    fn run(mut self) -> Result<()> {
+    fn run(mut self) -> Result<Option<Stopped>> {
         let suite = self.selected.suite;
         self.writer.suite_started(self.index)?;
         self.reporter.suite_started(suite);
 
         for (index, hook) in suite.setup.iter().enumerate() {
+            if self.options.cancelled() {
+                self.stopped = Some(Stopped::Cancelled);
+                break;
+            }
             if let Some(error) = self.hook_step(hook, false, index)? {
                 self.error = Some(error);
                 break;
             }
         }
+        if self.options.cancelled() {
+            self.stopped = Some(Stopped::Cancelled);
+        }
 
-        let mut driver = if self.error.is_none() {
+        let mut driver = if self.error.is_none() && self.stopped.is_none() {
             self.launch()?
         } else {
             None
@@ -251,7 +321,8 @@ impl SuiteRun<'_, '_> {
         if let Some(error) = &self.error {
             self.reporter.suite_error(suite, error);
         }
-        self.writer.suite_finished(self.index, self.error.take())
+        self.writer.suite_finished(self.index, self.error.take())?;
+        Ok(self.stopped)
     }
 
     fn launch(&mut self) -> Result<Option<Box<dyn AppDriver>>> {
@@ -295,6 +366,10 @@ impl SuiteRun<'_, '_> {
 
         if self.error.is_none() && self.exited.is_none() {
             for (index, test) in self.selected.tests.iter().enumerate() {
+                if let Some(stopped) = stop_reason(self.writer, self.options) {
+                    self.stopped = Some(stopped);
+                    break;
+                }
                 self.run_test(driver, index, test)?;
                 if self.exited.is_some() {
                     break;
@@ -302,7 +377,7 @@ impl SuiteRun<'_, '_> {
             }
         }
 
-        if self.exited.is_none() {
+        if self.exited.is_none() && !self.options.cancelled() {
             self.auto_snapshots = 0;
             let tally = self.run_steps(
                 driver,
@@ -338,6 +413,7 @@ impl SuiteRun<'_, '_> {
                 attempt: 0,
                 duration: Duration::ZERO,
                 error: None,
+                other_errors: &[],
             });
             return Ok(());
         }
@@ -377,6 +453,7 @@ impl SuiteRun<'_, '_> {
             }
             let mut status = tally.status();
             let mut error = tally.first_error();
+            let others = tally.other_errors();
             if let Some(reason) = &self.exited {
                 if status == Status::Passed {
                     status = Status::Failed;
@@ -390,10 +467,15 @@ impl SuiteRun<'_, '_> {
                     None => ErrorInfo::new(message),
                 });
             }
+            // Ctrl+C reaches the app too, so a cut-short test may also see it exit.
+            if self.options.cancelled() && status != Status::Passed {
+                status = Status::Interrupted;
+            }
             let will_retry = status != expected
                 && attempt < retries
                 && self.exited.is_none()
-                && !self.wrote_baseline;
+                && !self.wrote_baseline
+                && !self.options.cancelled();
             self.writer
                 .test_finished(status, error.clone(), will_retry)?;
             let outcome = if will_retry {
@@ -408,6 +490,7 @@ impl SuiteRun<'_, '_> {
                 attempt,
                 duration: started.elapsed(),
                 error: error.as_ref(),
+                other_errors: &others,
             });
             if !will_retry {
                 break;
@@ -437,8 +520,9 @@ impl SuiteRun<'_, '_> {
             let steps = self.run_steps(driver, &test.steps, &budget)?;
             tally.merge(steps);
         }
-        // afterEach always runs (unless the app died), with its own time budget.
-        if self.exited.is_none() {
+        // afterEach always runs (unless the app died or the run was cancelled), with its own
+        // time budget.
+        if self.exited.is_none() && !self.options.cancelled() {
             let budget = Budget::new(Phase::AfterEach, timeout_ms, Some(id.to_string()), since)
                 .for_test(&test.name);
             let after = self.run_steps(driver, &suite.after_each, &budget)?;
@@ -460,8 +544,19 @@ impl SuiteRun<'_, '_> {
                 .unwrap_or(DEFAULT_EXPECT_TIMEOUT_MS),
         );
         for step in steps {
+            if self.options.cancelled() {
+                // Suite hooks just stop; a test records that it was cut short.
+                if budget.test_id.is_some() {
+                    let error = ErrorInfo::new("interrupted");
+                    tally.all.push(error.clone());
+                    tally.hard = Some((Status::Interrupted, error));
+                }
+                break;
+            }
             if Instant::now() >= budget.deadline {
-                tally.hard = Some((Status::TimedOut, budget.timeout_error()));
+                let error = budget.timeout_error();
+                tally.all.push(error.clone());
+                tally.hard = Some((Status::TimedOut, error));
                 break;
             }
             let index = self
@@ -515,6 +610,7 @@ impl SuiteRun<'_, '_> {
             }
             self.writer
                 .step_finished(step_status, soft, Some(error.clone()))?;
+            tally.all.push(error.clone());
             if soft {
                 tally.soft.get_or_insert(error);
                 continue;

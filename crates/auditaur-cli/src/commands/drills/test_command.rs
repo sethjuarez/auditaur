@@ -1,18 +1,23 @@
 //! `auditaur drill test`: run drill suites like a test runner.
 
 use std::{
+    collections::HashSet,
     path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use super::{
-    default_roots, discover_or_empty, format_ms, format_totals, load, print_issues, run,
+    default_roots, discover_or_empty, format_ms, format_totals, junit, load, print_issues, run,
     runner::{
         self,
         real::{LaunchSource, RealHost},
-        Reporter, RunnerOptions, TestDone,
+        Reporter, RunnerOptions, Stopped, TestDone,
     },
     select, Filters, DEFAULT_DRILLS_DIR,
 };
@@ -30,12 +35,19 @@ pub struct TestOptions {
     pub require_frontend: bool,
     pub timeout_seconds: Option<u64>,
     pub update_snapshots: runner::snapshot::UpdateMode,
+    /// Stop starting tests after this many failures (`-x` is 1).
+    pub max_failures: Option<usize>,
+    /// Only run tests that failed or did not run in the latest run.
+    pub last_failed: bool,
+    /// Also write a JUnit XML report here.
+    pub junit: Option<PathBuf>,
     pub json: bool,
     /// Launch command from `-- <command>`; wins over the config `start` command.
     pub command: Vec<String>,
 }
 
-/// Exit codes: 0 all passed (flaky counts), 1 a test failed or did not run, 2 drill files are invalid.
+/// Exit codes: 0 all passed (flaky counts), 1 a test failed or did not run, 2 drill files are
+/// invalid, 130 interrupted by Ctrl+C.
 pub fn test(options: TestOptions) -> Result<i32> {
     let workspace = std::env::current_dir()?;
     let files = discover_or_empty(&default_roots())?;
@@ -47,7 +59,21 @@ pub fn test(options: TestOptions) -> Result<i32> {
         }
         return Ok(2);
     }
-    let plan = select(&loaded.suites, &options.filters);
+    let mut plan = select(&loaded.suites, &options.filters);
+    if options.last_failed {
+        let failed = last_failed_ids(&workspace)?;
+        for selected in &mut plan {
+            let path = run::workspace_path(&workspace, &selected.suite.path);
+            selected
+                .tests
+                .retain(|test| failed.contains(&run::test_id(&path, &test.name)));
+        }
+        plan.retain(|selected| !selected.tests.is_empty());
+        if plan.is_empty() {
+            println!("No failed tests in the latest run to rerun.");
+            return Ok(0);
+        }
+    }
     if plan.iter().all(|selected| selected.tests.is_empty()) {
         eprintln!("No tests found under {DEFAULT_DRILLS_DIR}");
         return Ok(1);
@@ -127,7 +153,9 @@ pub fn test(options: TestOptions) -> Result<i32> {
         plan.len(),
         if plan.len() == 1 { "suite" } else { "suites" },
     ));
-    runner::execute(
+    let cancel = Arc::new(AtomicBool::new(false));
+    install_ctrl_c(Arc::clone(&cancel), options.json)?;
+    let stopped = runner::execute(
         &mut writer,
         &plan,
         &mut host,
@@ -135,12 +163,28 @@ pub fn test(options: TestOptions) -> Result<i32> {
         &RunnerOptions {
             retries: options.retries,
             update_snapshots: options.update_snapshots,
+            max_failures: options.max_failures,
+            cancel: Some(Arc::clone(&cancel)),
         },
     )?;
-    let report = writer.finish(false)?;
+    let report = writer.finish(stopped.is_some())?;
     let suite_failed = report.suites.iter().any(|suite| suite.error.is_some());
-    let exit_code =
-        i32::from(report.totals.failed > 0 || report.totals.not_run > 0 || suite_failed);
+    let exit_code = if stopped == Some(Stopped::Cancelled) {
+        130
+    } else {
+        i32::from(report.totals.failed > 0 || report.totals.not_run > 0 || suite_failed)
+    };
+
+    if let Some(path) = &options.junit {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, junit::render(&report))
+            .with_context(|| format!("failed to write `{}`", path.display()))?;
+    }
 
     if options.json {
         let mut value = serde_json::to_value(&report)?;
@@ -148,6 +192,14 @@ pub fn test(options: TestOptions) -> Result<i32> {
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         println!();
+        match stopped {
+            Some(Stopped::Cancelled) => println!("Interrupted."),
+            Some(Stopped::MaxFailures) => println!(
+                "Stopped after {} (--max-failures); remaining tests did not run.",
+                plural(options.max_failures.unwrap_or(1), "failure", "failures")
+            ),
+            None => {}
+        }
         println!(
             "{}  ({})",
             format_totals(&report.totals),
@@ -161,6 +213,48 @@ pub fn test(options: TestOptions) -> Result<i32> {
         );
     }
     Ok(exit_code)
+}
+
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// Ids of tests that failed or never finished in the newest finished run. Runs still in
+/// progress (e.g. a concurrent `drill test`) and unreadable folders are passed over.
+pub(crate) fn last_failed_ids(workspace: &std::path::Path) -> Result<HashSet<String>> {
+    let root = workspace.join(run::RUNS_DIR);
+    let ids = run::run_ids(&root).unwrap_or_default();
+    let report = ids
+        .iter()
+        .rev()
+        .filter_map(|id| run::read_run(&root.join(id)).ok())
+        .find(|report| report.status != run::Status::Running)
+        .ok_or_else(|| {
+            anyhow!("--last-failed needs a finished previous run; run without it first")
+        })?;
+    Ok(report
+        .suites
+        .iter()
+        .flat_map(|suite| &suite.tests)
+        .filter(|test| matches!(test.outcome, None | Some(run::Outcome::Unexpected)))
+        .map(|test| test.id.clone())
+        .collect())
+}
+
+/// First Ctrl+C stops the run gracefully; a second one exits at once.
+fn install_ctrl_c(cancel: Arc<AtomicBool>, quiet: bool) -> Result<()> {
+    ctrlc::set_handler(move || {
+        if cancel.swap(true, Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+        let message = "\nStopping: finishing the current step and running teardown (Ctrl+C again to quit now)";
+        if quiet {
+            eprintln!("{message}");
+        } else {
+            println!("{message}");
+        }
+    })
+    .context("failed to install the Ctrl+C handler")
 }
 
 /// Playwright `list`-style progress: one line per finished test.
@@ -204,6 +298,7 @@ impl Reporter for LineReporter {
             (Some(run::Outcome::Expected), run::Status::Passed) => ("ok", ""),
             (Some(run::Outcome::Expected), _) => ("ok", "expected failure"),
             (Some(run::Outcome::Unexpected), run::Status::TimedOut) => ("x", "timed out"),
+            (Some(run::Outcome::Unexpected), run::Status::Interrupted) => ("x", "interrupted"),
             (Some(run::Outcome::Unexpected), run::Status::Passed) => ("x", "passed unexpectedly"),
             (Some(run::Outcome::Unexpected), _) => ("x", ""),
         };
@@ -228,7 +323,7 @@ impl Reporter for LineReporter {
             Some(run::Outcome::Expected | run::Outcome::Skipped)
         );
         if failed {
-            if let Some(error) = done.error {
+            for error in done.error.into_iter().chain(done.other_errors) {
                 let at = error
                     .step
                     .map(|step| format!("step {}: ", step + 1))

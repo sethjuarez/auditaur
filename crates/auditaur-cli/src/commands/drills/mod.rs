@@ -2,6 +2,7 @@
 
 // The runner consumes the remaining model fields; drop this once it lands.
 #[allow(dead_code)]
+mod junit;
 pub mod model;
 pub mod run;
 pub mod runner;

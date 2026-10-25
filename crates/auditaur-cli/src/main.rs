@@ -624,11 +624,24 @@ enum DrillCommand {
         /// Drive an already running app instead of launching one.
         #[arg(long)]
         attach: bool,
+        /// Treat a launched app as ready only once its frontend reports telemetry.
         #[arg(long)]
         require_frontend: bool,
         /// Seconds to wait for each launched app to be ready.
         #[arg(long)]
         timeout_seconds: Option<u64>,
+        /// Stop after the first failure (same as `--max-failures=1`).
+        #[arg(short = 'x', conflicts_with = "max_failures")]
+        exit_first: bool,
+        /// Stop starting tests after this many failures.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        max_failures: Option<u64>,
+        /// Only rerun tests that failed or did not run in the latest run.
+        #[arg(long)]
+        last_failed: bool,
+        /// Also write a JUnit XML report to this file.
+        #[arg(long, value_name = "FILE")]
+        junit: Option<PathBuf>,
         /// Which snapshot baselines to write; bare `-u` means `changed`.
         #[arg(
             long,
@@ -1098,6 +1111,10 @@ fn inner_main() -> Result<()> {
                 attach,
                 require_frontend,
                 timeout_seconds,
+                exit_first,
+                max_failures,
+                last_failed,
+                junit,
                 update_snapshots,
                 json,
                 command,
@@ -1117,6 +1134,13 @@ fn inner_main() -> Result<()> {
                     require_frontend,
                     timeout_seconds,
                     update_snapshots,
+                    max_failures: if exit_first {
+                        Some(1)
+                    } else {
+                        max_failures.map(|max| max as usize)
+                    },
+                    last_failed,
+                    junit,
                     json,
                     command,
                 })?;

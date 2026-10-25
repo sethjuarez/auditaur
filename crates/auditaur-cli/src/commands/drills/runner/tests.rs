@@ -22,6 +22,8 @@ struct Shared {
     telemetry: Vec<(i64, bool)>,
     /// `since` seen by each step, in order.
     since: Vec<i64>,
+    /// Flipped by a `#cancel` step, like Ctrl+C.
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 type State = Rc<RefCell<Shared>>;
@@ -89,6 +91,14 @@ impl AppDriver for FakeDriver {
                 state.dead = true;
                 StepResult::Passed
             }
+            "#cancel" => {
+                state
+                    .cancel
+                    .as_ref()
+                    .expect("pass a cancel flag")
+                    .store(true, Ordering::SeqCst);
+                StepResult::Passed
+            }
             "#shot" => {
                 ctx.writer
                     .attach("shot", "image/png", "shot.png", b"png")
@@ -134,7 +144,7 @@ impl AppDriver for FakeDriver {
     }
 }
 
-/// Hooks named `bad` fail; suites named `nolaunch` cannot launch.
+/// Hooks named `bad` fail and `cancel` cancels the run; suites named `nolaunch` cannot launch.
 struct FakeHost {
     state: State,
 }
@@ -152,7 +162,11 @@ impl Host for FakeHost {
 
     fn run_hook(&mut self, hook: &Value, _teardown: bool) -> Result<HookResult> {
         let name = hook["name"].as_str().unwrap().to_string();
-        self.state.borrow_mut().log.push(format!("hook {name}"));
+        let mut state = self.state.borrow_mut();
+        state.log.push(format!("hook {name}"));
+        if name == "cancel" {
+            state.cancel.as_ref().unwrap().store(true, Ordering::SeqCst);
+        }
         Ok(HookResult {
             passed: name != "bad",
             timed_out: false,
@@ -167,16 +181,53 @@ struct Ran {
     telemetry: Vec<(i64, bool)>,
     since: Vec<i64>,
     dir: std::path::PathBuf,
+    stopped: Option<Stopped>,
+    /// `(title, error messages)` per reported test attempt.
+    reported: Vec<(String, Vec<String>)>,
     _temp: tempfile::TempDir,
 }
 
+#[derive(Default)]
+struct Recorder {
+    reported: Vec<(String, Vec<String>)>,
+}
+
+impl Reporter for Recorder {
+    fn test_finished(&mut self, done: &TestDone<'_>) {
+        let errors = done
+            .error
+            .into_iter()
+            .chain(done.other_errors)
+            .map(|error| error.message.clone())
+            .collect();
+        self.reported.push((done.title.clone(), errors));
+    }
+}
+
 fn run_with(suite: &str, options: RunnerOptions) -> Ran {
+    run_files(&[suite], options)
+}
+
+/// Runs each suite from its own file (`s`, `s1`, `s2`, ...), in order.
+fn run_files(suites: &[&str], options: RunnerOptions) -> Ran {
     let temp = tempfile::tempdir().unwrap();
     let drills = temp.path().join(".auditaur/drills");
     fs::create_dir_all(&drills).unwrap();
-    let file = drills.join("s.drill.json");
-    fs::write(&file, suite).unwrap();
-    let loaded = load(&[file]);
+    let files: Vec<_> = suites
+        .iter()
+        .enumerate()
+        .map(|(index, suite)| {
+            let stem = if index == 0 {
+                "s".to_string()
+            } else {
+                format!("s{index}")
+            };
+            let file = drills.join(format!("{stem}.drill.json"));
+            fs::write(&file, suite).unwrap();
+            file
+        })
+        .collect();
+    let loaded = load(&files);
     assert!(loaded.invalid.is_empty(), "{:?}", loaded.invalid);
     let plan = select(&loaded.suites, &Filters::default());
     let mut writer = RunWriter::create(
@@ -190,11 +241,13 @@ fn run_with(suite: &str, options: RunnerOptions) -> Ran {
     .unwrap();
     let dir = writer.dir().to_path_buf();
     let state = State::default();
+    state.borrow_mut().cancel = options.cancel.clone();
     let mut host = FakeHost {
         state: state.clone(),
     };
-    execute(&mut writer, &plan, &mut host, &mut NoReporter, &options).unwrap();
-    let report = writer.finish(false).unwrap();
+    let mut recorder = Recorder::default();
+    let stopped = execute(&mut writer, &plan, &mut host, &mut recorder, &options).unwrap();
+    let report = writer.finish(stopped.is_some()).unwrap();
     // The persisted report matches what the writer returned.
     assert_eq!(read_run(&dir).unwrap().totals, report.totals);
     let log = state.borrow().log.clone();
@@ -206,6 +259,8 @@ fn run_with(suite: &str, options: RunnerOptions) -> Ran {
         telemetry,
         since,
         dir,
+        stopped,
+        reported: recorder.reported,
         _temp: temp,
     }
 }
@@ -704,4 +759,290 @@ fn writing_a_missing_baseline_is_never_retried_into_a_pass() {
     // A new baseline needs review even when the test was expected to fail.
     assert_eq!(test(&ran, "known").outcome, Some(Outcome::Unexpected));
     assert_eq!(ran.report.totals.failed, 2);
+}
+
+fn cancel_flag() -> RunnerOptions {
+    RunnerOptions {
+        cancel: Some(Arc::new(AtomicBool::new(false))),
+        ..RunnerOptions::default()
+    }
+}
+
+#[test]
+fn max_failures_stops_starting_tests_but_cleans_up() {
+    let ran = run_with(
+        r##"{
+        "afterAll": [{ "click": "#aa" }],
+        "teardown": [{ "name": "down", "run": "x" }],
+        "tests": [
+            { "name": "one", "steps": [{ "click": "#fail" }] },
+            { "name": "two", "steps": [{ "click": "#fail" }] },
+            { "name": "three", "steps": [{ "click": "#a" }] }
+        ] }"##,
+        RunnerOptions {
+            max_failures: Some(1),
+            ..RunnerOptions::default()
+        },
+    );
+    assert_eq!(ran.stopped, Some(Stopped::MaxFailures));
+    assert_eq!(test(&ran, "one").outcome, Some(Outcome::Unexpected));
+    assert_eq!(test(&ran, "two").status, Status::Pending);
+    assert_eq!(test(&ran, "three").status, Status::Pending);
+    assert_eq!(ran.report.totals.not_run, 2);
+    assert_eq!(ran.report.status, Status::Interrupted);
+    // afterAll, close and teardown still run.
+    for entry in ["click #aa", "close", "hook down"] {
+        assert!(
+            ran.log.contains(&entry.to_string()),
+            "{entry}: {:?}",
+            ran.log
+        );
+    }
+}
+
+#[test]
+fn max_failures_counts_across_suites_and_suite_errors() {
+    let ran = run_files(
+        &[
+            r##"{ "suite": "nolaunch", "tests": [{ "name": "a", "steps": [{ "click": "#a" }] }] }"##,
+            r##"{ "tests": [{ "name": "b", "steps": [{ "click": "#fail" }] }] }"##,
+            r##"{ "tests": [{ "name": "c", "steps": [{ "click": "#a" }] }] }"##,
+        ],
+        RunnerOptions {
+            max_failures: Some(2),
+            ..RunnerOptions::default()
+        },
+    );
+    assert_eq!(ran.stopped, Some(Stopped::MaxFailures));
+    assert_eq!(
+        ran.report.suites[1].tests[0].outcome,
+        Some(Outcome::Unexpected)
+    );
+    assert_eq!(ran.report.suites[2].status, Status::Pending);
+    assert_eq!(ran.report.suites[2].tests[0].status, Status::Pending);
+}
+
+#[test]
+fn max_failures_reached_by_the_last_test_is_not_a_stop() {
+    let ran = run_with(
+        r##"{ "tests": [
+            { "name": "a", "steps": [{ "click": "#a" }] },
+            { "name": "b", "steps": [{ "click": "#fail" }] }
+        ] }"##,
+        RunnerOptions {
+            max_failures: Some(1),
+            ..RunnerOptions::default()
+        },
+    );
+    assert_eq!(ran.stopped, None);
+    assert_eq!(ran.report.status, Status::Failed);
+}
+
+#[test]
+fn cancel_cuts_the_test_short_and_still_runs_teardown() {
+    let ran = run_with(
+        r##"{
+        "retries": 2,
+        "afterEach": [{ "click": "#ae" }],
+        "afterAll": [{ "click": "#aa" }],
+        "teardown": [{ "name": "down", "run": "x" }],
+        "tests": [
+            { "name": "one", "steps": [{ "click": "#cancel" }, { "click": "#after" }] },
+            { "name": "two", "steps": [{ "click": "#a" }] }
+        ] }"##,
+        cancel_flag(),
+    );
+    assert_eq!(ran.stopped, Some(Stopped::Cancelled));
+    let one = test(&ran, "one");
+    assert_eq!(one.status, Status::Interrupted);
+    assert_eq!(one.outcome, Some(Outcome::Unexpected));
+    assert_eq!(one.attempts.len(), 1, "a cancelled test is not retried");
+    assert_eq!(test(&ran, "two").status, Status::Pending);
+    assert_eq!(ran.report.status, Status::Interrupted);
+    for skipped in ["click #after", "click #ae", "click #aa", "click #a"] {
+        assert!(!ran.log.contains(&skipped.to_string()), "{skipped} ran");
+    }
+    for entry in ["close", "hook down"] {
+        assert!(
+            ran.log.contains(&entry.to_string()),
+            "{entry}: {:?}",
+            ran.log
+        );
+    }
+    assert_eq!(ran.reported[0].1, vec!["interrupted"]);
+}
+
+#[test]
+fn cancel_after_the_last_step_keeps_the_pass() {
+    let ran = run_with(
+        r##"{ "tests": [{ "name": "one", "steps": [{ "click": "#a" }, { "click": "#cancel" }] }] }"##,
+        cancel_flag(),
+    );
+    assert_eq!(ran.stopped, Some(Stopped::Cancelled));
+    assert_eq!(test(&ran, "one").status, Status::Passed);
+}
+
+#[test]
+fn reporter_sees_every_failure_in_order() {
+    let ran = run(r##"{
+        "afterEach": [{ "click": "#fail" }],
+        "tests": [{ "name": "t", "steps": [
+            { "expect": "#fail", "toBeVisible": true, "soft": true },
+            { "expect": "#fail", "toBeVisible": true, "soft": true },
+            { "click": "#fail" },
+            { "click": "#never" }
+        ] }] }"##);
+    let (title, errors) = &ran.reported[0];
+    assert_eq!(title, "s > t");
+    // The hard failure comes first, then the soft ones and afterEach, in order.
+    assert_eq!(errors.len(), 4, "{errors:?}");
+    assert!(errors.iter().all(|message| message == "boom"));
+    let summary = &test(&ran, "t").attempts[0];
+    assert_eq!(summary.error.as_ref().unwrap().step, Some(2));
+}
+
+#[test]
+fn last_failed_picks_failed_and_unfinished_tests() {
+    let ran = run_with(
+        r##"{ "suite": "s", "tests": [
+            { "name": "pass", "steps": [{ "click": "#a" }] },
+            { "name": "fail", "steps": [{ "click": "#fail" }] },
+            { "name": "flaky", "retries": 1, "steps": [{ "click": "#flaky" }] },
+            { "name": "skip", "skip": true, "steps": [{ "click": "#a" }] },
+            { "name": "unrun", "steps": [{ "click": "#a" }] }
+        ] }"##,
+        RunnerOptions {
+            max_failures: Some(1),
+            ..RunnerOptions::default()
+        },
+    );
+    let workspace = ran
+        .dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let ids = crate::commands::drills::test_command::last_failed_ids(workspace).unwrap();
+    let mut names: Vec<_> = ran.report.suites[0]
+        .tests
+        .iter()
+        .filter(|test| ids.contains(&test.id))
+        .map(|test| test.name.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["fail", "flaky", "skip", "unrun"]);
+}
+
+#[test]
+fn junit_report_maps_outcomes() {
+    let ran = run_files(
+        &[
+            r##"{ "suite": "s", "tests": [
+                { "name": "pass <ok>", "steps": [{ "click": "#a" }] },
+                { "name": "fail", "steps": [{ "click": "#fail" }] },
+                { "name": "flaky", "retries": 1, "steps": [{ "click": "#flaky" }] },
+                { "name": "skip", "skip": "not yet", "steps": [{ "click": "#a" }] }
+            ] }"##,
+            r##"{ "suite": "nolaunch", "tests": [{ "name": "never", "steps": [{ "click": "#a" }] }] }"##,
+        ],
+        RunnerOptions::default(),
+    );
+    let xml = crate::commands::drills::junit::render(&ran.report);
+    assert!(
+        xml.contains(
+            r#"<testsuites name="auditaur drills" tests="5" failures="1" skipped="1" errors="1""#
+        ),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(r#"<testcase name="pass &lt;ok&gt;" classname="s""#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(
+            r#"<failure message="step 1: boom" type="AssertionError">step 1: boom</failure>"#
+        ),
+        "{xml}"
+    );
+    assert!(xml.contains("flaky: passed on retry #1"), "{xml}");
+    assert!(xml.contains(r#"<skipped message="not yet"/>"#), "{xml}");
+    assert!(
+        xml.contains(r#"<error message="app launch failed: no app" type="SuiteError"/>"#),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(&format!(
+            "attempt: .auditaur/drill-runs/{}/",
+            ran.report.run_id
+        )),
+        "{xml}"
+    );
+}
+
+#[test]
+fn cancel_during_the_last_setup_hook_skips_launch() {
+    let ran = run_with(
+        r##"{
+        "setup": [{ "name": "cancel", "run": "x" }],
+        "teardown": [{ "name": "down", "run": "x" }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }]
+    }"##,
+        cancel_flag(),
+    );
+    assert_eq!(ran.stopped, Some(Stopped::Cancelled));
+    assert_eq!(ran.log, vec!["hook cancel", "hook down"]);
+    assert_eq!(ran.report.totals.not_run, 1);
+    assert_eq!(ran.report.status, Status::Interrupted);
+}
+
+#[test]
+fn junit_reports_a_suite_error_after_every_test_passed() {
+    let ran = run(r##"{
+        "afterAll": [{ "click": "#fail" }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }]
+    }"##);
+    assert_eq!(test(&ran, "t").outcome, Some(Outcome::Expected));
+    let xml = crate::commands::drills::junit::render(&ran.report);
+    assert!(
+        xml.contains(r#"tests="2" failures="0" skipped="0" errors="1""#),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"<testcase name="(suite)""#), "{xml}");
+    assert!(xml.contains(r#"type="SuiteError">"#), "{xml}");
+}
+
+#[test]
+fn last_failed_skips_a_run_still_in_progress() {
+    let ran = run(r##"{ "suite": "s", "tests": [
+        { "name": "pass", "steps": [{ "click": "#a" }] },
+        { "name": "fail", "steps": [{ "click": "#fail" }] }
+    ] }"##);
+    let workspace = ran
+        .dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    // A concurrent run owned by this (live) process, with nothing finished yet.
+    let loaded = load(&[workspace.join(".auditaur/drills/s.drill.json")]);
+    let plan = select(&loaded.suites, &Filters::default());
+    let live = RunWriter::create(
+        RunOptions {
+            workspace: workspace.to_path_buf(),
+            invocation: Invocation::default(),
+            keep: 5,
+        },
+        &plan,
+    )
+    .unwrap();
+    // An unreadable folder that sorts last is passed over too.
+    fs::create_dir_all(workspace.join(".auditaur/drill-runs/99991231-235959-999")).unwrap();
+    let ids = crate::commands::drills::test_command::last_failed_ids(workspace).unwrap();
+    assert_eq!(ids.len(), 1);
+    assert!(ids.contains(&test(&ran, "fail").id));
+    drop(live);
 }
