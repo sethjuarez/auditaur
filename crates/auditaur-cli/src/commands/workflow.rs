@@ -863,7 +863,7 @@ fn remove_session_file(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn process_exists(pid: u32) -> Result<bool> {
+pub(crate) fn process_exists(pid: u32) -> Result<bool> {
     let output = Command::new("tasklist")
         .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
         .output()
@@ -878,7 +878,7 @@ fn process_exists(pid: u32) -> Result<bool> {
 }
 
 #[cfg(not(windows))]
-fn process_exists(pid: u32) -> Result<bool> {
+pub(crate) fn process_exists(pid: u32) -> Result<bool> {
     let status = Command::new("kill")
         .args(["-0", &pid.to_string()])
         .stdout(Stdio::null())

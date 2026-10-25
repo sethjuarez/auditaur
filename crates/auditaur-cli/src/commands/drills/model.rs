@@ -170,7 +170,7 @@ pub struct TestCase {
     pub steps: Vec<Step>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TestMode {
     Run,

@@ -589,6 +589,18 @@ enum DrillCommand {
         #[arg(long)]
         json: bool,
     },
+    /// List recorded drill runs under .auditaur/drill-runs, newest first.
+    Runs {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one drill run: `latest` (default) or a run id or prefix.
+    Show {
+        #[arg()]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     Run {
         #[arg(long)]
         app: String,
@@ -1029,6 +1041,8 @@ fn inner_main() -> Result<()> {
                 }
                 Ok(())
             }
+            Some(DrillCommand::Runs { json }) => commands::drills::runs(json),
+            Some(DrillCommand::Show { run, json }) => commands::drills::show(run.as_deref(), json),
             Some(DrillCommand::Run {
                 app,
                 require_frontend,

@@ -3,6 +3,9 @@
 // The runner consumes the remaining model fields; drop this once it lands.
 #[allow(dead_code)]
 pub mod model;
+// The writer is driven by the runner in the next step.
+#[allow(dead_code)]
+pub mod run;
 
 use std::{
     collections::HashMap,
@@ -278,10 +281,12 @@ pub fn list(options: ListOptions) -> Result<i32> {
     let exit_code = i32::from(!loaded.invalid.is_empty());
 
     if options.json {
+        let workspace = std::env::current_dir()?;
         let suites: Vec<Value> = selected
             .iter()
             .map(|entry| {
                 let suite = entry.suite;
+                let suite_path = run::workspace_path(&workspace, &suite.path);
                 json!({
                     "suite": suite.suite,
                     "path": display_path(&suite.path),
@@ -296,6 +301,7 @@ pub fn list(options: ListOptions) -> Result<i32> {
                         "afterAll": suite.after_all.len(),
                     },
                     "tests": entry.tests.iter().map(|test| json!({
+                        "id": run::test_id(&suite_path, &test.name),
                         "name": test.name,
                         "title": title(suite, test),
                         "description": test.description,
@@ -368,6 +374,134 @@ pub fn list(options: ListOptions) -> Result<i32> {
         }
     }
     Ok(exit_code)
+}
+
+fn format_ms(ms: Option<u64>) -> String {
+    match ms {
+        None => "-".to_string(),
+        Some(ms) if ms < 1000 => format!("{ms}ms"),
+        Some(ms) => format!("{:.1}s", ms as f64 / 1000.0),
+    }
+}
+
+fn format_totals(totals: &run::Totals) -> String {
+    let mut parts = vec![format!("{} passed", totals.passed)];
+    for (count, label) in [
+        (totals.failed, "failed"),
+        (totals.flaky, "flaky"),
+        (totals.skipped, "skipped"),
+        (totals.not_run, "not run"),
+    ] {
+        if count > 0 {
+            parts.push(format!("{count} {label}"));
+        }
+    }
+    parts.join(", ")
+}
+
+/// `auditaur drill runs`: recorded runs, newest first.
+pub fn runs(json: bool) -> Result<()> {
+    let root = std::env::current_dir()?.join(run::RUNS_DIR);
+    let mut runs = Vec::new();
+    let mut unreadable = Vec::new();
+    for id in run::run_ids(&root)?.into_iter().rev() {
+        match run::read_run(&root.join(&id)) {
+            Ok(report) => runs.push(report),
+            Err(error) => unreadable.push(json!({ "runId": id, "error": format!("{error:#}") })),
+        }
+    }
+    if json {
+        let output = json!({
+            "root": run::RUNS_DIR,
+            "runs": runs.iter().map(|report| json!({
+                "runId": report.run_id,
+                "status": report.status,
+                "startedAt": report.started_at,
+                "durationMs": report.duration_ms,
+                "totals": report.totals,
+            })).collect::<Vec<_>>(),
+            "unreadable": unreadable,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+    if runs.is_empty() && unreadable.is_empty() {
+        println!("No drill runs under {}", run::RUNS_DIR);
+        return Ok(());
+    }
+    for report in &runs {
+        println!(
+            "{}  {:<11}  {}  ({})",
+            report.run_id,
+            report.status.as_str(),
+            format_totals(&report.totals),
+            format_ms(report.duration_ms)
+        );
+    }
+    for entry in &unreadable {
+        eprintln!("{}  unreadable: {}", entry["runId"], entry["error"]);
+    }
+    Ok(())
+}
+
+/// `auditaur drill show [run]`: one run's suites, tests and failures.
+pub fn show(selector: Option<&str>, json: bool) -> Result<()> {
+    let root = std::env::current_dir()?.join(run::RUNS_DIR);
+    let dir = run::resolve_run(&root, selector)?;
+    let report = run::read_run(&dir)?;
+    if json {
+        let mut value = serde_json::to_value(&report)?;
+        value["dir"] = json!(format!("{}/{}", run::RUNS_DIR, report.run_id));
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+    println!(
+        "Run {}  {}  ({})",
+        report.run_id,
+        report.status.as_str(),
+        format_ms(report.duration_ms)
+    );
+    for suite in &report.suites {
+        println!();
+        println!(
+            "{}  ({})  {}",
+            suite.suite,
+            suite.path,
+            suite.status.as_str()
+        );
+        if let Some(error) = &suite.error {
+            println!("  error: {}", error.message.replace('\n', "\n    "));
+        }
+        for test in &suite.tests {
+            let label = match test.outcome {
+                Some(run::Outcome::Flaky) => "flaky",
+                Some(run::Outcome::Skipped) => "skipped",
+                Some(run::Outcome::Expected) if test.status == run::Status::Failed => "xfail",
+                _ => test.status.as_str(),
+            };
+            let retries = match test.attempts.len() {
+                0 | 1 => String::new(),
+                count => format!("  [{count} attempts]"),
+            };
+            println!(
+                "  {label:<11}  {}  ({}){retries}",
+                test.name,
+                format_ms(test.duration_ms)
+            );
+            if test.outcome == Some(run::Outcome::Unexpected) {
+                if let Some(error) = test.attempts.last().and_then(|a| a.error.as_ref()) {
+                    let at = error
+                        .step
+                        .map(|step| format!("step {}: ", step + 1))
+                        .unwrap_or_default();
+                    println!("      {at}{}", error.message.replace('\n', "\n      "));
+                }
+            }
+        }
+    }
+    println!();
+    println!("{}", format_totals(&report.totals));
+    Ok(())
 }
 
 pub struct ValidateOptions {

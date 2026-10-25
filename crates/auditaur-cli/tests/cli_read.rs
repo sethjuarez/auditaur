@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use auditaur_collector::exporter_sqlite::{SqliteStore, SQLITE_SCHEMA_VERSION};
 use auditaur_core::{
     discovery::DiscoveryFile,
@@ -850,6 +852,12 @@ fn drill_list_and_validate_suite_files() {
         "click role=button[name=\"Greet\"i]"
     );
     assert_eq!(greet["tests"][1]["mode"], "fixme");
+    let id = greet["tests"][0]["id"].as_str().unwrap();
+    assert!(
+        id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()),
+        "{id}"
+    );
+    assert_ne!(greet["tests"][1]["id"], greet["tests"][0]["id"]);
 
     let tagged = run_json_command(&mut run(&["drill", "list", "--tag", "fast", "--json"]));
     assert_eq!(tagged["totals"]["tests"], 1);
@@ -886,6 +894,91 @@ fn drill_list_and_validate_suite_files() {
     assert_eq!(explicit["files"], 1);
     let missing = run_failure_command(&mut run(&["drill", "validate", "nope"]));
     assert!(missing.contains("does not exist"), "{missing}");
+}
+
+#[test]
+fn drill_runs_and_show_read_run_folders() {
+    let temp = TempDir::new().unwrap();
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+        command.args(args).current_dir(temp.path());
+        command
+    };
+    let empty = run_command(&mut run(&["drill", "runs"]));
+    assert!(empty.contains("No drill runs"), "{empty}");
+    let none = run_failure_command(&mut run(&["drill", "show"]));
+    assert!(none.contains("no drill runs"), "{none}");
+
+    let root = temp.path().join(".auditaur").join("drill-runs");
+    let report = |id: &str, status: &str, failed: usize| {
+        json!({
+            "schemaVersion": 1, "runId": id, "status": status, "seq": 9,
+            "startedAt": "2026-01-01T00:00:00Z", "endedAt": "2026-01-01T00:00:02Z",
+            "durationMs": 2500, "pid": 1, "workspace": "/w",
+            "invocation": { "args": [], "patterns": [], "grep": null, "grepInvert": null, "tags": [] },
+            "environment": { "os": "windows", "arch": "x86_64", "auditaurVersion": "0.0.0" },
+            "totals": { "tests": 2, "passed": 2 - failed, "failed": failed, "flaky": 0, "skipped": 0, "notRun": 0 },
+            "suites": [{
+                "id": "00112233445566ff", "suite": "smoke", "path": ".auditaur/drills/smoke.drill.json",
+                "status": status, "startedAt": null, "durationMs": 2400, "app": null, "error": null, "hooks": [],
+                "tests": [
+                    { "id": "0123456789abcdef", "name": "loads", "title": "smoke > loads", "tags": [],
+                      "mode": "run", "modeReason": null, "expectedStatus": "passed", "status": "passed",
+                      "outcome": "expected", "durationMs": 40, "attempts": [] },
+                    { "id": "fedcba9876543210", "name": "clicks", "title": "smoke > clicks", "tags": [],
+                      "mode": "run", "modeReason": null, "expectedStatus": "passed", "status": status,
+                      "outcome": if failed > 0 { "unexpected" } else { "expected" }, "durationMs": 1200,
+                      "attempts": [{ "attempt": 0, "status": status, "startedAt": "2026-01-01T00:00:00Z",
+                        "durationMs": 1200, "dir": "tests/fedcba9876543210/attempt-0",
+                        "error": if failed > 0 { json!({ "message": "#go not visible", "step": 1 }) } else { json!(null) } }] }
+                ]
+            }]
+        })
+    };
+    for (id, status, failed) in [
+        ("20260101-000000-000", "passed", 0),
+        ("20260102-000000-000", "failed", 1),
+    ] {
+        fs::create_dir_all(root.join(id)).unwrap();
+        fs::write(
+            root.join(id).join("run.json"),
+            serde_json::to_vec(&report(id, status, failed)).unwrap(),
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(root.join("20260103-000000-000")).unwrap();
+
+    let listed = run_json_command(&mut run(&["drill", "runs", "--json"]));
+    assert_eq!(listed["runs"][0]["runId"], "20260102-000000-000");
+    assert_eq!(listed["runs"][1]["totals"]["passed"], 2);
+    assert_eq!(listed["unreadable"][0]["runId"], "20260103-000000-000");
+    let text = run_command(&mut run(&["drill", "runs"]));
+    assert!(
+        text.contains("20260102-000000-000  failed       1 passed, 1 failed  (2.5s)"),
+        "{text}"
+    );
+
+    // Latest is the newest folder, here unreadable; an explicit id still works.
+    let broken = run_failure_command(&mut run(&["drill", "show"]));
+    assert!(broken.contains("20260103-000000-000"), "{broken}");
+    let explicit = run_command(&mut run(&["drill", "show", "20260102-000000-000"]));
+    assert!(explicit.contains("Run 20260102-000000-000"), "{explicit}");
+    let ambiguous = run_failure_command(&mut run(&["drill", "show", "2026"]));
+    assert!(ambiguous.contains("matches 3 runs"), "{ambiguous}");
+    fs::remove_dir(root.join("20260103-000000-000")).unwrap();
+    let shown = run_command(&mut run(&["drill", "show"]));
+    assert!(
+        shown.contains("Run 20260102-000000-000  failed  (2.5s)"),
+        "{shown}"
+    );
+    assert!(shown.contains("failed       clicks  (1.2s)"), "{shown}");
+    assert!(shown.contains("step 2: #go not visible"), "{shown}");
+    let json_shown = run_json_command(&mut run(&["drill", "show", "20260101", "--json"]));
+    assert_eq!(json_shown["status"], "passed");
+    assert_eq!(
+        json_shown["dir"],
+        ".auditaur/drill-runs/20260101-000000-000"
+    );
 }
 
 #[test]
