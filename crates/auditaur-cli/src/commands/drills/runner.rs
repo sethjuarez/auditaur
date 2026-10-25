@@ -9,6 +9,7 @@ pub mod real;
 pub mod snapshot;
 pub mod telemetry;
 
+use std::cell::Cell;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -77,6 +78,8 @@ pub trait AppDriver {
     fn run_step(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepResult;
     /// Attach evidence (screenshot, DOM) to the failing step. Best effort.
     fn capture_failure(&mut self, _ctx: &mut StepCtx<'_>) {}
+    /// Attach a trace of the step that just ran (screenshot, DOM), for `--trace`. Best effort.
+    fn capture_step(&mut self, _ctx: &mut StepCtx<'_>) {}
     /// What the app recorded since `since_unix_nanos`, saved with each attempt. Best effort;
     /// `live` is false once the app has exited.
     fn telemetry(&mut self, _since_unix_nanos: i64, _live: bool) -> Option<Value> {
@@ -125,6 +128,8 @@ pub struct RunnerOptions {
     /// Used when neither the test nor its suite sets `retries`.
     pub retries: Option<u32>,
     pub update_snapshots: UpdateMode,
+    /// Which steps record a trace (screenshot and DOM after every step).
+    pub trace: TraceMode,
     /// Stop starting tests once this many have failed (suite errors count too).
     pub max_failures: Option<usize>,
     /// Set (e.g. by Ctrl+C) to stop the run: the running test is cut short, remaining
@@ -138,6 +143,18 @@ impl RunnerOptions {
             .as_ref()
             .is_some_and(|cancel| cancel.load(Ordering::SeqCst))
     }
+}
+
+/// When steps record a trace, like Playwright's `trace` option. Failing steps always capture a
+/// screenshot and DOM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum TraceMode {
+    #[default]
+    Off,
+    /// Every step of every attempt, plus suite hooks.
+    On,
+    /// Only the first retry of a failed test.
+    OnFirstRetry,
 }
 
 /// Why a run stopped before every selected test ran.
@@ -171,6 +188,7 @@ pub fn execute(
             auto_snapshots: 0,
             wrote_baseline: false,
             stopped: None,
+            attempt: None,
         }
         .run()?;
         if stopped.is_some() {
@@ -211,6 +229,8 @@ struct SuiteRun<'r, 'p> {
     wrote_baseline: bool,
     /// Set when the suite stopped starting tests early.
     stopped: Option<Stopped>,
+    /// The test attempt being run; `None` in suite hooks.
+    attempt: Option<u32>,
 }
 
 /// Failures collected while running a list of steps.
@@ -271,7 +291,8 @@ impl Tally {
 /// Where a list of steps runs and how long it may take.
 struct Budget {
     phase: Phase,
-    deadline: Instant,
+    /// Pushed back by trace captures so evidence never eats the test's timeout.
+    deadline: Cell<Instant>,
     timeout_ms: u64,
     test_id: Option<String>,
     since_unix_nanos: i64,
@@ -468,7 +489,10 @@ impl SuiteRun<'_, '_> {
             self.writer.test_started(self.index, index, attempt)?;
             let started = Instant::now();
             let since = now_unix_nanos();
-            let tally = self.run_attempt(driver, test, timeout_ms, &id, since)?;
+            self.attempt = Some(attempt);
+            let tally = self.run_attempt(driver, test, timeout_ms, &id, since);
+            self.attempt = None;
+            let tally = tally?;
             self.probe_exit(driver);
             if let Some(telemetry) = driver.telemetry(since, self.exited.is_none()) {
                 let telemetry = redact_json(&telemetry, &[]).value;
@@ -579,7 +603,7 @@ impl SuiteRun<'_, '_> {
                 }
                 break;
             }
-            if Instant::now() >= budget.deadline {
+            if Instant::now() >= budget.deadline.get() {
                 let error = budget.timeout_error();
                 tally.all.push(error.clone());
                 tally.hard = Some((Status::TimedOut, error));
@@ -592,14 +616,15 @@ impl SuiteRun<'_, '_> {
             // so running out is a failed assertion; on actions it bounds the step.
             let assertion = matches!(step.kind, StepKind::Expect(_) | StepKind::Telemetry(_));
             let (deadline, expect_timeout) = match step.timeout_ms {
-                Some(ms) if assertion => (budget.deadline, Duration::from_millis(ms)),
+                Some(ms) if assertion => (budget.deadline.get(), Duration::from_millis(ms)),
                 Some(ms) => (
-                    (Instant::now() + Duration::from_millis(ms)).min(budget.deadline),
+                    (Instant::now() + Duration::from_millis(ms)).min(budget.deadline.get()),
                     expect_timeout,
                 ),
-                None => (budget.deadline, expect_timeout),
+                None => (budget.deadline.get(), expect_timeout),
             };
             let snapshot = self.snapshot_target(step, &budget.snapshot_base);
+            let tracing = self.tracing();
             let mut ctx = StepCtx {
                 writer: &mut *self.writer,
                 deadline,
@@ -612,16 +637,24 @@ impl SuiteRun<'_, '_> {
                 cancel: self.options.cancel.clone(),
             };
             let result = driver.run_step(step, &mut ctx);
+            // Evidence captured below is not part of the step's duration.
+            ctx.writer.step_ended();
             if ctx.wrote_baseline {
                 self.wrote_baseline = true;
                 ctx.writer.require_review();
             }
             let (step_status, mut error) = match result {
                 StepResult::Passed => {
+                    if tracing {
+                        budget.untimed(|| driver.capture_step(&mut ctx));
+                    }
                     self.writer.step_finished(Status::Passed, false, None)?;
                     continue;
                 }
                 StepResult::Skipped => {
+                    if tracing {
+                        budget.untimed(|| driver.capture_step(&mut ctx));
+                    }
                     self.writer.step_finished(Status::Skipped, false, None)?;
                     tally.skipped = true;
                     break;
@@ -639,6 +672,8 @@ impl SuiteRun<'_, '_> {
                 } else {
                     driver.capture_failure(&mut ctx);
                 }
+            } else if tracing {
+                budget.untimed(|| driver.capture_step(&mut ctx));
             }
             self.writer
                 .step_finished(step_status, soft, Some(error.clone()))?;
@@ -649,7 +684,7 @@ impl SuiteRun<'_, '_> {
             }
             // Only running out of the whole budget times the test out; a step's own
             // timeout is an ordinary failure, as in Playwright.
-            let status = if Instant::now() >= budget.deadline {
+            let status = if Instant::now() >= budget.deadline.get() {
                 Status::TimedOut
             } else {
                 Status::Failed
@@ -685,6 +720,14 @@ impl SuiteRun<'_, '_> {
     fn probe_exit(&mut self, driver: &mut dyn AppDriver) {
         if self.exited.is_none() {
             self.exited = driver.exited();
+        }
+    }
+
+    fn tracing(&self) -> bool {
+        match self.options.trace {
+            TraceMode::Off => false,
+            TraceMode::On => true,
+            TraceMode::OnFirstRetry => self.attempt == Some(1),
         }
     }
 
@@ -775,7 +818,7 @@ impl Budget {
     fn new(phase: Phase, timeout_ms: u64, test_id: Option<String>, since_unix_nanos: i64) -> Self {
         Self {
             phase,
-            deadline: Instant::now() + Duration::from_millis(timeout_ms),
+            deadline: Cell::new(Instant::now() + Duration::from_millis(timeout_ms)),
             timeout_ms,
             test_id,
             since_unix_nanos,
@@ -787,6 +830,13 @@ impl Budget {
     fn for_test(mut self, name: &str) -> Self {
         self.snapshot_base = name.to_string();
         self
+    }
+
+    /// Run capture without charging its time to the budget.
+    fn untimed(&self, capture: impl FnOnce()) {
+        let started = Instant::now();
+        capture();
+        self.deadline.set(self.deadline.get() + started.elapsed());
     }
 
     fn timeout_error(&self) -> ErrorInfo {

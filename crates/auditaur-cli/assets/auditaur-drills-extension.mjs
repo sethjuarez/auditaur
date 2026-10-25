@@ -5,9 +5,9 @@
 import { createServer } from "node:http";
 import { execFile, spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
-import { readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { readdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { joinSession, createCanvas, CanvasError } from "@github/copilot-sdk/extension";
 
@@ -434,13 +434,27 @@ async function readBody(req) {
     return text ? JSON.parse(text) : {};
 }
 
+// A route returning `{ [RAW]: { contentType, body } }` sends bytes instead of JSON.
+const RAW = Symbol("raw");
+
 async function startServer(routes, html) {
     const server = createServer(async (req, res) => {
         try {
             const url = new URL(req.url ?? "/", "http://127.0.0.1");
             const route = routes[`${req.method} ${url.pathname}`];
             if (route) {
-                jsonResponse(res, await route(url, req));
+                const value = await route(url, req);
+                if (value?.[RAW]) {
+                    res.writeHead(200, {
+                        "Content-Type": value[RAW].contentType,
+                        "Cache-Control": "no-store",
+                        "X-Content-Type-Options": "nosniff",
+                        "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+                    });
+                    res.end(value[RAW].body);
+                } else {
+                    jsonResponse(res, value);
+                }
             } else if (req.method === "GET" && url.pathname === "/") {
                 res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
                 res.end(html);
@@ -789,6 +803,323 @@ function liveSummary(view) {
             choices,
             inputs: inputs.map(({ id, label, kind, required }) => ({ id, label, kind, required })),
         })),
+    };
+}
+
+// ---- Trace canvas ----------------------------------------------------------------------------
+
+const TEST_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const TRACE_EVENT_LIMIT = 2000;
+const DETAIL_LIMIT = 2000;
+const FILE_LIMIT = 32 * 1024 * 1024;
+
+const traceSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+        cwd: openSchema.properties.cwd,
+        runId: liveSchema.properties.runId,
+        testId: { type: "string", pattern: TEST_ID.source, description: "Test id from run.json; defaults to the first failed test." },
+        attempt: { type: "integer", minimum: 0, description: "Zero-based attempt; defaults to the last one." },
+    },
+};
+
+function configureTrace(state, input) {
+    state.workspace = workspaceFor(input);
+    selectTrace(state, input ?? {});
+    return state;
+}
+
+function selectTrace(state, input) {
+    if (input.runId != null && !RUN_ID.test(input.runId)) throw new CanvasError("invalid_run", "not a drill run id");
+    if (input.testId != null && !TEST_ID.test(input.testId) && !/^hooks:[A-Za-z0-9_-]{1,128}$/.test(input.testId)) {
+        throw new CanvasError("invalid_test", "not a drill test id");
+    }
+    if (input.attempt != null && !(Number.isInteger(input.attempt) && input.attempt >= 0)) {
+        throw new CanvasError("invalid_attempt", "attempt is a zero-based integer");
+    }
+    state.runId = input.runId ?? null;
+    state.testId = input.testId ?? null;
+    state.attempt = input.attempt ?? null;
+    return { runId: state.runId, testId: state.testId, attempt: state.attempt };
+}
+
+// ISO timestamps carry up to 9 fractional digits; Date.parse keeps only 3, so add the rest back.
+function isoMs(value) {
+    if (typeof value !== "string") return null;
+    const fraction = /\.(\d+)/.exec(value);
+    const parsed = Date.parse(fraction ? value.replace(fraction[0], "") : value);
+    return Number.isNaN(parsed) ? null : parsed + (fraction ? Number(`0.${fraction[1]}`) * 1000 : 0);
+}
+
+// Report numbers are untrusted: the page renders them without escaping.
+const num = (value) => (Number.isFinite(value) ? value : null);
+
+const nanosMs = (value) => (value == null || Number.isNaN(Number(value)) ? null : Number(value) / 1e6);
+
+function clip(value) {
+    if (value == null) return "";
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    return text.length > DETAIL_LIMIT ? `${text.slice(0, DETAIL_LIMIT)}…` : text;
+}
+
+// Telemetry flattened onto one time axis: IPC calls, Tauri events, other spans, logs and errors.
+function traceEvents(telemetry) {
+    const events = [];
+    for (const span of telemetry?.spans ?? []) {
+        const attributes = span.attributes ?? {};
+        const start = nanosMs(span.startTimeUnixNanos);
+        const end = nanosMs(span.endTimeUnixNanos);
+        const ipc = attributes["tauri.command"] != null || String(span.name).startsWith("tauri.invoke");
+        const event = String(span.name).startsWith("tauri.event");
+        events.push({
+            at: start,
+            durationMs: start != null && end != null ? Math.max(0, end - start) : null,
+            kind: ipc ? "ipc" : event ? "event" : "span",
+            name: ipc
+                ? attributes["tauri.command"] ?? span.name
+                : event
+                  ? `${attributes["tauri.event.direction"] ?? ""} ${String(span.name).replace(/^tauri\.event /, "")}`.trim()
+                  : span.name,
+            status: span.statusCode ?? null,
+            source: span.source ?? null,
+            detail: clip(ipc ? attributes["tauri.command.args"] : event ? attributes["tauri.event.payload"] : attributes),
+        });
+    }
+    for (const log of telemetry?.logs ?? []) {
+        events.push({
+            at: nanosMs(log.timestampUnixNanos),
+            durationMs: null,
+            kind: "log",
+            name: log.severityText ?? "log",
+            status: null,
+            source: log.source ?? null,
+            detail: clip(log.body),
+        });
+    }
+    for (const error of telemetry?.frontendErrors ?? []) {
+        events.push({
+            at: nanosMs(error.timestampUnixNanos),
+            durationMs: null,
+            kind: "error",
+            name: error.errorType ?? "error",
+            status: "Error",
+            source: "frontend",
+            detail: clip([error.message, error.stack].filter(Boolean).join("\n")),
+        });
+    }
+    for (const event of telemetry?.spanEvents ?? []) {
+        events.push({
+            at: nanosMs(event.timestampUnixNanos ?? event.timeUnixNanos),
+            durationMs: null,
+            kind: "span-event",
+            name: event.name ?? "span event",
+            status: null,
+            source: event.source ?? null,
+            detail: clip(event.attributes ?? event),
+        });
+    }
+    return events.filter((event) => event.at != null).sort((a, b) => a.at - b.at).slice(0, TRACE_EVENT_LIMIT);
+}
+
+async function readJson(path) {
+    return JSON.parse(await readFile(path, "utf8"));
+}
+
+// Test ids and attempt numbers come from run reports; never let them leave the run folder.
+function attemptDir(testId, attempt) {
+    if (!TEST_ID.test(String(testId)) || !Number.isSafeInteger(attempt) || attempt < 0) {
+        throw new CanvasError("invalid_attempt", "the run report names an invalid test attempt");
+    }
+    return `tests/${testId}/attempt-${attempt}`;
+}
+
+function traceEntries(run) {
+    const entries = [];
+    for (const suite of run.suites ?? []) {
+        if ((suite.hooks ?? []).length) {
+            const failed = suite.hooks.some((step) => ["failed", "timedOut"].includes(step.status));
+            entries.push({ key: `hooks:${suite.id}`, kind: "hooks", suite: suite.suite, title: `${suite.suite} › suite hooks`, result: failed ? "failed" : "passed", attempts: [] });
+        }
+        for (const test of suite.tests ?? []) {
+            entries.push({
+                key: test.id,
+                kind: "test",
+                suite: suite.suite,
+                title: test.title,
+                result: resultOf(test),
+                attempts: (test.attempts ?? []).map((attempt) => ({ attempt: attempt.attempt, status: attempt.status })),
+            });
+        }
+    }
+    return entries;
+}
+
+async function traceView(state) {
+    const all = await readAllRuns(state);
+    const runs = all.slice(0, HISTORY_RUNS);
+    const run = state.runId ? all.find((candidate) => candidate.runId === state.runId) ?? null : all[0] ?? null;
+    if (run && !runs.some((candidate) => candidate.runId === run.runId)) runs.push(run);
+    const view = {
+        workspace: state.workspace,
+        runs: runs.map((candidate) => ({ runId: candidate.runId, status: candidate.status })),
+        pinned: state.runId,
+        run: null,
+        entries: [],
+        selected: null,
+    };
+    if (!run) return view;
+    view.run = { runId: run.runId, status: run.status, startedAt: run.startedAt, totals: run.totals };
+    view.entries = traceEntries(run);
+    const entry =
+        view.entries.find((candidate) => candidate.key === state.testId) ??
+        view.entries.find((candidate) => candidate.kind === "test" && ["failed", "flaky", "interrupted"].includes(candidate.result)) ??
+        view.entries.find((candidate) => candidate.kind === "test" && candidate.attempts.length) ??
+        view.entries[0];
+    if (!entry) return view;
+    view.selected = await traceDetail(state, run, entry);
+    return view;
+}
+
+async function traceDetail(state, run, entry) {
+    const runDir = join(state.workspace, RUNS_DIR, run.runId);
+    let detail;
+    if (entry.kind === "hooks") {
+        const suite = run.suites.find((candidate) => `hooks:${candidate.id}` === entry.key);
+        detail = { key: entry.key, kind: "hooks", title: entry.title, attempt: null, status: entry.result, error: errorText(suite?.error), steps: suite?.hooks ?? [], attachments: [], telemetry: null };
+    } else {
+        const known = entry.attempts.map((attempt) => attempt.attempt);
+        const attempt = known.includes(state.attempt) ? state.attempt : known.at(-1) ?? 0;
+        const report = await readJson(join(runDir, attemptDir(entry.key, attempt), "attempt.json")).catch(() => null);
+        detail = {
+            key: entry.key,
+            kind: "test",
+            title: entry.title,
+            attempt,
+            status: report?.status ?? entry.attempts.find((each) => each.attempt === attempt)?.status ?? "pending",
+            startedAt: report?.startedAt ?? null,
+            durationMs: report?.durationMs ?? null,
+            error: errorText(report?.error),
+            steps: report?.steps ?? [],
+            attachments: report?.attachments ?? [],
+            missing: !report,
+            telemetry: null,
+        };
+        const telemetry = detail.attachments.find((attachment) => attachment.name === "telemetry");
+        if (telemetry) detail.telemetry = await readJson(join(runDir, telemetry.path)).catch(() => null);
+    }
+    const starts = detail.steps.map((step) => isoMs(step.startedAt));
+    const origin = isoMs(detail.startedAt) ?? starts.find((start) => start != null) ?? null;
+    const events = traceEvents(detail.telemetry);
+    const offset = (at) => (origin == null || at == null ? null : Math.round((at - origin) * 10) / 10);
+    // Each event belongs to the latest step that started before it: effects often land just after
+    // the step that caused them returns.
+    const stepOf = (at) => {
+        let found = null;
+        starts.forEach((start, index) => {
+            if (start != null && start <= at) found = index;
+        });
+        return found;
+    };
+    return {
+        key: detail.key,
+        kind: detail.kind,
+        title: detail.title,
+        attempt: num(detail.attempt),
+        status: detail.status,
+        durationMs: num(detail.durationMs),
+        error: detail.error,
+        missing: detail.missing ?? false,
+        filterNotes: detail.telemetry?.filterNotes ?? null,
+        steps: detail.steps.map((step, index) => ({
+            index,
+            phase: step.phase,
+            title: step.title,
+            action: step.action,
+            status: step.status,
+            soft: step.soft ?? false,
+            offsetMs: offset(starts[index]),
+            durationMs: num(step.durationMs),
+            error: errorText(step.error),
+            attachments: (step.attachments ?? []).map(({ name, contentType, path }) => ({ name, contentType, path })),
+        })),
+        attachments: detail.attachments
+            .filter((attachment) => attachment.name !== "telemetry")
+            .map(({ name, contentType, path }) => ({ name, contentType, path })),
+        events: events.map((event) => ({ ...event, offsetMs: offset(event.at), step: stepOf(event.at) })),
+    };
+}
+
+// Serves one attachment of one run, only if the run's own report lists it.
+async function traceFile(state, url) {
+    const runId = url.searchParams.get("runId") ?? "";
+    const path = url.searchParams.get("path") ?? "";
+    if (!RUN_ID.test(runId)) throw new CanvasError("invalid_run", "not a drill run id");
+    const runDir = resolve(state.workspace, RUNS_DIR, runId);
+    let listed = [];
+    const inAttempt = /^tests\/([A-Za-z0-9_-]{1,128})\/attempt-(\d{1,4})\//.exec(path);
+    if (inAttempt) {
+        const report = await readJson(join(runDir, attemptDir(inAttempt[1], Number(inAttempt[2])), "attempt.json")).catch(() => null);
+        listed = [...(report?.attachments ?? []), ...(report?.steps ?? []).flatMap((step) => step.attachments ?? [])];
+    } else if (path.startsWith("suites/")) {
+        const run = await readRun(state, runId);
+        listed = (run?.suites ?? []).flatMap((suite) => (suite.hooks ?? []).flatMap((step) => step.attachments ?? []));
+    }
+    const attachment = listed.find((candidate) => candidate.path === path);
+    if (!attachment) throw new CanvasError("not_attachment", "not an attachment of this run");
+    // Resolve links before checking containment, so a symlink or junction cannot escape the run.
+    const [realRun, full] = await Promise.all([realpath(runDir), realpath(resolve(runDir, path))]).catch(() => []);
+    if (!full) throw new CanvasError("not_found", "the attachment file is missing");
+    const inside = relative(realRun, full);
+    if (!inside || inside.startsWith("..") || isAbsolute(inside)) {
+        throw new CanvasError("not_attachment", "not an attachment of this run");
+    }
+    const info = await stat(full).catch(() => null);
+    if (!info?.isFile()) throw new CanvasError("not_found", "the attachment file is missing");
+    if (info.size > FILE_LIMIT) throw new CanvasError("too_large", "the attachment is too large to show");
+    const type = String(attachment.contentType ?? "");
+    const contentType = /^image\/(png|jpeg|gif|webp)$/.test(type)
+        ? type
+        : /^(application\/json|text\/)/.test(type)
+          ? "text/plain; charset=utf-8"
+          : "application/octet-stream";
+    return { [RAW]: { contentType, body: await readFile(full) } };
+}
+
+function traceRoutes(state) {
+    return {
+        "GET /state": () => traceView(state),
+        "GET /file": (url) => traceFile(state, url),
+        "POST /select": async (_url, req) => selectTrace(state, await readBody(req)),
+    };
+}
+
+function traceSummary(view) {
+    const selected = view.selected;
+    return {
+        runId: view.run?.runId ?? null,
+        status: view.run?.status ?? null,
+        tests: view.entries.map(({ key, title, result, attempts }) => ({ testId: key, title, result, attempts: attempts.length })),
+        selected: selected && {
+            testId: selected.key,
+            title: selected.title,
+            attempt: selected.attempt,
+            status: selected.status,
+            error: selected.error,
+            steps: selected.steps.map((step) => ({
+                index: step.index,
+                title: step.title,
+                status: step.status,
+                offsetMs: step.offsetMs,
+                durationMs: step.durationMs,
+                error: step.error,
+                attachments: step.attachments.map((attachment) => attachment.path),
+                telemetry: selected.events
+                    .filter((event) => event.step === step.index)
+                    .map(({ kind, name, status, offsetMs, detail }) => ({ kind, name, status, offsetMs, detail: detail.slice(0, 200) })),
+            })),
+            beforeFirstStep: selected.events.filter((event) => event.step == null).length,
+        },
     };
 }
 
@@ -1300,6 +1631,282 @@ load();
 </body>
 </html>`;
 
+const TRACE_HTML = String.raw`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Drill trace</title>
+<style>
+  body {
+    margin: 0;
+    background: var(--background-color-default, #fff);
+    color: var(--text-color-default, #1f2328);
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    font-size: var(--text-body-medium, 14px);
+    line-height: var(--leading-body-medium, 20px);
+  }
+  header { position: sticky; top: 0; z-index: 2; background: var(--background-color-default, #fff); padding: 12px 16px 8px; border-bottom: 1px solid var(--border-color-default, #d0d7de); }
+  h1 { margin: 0; font-size: 16px; font-weight: var(--font-weight-semibold, 600); }
+  h2 { margin: 16px 0 6px; font-size: 13px; font-weight: var(--font-weight-semibold, 600); }
+  .muted { color: var(--text-color-muted, #656d76); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  button, select {
+    font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px; color: inherit; max-width: 100%;
+    border: 1px solid var(--border-color-default, #d0d7de); background: transparent;
+  }
+  button { cursor: pointer; }
+  button[aria-pressed="true"] { background: color-mix(in srgb, var(--true-color-blue, #0969da) 15%, transparent); border-color: var(--true-color-blue, #0969da); }
+  button:focus-visible, select:focus-visible, .step:focus-visible, .seg:focus-visible { outline: 2px solid var(--color-focus-outline, #0969da); outline-offset: 1px; }
+  main { padding: 0 16px 24px; }
+  .mono, .path { font-family: var(--font-mono, Consolas, monospace); font-size: 11px; }
+  .banner { margin-top: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
+  .banner.error { background: var(--true-color-red-muted, #ffebe9); }
+  .timeline { position: relative; margin-top: 12px; border: 1px solid var(--border-color-default, #d0d7de); border-radius: 6px; padding: 6px 0 18px; }
+  .lane { position: relative; height: 18px; margin: 2px 8px; }
+  .seg { position: absolute; top: 0; height: 100%; min-width: 3px; border-radius: 3px; cursor: pointer; opacity: .85; }
+  .seg.sel { outline: 2px solid var(--text-color-default, #1f2328); opacity: 1; }
+  .tick { position: absolute; top: 2px; width: 2px; height: 14px; border-radius: 1px; }
+  .tick.span-bar { height: 6px; top: 6px; opacity: .5; }
+  .axis { position: absolute; bottom: 2px; font-size: 10px; }
+  .steps { margin-top: 4px; }
+  .step { display: grid; grid-template-columns: 18px 64px 1fr auto auto; gap: 8px; align-items: baseline; padding: 4px 4px; border-bottom: 1px solid var(--border-color-default, #d0d7de); cursor: pointer; }
+  .step:hover { background: color-mix(in srgb, var(--text-color-muted, #656d76) 8%, transparent); }
+  .step.sel { background: color-mix(in srgb, var(--true-color-blue, #0969da) 12%, transparent); }
+  .icon { text-align: center; font-weight: 700; }
+  .badge { font-size: 10px; padding: 0 5px; border-radius: 8px; border: 1px solid var(--border-color-default, #d0d7de); margin-left: 3px; white-space: nowrap; }
+  .duration { font-size: 11px; text-align: right; min-width: 48px; }
+  .error { color: var(--true-color-red, #cf222e); white-space: pre-wrap; font-family: var(--font-mono, Consolas, monospace); font-size: 11px; }
+  .shot { display: block; max-width: 100%; margin: 6px 0; border: 1px solid var(--border-color-default, #d0d7de); border-radius: 4px; }
+  figure { margin: 8px 0; }
+  figcaption { font-size: 11px; }
+  details pre { max-height: 320px; overflow: auto; margin: 4px 0; padding: 6px; border-radius: 4px; background: color-mix(in srgb, var(--text-color-muted, #656d76) 8%, transparent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--border-color-default, #d0d7de); vertical-align: top; }
+  td.at, .step .mono { white-space: nowrap; }
+  td.detail { font-family: var(--font-mono, Consolas, monospace); font-size: 11px; word-break: break-all; white-space: pre-wrap; }
+  .k-ipc { color: var(--true-color-blue, #0969da); background: var(--true-color-blue, #0969da); }
+  .k-event { color: var(--true-color-purple, #8250df); background: var(--true-color-purple, #8250df); }
+  .k-log { color: var(--text-color-muted, #656d76); background: var(--text-color-muted, #656d76); }
+  .k-error { color: var(--true-color-red, #cf222e); background: var(--true-color-red, #cf222e); }
+  .k-span, .k-span-event { color: var(--true-color-green, #1a7f37); background: var(--true-color-green, #1a7f37); }
+  td .kind { background: none; font-weight: var(--font-weight-semibold, 600); }
+  .passed { color: var(--true-color-green, #1a7f37); }
+  .failed, .timedOut { color: var(--true-color-red, #cf222e); }
+  .flaky { color: var(--true-color-orange, #bc4c00); }
+  .interrupted { color: var(--true-color-yellow, #9a6700); }
+  .running { color: var(--true-color-blue, #0969da); }
+  .skipped, .notRun, .pending { color: var(--text-color-muted, #656d76); }
+  .seg.passed { background: var(--true-color-green, #1a7f37); }
+  .seg.failed, .seg.timedOut { background: var(--true-color-red, #cf222e); }
+  .seg.interrupted { background: var(--true-color-yellow, #9a6700); }
+  .seg.running { background: var(--true-color-blue, #0969da); }
+  .seg.skipped, .seg.pending, .seg.notRun { background: var(--text-color-muted, #656d76); }
+  .empty { padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Drill trace</h1>
+    <span class="spacer"></span>
+    <select id="run" aria-label="Run"></select>
+    <button id="refresh" title="Reload">↻</button>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <select id="test" aria-label="Test" style="flex:1;min-width:0"></select>
+    <select id="attempt" aria-label="Attempt"></select>
+  </div>
+  <div id="summary" class="muted" style="font-size:12px;margin-top:4px"></div>
+  <div id="banners" aria-live="polite"></div>
+</header>
+<main id="main"><div class="empty muted">Loading…</div></main>
+<script>
+const ICONS = { passed: "✓", failed: "✗", timedOut: "⏱", flaky: "◐", interrupted: "!", running: "●", skipped: "⊘", notRun: "·", pending: "·" };
+const KINDS = ["ipc", "event", "log", "error", "span"];
+const kinds = new Set(KINDS);
+let view = null;
+let error = null;
+let step = undefined;
+let shownKey = null;
+let timer = null;
+
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const ms = (raw) => { const value = Number(raw); return raw == null || Number.isNaN(value) ? "" : value < 1000 ? Math.round(value) + " ms" : (value / 1000).toFixed(2) + " s"; };
+const cls = (status) => (ICONS[status] ? status : "notRun");
+const icon = (status) => '<span class="icon ' + cls(status) + '" title="' + esc(status) + '">' + ICONS[cls(status)] + "</span>";
+const kindOf = (event) => (event.kind === "span-event" ? "span" : event.kind);
+const fileUrl = (path) => "/file?runId=" + encodeURIComponent(view.run.runId) + "&path=" + encodeURIComponent(path);
+
+async function load() {
+  clearTimeout(timer);
+  try {
+    const res = await fetch("/state");
+    const value = await res.json();
+    if (!res.ok) throw new Error(value.error);
+    view = value;
+    error = null;
+  } catch (err) {
+    error = "Canvas server unreachable: " + err.message;
+  }
+  render();
+  if (view?.run?.status === "running") timer = setTimeout(load, 2000);
+}
+
+async function select(body) {
+  try {
+    const res = await fetch("/select", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const value = await res.json();
+    if (!res.ok) throw new Error(value.error);
+  } catch (err) {
+    error = err.message;
+  }
+  await load();
+}
+
+function options(el, html, value) {
+  if (el.dataset.options !== html) {
+    el.innerHTML = html;
+    el.dataset.options = html;
+  }
+  if (document.activeElement !== el) el.value = value;
+}
+
+function timeline(sel) {
+  const ends = sel.steps.map((s) => (s.offsetMs ?? 0) + (s.durationMs ?? 0)).concat(sel.events.map((e) => (e.offsetMs ?? 0) + (e.durationMs ?? 0)));
+  const total = Math.max(1, sel.durationMs ?? 0, ...ends);
+  const pct = (value) => Math.max(0, Math.min(100, (100 * (value ?? 0)) / total));
+  const segs = sel.steps.map((s) => '<div class="seg ' + cls(s.status) + (step === s.index ? " sel" : "") + '" data-step="' + s.index + '" tabindex="0" role="button"' +
+    ' title="' + esc(s.title + " · " + ms(s.durationMs)) + '" style="left:' + pct(s.offsetMs) + "%;width:" + Math.max(0.4, pct(s.durationMs)) + '%"></div>').join("");
+  const shown = sel.events.filter((e) => kinds.has(kindOf(e)) && e.offsetMs != null);
+  const ticks = shown.map((e) => (e.durationMs
+    ? '<div class="tick span-bar k-' + esc(e.kind) + '" title="' + esc(e.name + " · " + ms(e.durationMs)) + '" style="left:' + pct(e.offsetMs) + "%;width:" + Math.max(0.3, pct(e.durationMs)) + '%"></div>'
+    : "") + '<div class="tick k-' + esc(e.kind) + '" title="' + esc(e.kind + ": " + e.name) + '" style="left:' + pct(e.offsetMs) + '%"></div>').join("");
+  return '<div class="timeline" aria-label="Timeline"><div class="lane">' + segs + '</div><div class="lane">' + ticks + "</div>" +
+    '<span class="axis muted" style="left:8px">0</span><span class="axis muted" style="right:8px">' + ms(total) + "</span></div>";
+}
+
+function attachment(a) {
+  const caption = '<figcaption class="muted">' + esc(a.name) + ' · <span class="path">' + esc(a.path) + "</span></figcaption>";
+  if (/^image\//.test(a.contentType)) {
+    return '<figure><img class="shot" loading="lazy" alt="' + esc(a.name) + '" src="' + esc(fileUrl(a.path)) + '">' + caption + "</figure>";
+  }
+  return '<details data-path="' + esc(a.path) + '"><summary>' + esc(a.name) + ' <span class="path muted">' + esc(a.path) + "</span></summary><pre class=\"mono\">Loading…</pre></details>";
+}
+
+function eventsTable(events) {
+  if (!events.length) return '<div class="muted" style="font-size:12px">No telemetry in this window.</div>';
+  return "<table>" + events.map((e) => "<tr><td class=\"muted mono at\">+" + ms(e.offsetMs) + '</td><td><span class="kind k-' + esc(e.kind) + '">' + esc(e.kind) + "</span></td>" +
+    "<td>" + esc(e.name) + (e.status && e.status !== "Unset" ? ' <span class="badge">' + esc(e.status) + "</span>" : "") + (e.durationMs ? ' <span class="muted">' + ms(e.durationMs) + "</span>" : "") + "</td>" +
+    '<td class="detail">' + esc(e.detail) + "</td></tr>").join("") + "</table>";
+}
+
+function render() {
+  const banners = error ? '<div class="banner error">' + esc(error) + "</div>" : "";
+  document.getElementById("banners").innerHTML = banners;
+  if (!view) return;
+  options(document.getElementById("run"), '<option value="">Latest run</option>' + view.runs.map((r) =>
+    '<option value="' + esc(r.runId) + '">' + esc(r.runId) + " · " + esc(r.status) + "</option>").join(""), view.pinned ?? "");
+  const sel = view.selected;
+  options(document.getElementById("test"), view.entries.map((e) =>
+    '<option value="' + esc(e.key) + '">' + ICONS[cls(e.result)] + " " + esc(e.title) + "</option>").join(""), sel?.key ?? "");
+  const entry = view.entries.find((e) => e.key === sel?.key);
+  const attempts = entry?.attempts ?? [];
+  const attemptEl = document.getElementById("attempt");
+  attemptEl.hidden = attempts.length < 2;
+  options(attemptEl, attempts.filter((a) => Number.isSafeInteger(a.attempt) && a.attempt >= 0).map((a) => '<option value="' + a.attempt + '">Attempt ' + (a.attempt + 1) + " · " + esc(a.status) + "</option>").join(""), String(sel?.attempt ?? ""));
+
+  const main = document.getElementById("main");
+  if (!view.run) {
+    main.innerHTML = '<div class="empty muted">' + (view.pinned ? "Run " + esc(view.pinned) + " was not found." : 'No drill runs in <span class="path">.auditaur/drill-runs</span> yet.') + "</div>";
+    document.getElementById("summary").textContent = "";
+    return;
+  }
+  if (!sel) {
+    main.innerHTML = '<div class="empty muted">This run has no tests.</div>';
+    return;
+  }
+  const key = sel.key + "|" + sel.attempt;
+  if (key !== shownKey) {
+    shownKey = key;
+    const failing = sel.steps.find((s) => ["failed", "timedOut"].includes(s.status));
+    step = failing ? failing.index : null;
+  }
+  document.getElementById("summary").innerHTML = ['<span class="' + cls(sel.status) + '">' + esc(sel.status) + "</span>", ms(sel.durationMs),
+    sel.steps.length + " steps", sel.events.length + " telemetry records"].filter(Boolean).join(" · ");
+
+  const counts = (index) => {
+    const mine = sel.events.filter((e) => e.step === index);
+    return KINDS.map((k) => { const n = mine.filter((e) => kindOf(e) === k).length; return n ? '<span class="badge k-' + k + '" style="background:none">' + n + " " + k + "</span>" : ""; }).join("");
+  };
+  const chosen = sel.steps[step];
+  const scoped = sel.events.filter((e) => kinds.has(kindOf(e)) && (step == null || e.step === step));
+  const before = sel.events.filter((e) => e.step == null).length;
+  main.innerHTML =
+    (sel.missing ? '<div class="banner muted">This attempt has not written its report yet.</div>' : "") +
+    (sel.error ? '<div class="error" style="margin-top:8px">' + esc(sel.error) + "</div>" : "") +
+    '<div class="row" style="margin-top:10px">' + KINDS.map((k) => '<button data-kind="' + k + '" aria-pressed="' + kinds.has(k) + '"><span class="kind k-' + k + '" style="background:none">●</span> ' + k + "</button>").join("") + "</div>" +
+    timeline(sel) +
+    '<div class="steps">' + sel.steps.map((s) => '<div class="step' + (step === s.index ? " sel" : "") + '" data-step="' + s.index + '" role="button" tabindex="0" aria-pressed="' + (step === s.index) + '">' +
+      icon(s.status) + '<span class="muted mono">+' + ms(s.offsetMs) + "</span><span>" + (s.phase && s.phase !== "test" ? '<span class="muted">' + esc(s.phase) + "</span> " : "") + esc(s.title) +
+      (s.soft ? '<span class="badge">soft</span>' : "") + (s.attachments.length ? '<span class="badge">📎 ' + s.attachments.length + "</span>" : "") + "</span>" +
+      "<span>" + counts(s.index) + '</span><span class="duration muted">' + ms(s.durationMs) + "</span></div>").join("") + "</div>" +
+    (chosen
+      ? "<h2>Step " + (chosen.index + 1) + ": " + esc(chosen.title) + ' <button data-step="all">Show all</button></h2>' +
+        (chosen.error ? '<div class="error">' + esc(chosen.error) + "</div>" : "") +
+        chosen.attachments.map(attachment).join("") +
+        (chosen.attachments.length ? "" : '<div class="muted" style="font-size:12px">No screenshots for this step. Run with <span class="path">--trace on</span> to capture every step.</div>')
+      : "<h2>Whole " + (sel.kind === "hooks" ? "suite" : "attempt") + "</h2>" + (before ? '<div class="muted" style="font-size:12px">' + before + " records arrived before the first step.</div>" : "") +
+        sel.attachments.map(attachment).join("")) +
+    "<h2>Telemetry</h2>" + eventsTable(scoped) +
+    (sel.filterNotes && (typeof sel.filterNotes === "string" || Object.keys(sel.filterNotes).length) ? '<div class="muted" style="font-size:11px;margin-top:6px">' + esc(typeof sel.filterNotes === "string" ? sel.filterNotes : JSON.stringify(sel.filterNotes)) + "</div>" : "");
+}
+
+document.addEventListener("click", (event) => {
+  const kind = event.target.closest("[data-kind]");
+  if (kind) {
+    kinds.has(kind.dataset.kind) ? kinds.delete(kind.dataset.kind) : kinds.add(kind.dataset.kind);
+    return render();
+  }
+  const target = event.target.closest("[data-step]");
+  if (target) {
+    const value = target.dataset.step;
+    step = value === "all" || Number(value) === step ? null : Number(value);
+    return render();
+  }
+  if (event.target.id === "refresh") load();
+});
+document.addEventListener("keydown", (event) => {
+  const row = event.target.closest?.("[data-step][tabindex]");
+  if (row && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    row.click();
+  }
+});
+document.addEventListener("toggle", async (event) => {
+  const details = event.target;
+  if (!details.open || !details.dataset?.path || details.dataset.loaded) return;
+  details.dataset.loaded = "1";
+  const pre = details.querySelector("pre");
+  try {
+    const res = await fetch(fileUrl(details.dataset.path));
+    const text = await res.text();
+    if (!res.ok) throw new Error(JSON.parse(text).error);
+    let shown = text;
+    try { shown = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    pre.textContent = shown.length > 200000 ? shown.slice(0, 200000) + "\n…" : shown;
+  } catch (err) {
+    pre.textContent = "Could not load: " + err.message;
+  }
+}, true);
+document.getElementById("run").addEventListener("change", (event) => select({ runId: event.target.value || null }));
+document.getElementById("test").addEventListener("change", (event) => select({ runId: view?.pinned ?? null, testId: event.target.value }));
+document.getElementById("attempt").addEventListener("change", (event) => select({ runId: view?.pinned ?? null, testId: view?.selected?.key, attempt: Number(event.target.value) }));
+load();
+</script>
+</body>
+</html>`;
+
 await joinSession({
     canvases: [
         createCanvas({
@@ -1397,6 +2004,49 @@ await joinSession({
                     configureLive(entry.state, ctx.input);
                 }
                 return { title: "Drill run", url: entry.url };
+            },
+            onClose: closeEntry,
+        }),
+        createCanvas({
+            id: "auditaur-drill-trace",
+            displayName: "Auditaur Drill Trace",
+            description: "Step through one drill test attempt: a step timeline with screenshots, DOM, IPC, events, logs, and errors lined up by time.",
+            inputSchema: traceSchema,
+            actions: [
+                {
+                    name: "get_trace",
+                    description: "The shown attempt's steps with timing, errors, attachments, and the telemetry recorded during each step.",
+                    handler: async (ctx) => traceSummary(await traceView(entryFor(ctx).state)),
+                },
+                {
+                    name: "select",
+                    description: "Show another run, test, or attempt. Omit runId to follow the newest run.",
+                    inputSchema: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                            runId: traceSchema.properties.runId,
+                            testId: { type: "string" },
+                            attempt: traceSchema.properties.attempt,
+                        },
+                    },
+                    handler: async (ctx) => {
+                        const state = entryFor(ctx).state;
+                        selectTrace(state, ctx.input ?? {});
+                        return traceSummary(await traceView(state));
+                    },
+                },
+            ],
+            open: async (ctx) => {
+                let entry = servers.get(ctx.instanceId);
+                if (!entry) {
+                    const state = configureTrace({}, ctx.input);
+                    entry = { state, ...(await startServer(traceRoutes(state), TRACE_HTML)) };
+                    servers.set(ctx.instanceId, entry);
+                } else if (ctx.input && Object.keys(ctx.input).length > 0) {
+                    configureTrace(entry.state, ctx.input);
+                }
+                return { title: "Drill trace", url: entry.url };
             },
             onClose: closeEntry,
         }),

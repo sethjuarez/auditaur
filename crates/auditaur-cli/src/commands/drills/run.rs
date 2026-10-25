@@ -507,6 +507,8 @@ struct ActiveStep {
     title: String,
     action: String,
     start: Instant,
+    /// Set by [`RunWriter::step_ended`].
+    ended_ms: Option<u64>,
     started_at: String,
     attachments: Vec<Attachment>,
 }
@@ -873,10 +875,19 @@ impl RunWriter {
             title: title.to_string(),
             action: action.to_string(),
             start: Instant::now(),
+            ended_ms: None,
             started_at: now(),
             attachments: Vec::new(),
         });
         Ok(index)
+    }
+
+    /// Stop the running step's clock, so evidence captured before [`Self::step_finished`] does
+    /// not count toward its duration.
+    pub fn step_ended(&mut self) {
+        if let Some(step) = self.step.as_mut() {
+            step.ended_ms.get_or_insert_with(|| elapsed_ms(step.start));
+        }
     }
 
     /// Finish the running step. Attachments added while it ran belong to it.
@@ -891,7 +902,7 @@ impl RunWriter {
             .step
             .take()
             .ok_or_else(|| anyhow!("no step is running"))?;
-        let duration_ms = elapsed_ms(active.start);
+        let duration_ms = active.ended_ms.unwrap_or_else(|| elapsed_ms(active.start));
         let index = active.index;
         let step = StepReport {
             index,
@@ -1693,6 +1704,43 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn evidence_captured_after_step_ended_is_not_timed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.drill.json");
+        fs::write(
+            &file,
+            r##"{ "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }] }"##,
+        )
+        .unwrap();
+        let loaded = load(&[file]);
+        let plan = select(&loaded.suites, &Filters::default());
+        let mut writer = RunWriter::create(
+            RunOptions {
+                workspace: dir.path().to_path_buf(),
+                invocation: Invocation::default(),
+                keep: 5,
+            },
+            &plan,
+        )
+        .unwrap();
+        writer.suite_started(0).unwrap();
+        writer.test_started(0, 0, 0).unwrap();
+        writer.step_started(Phase::Test, "click", "click").unwrap();
+        writer.step_ended();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        writer.step_ended();
+        writer
+            .attach("trace", "image/png", "step-0-trace.png", b"png")
+            .unwrap();
+        writer.step_finished(Status::Passed, false, None).unwrap();
+        writer.test_finished(Status::Passed, None, false).unwrap();
+        let summary = writer.report().suites[0].tests[0].attempts[0].clone();
+        let attempt = read_attempt(writer.dir(), &summary).unwrap();
+        assert!(attempt.steps[0].duration_ms < 300, "{:?}", attempt.steps[0]);
+        assert_eq!(attempt.steps[0].attachments.len(), 1);
     }
 
     #[test]

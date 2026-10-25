@@ -35,6 +35,7 @@ pub struct TestOptions {
     pub require_frontend: bool,
     pub timeout_seconds: Option<u64>,
     pub update_snapshots: runner::snapshot::UpdateMode,
+    pub trace: runner::TraceMode,
     /// Stop starting tests after this many failures (`-x` is 1).
     pub max_failures: Option<usize>,
     /// Only run tests that failed or did not run in the latest run.
@@ -175,6 +176,7 @@ pub fn test(options: TestOptions) -> Result<i32> {
         &RunnerOptions {
             retries: options.retries,
             update_snapshots: options.update_snapshots,
+            trace: options.trace,
             max_failures: options.max_failures,
             cancel: Some(Arc::clone(&cancel)),
         },

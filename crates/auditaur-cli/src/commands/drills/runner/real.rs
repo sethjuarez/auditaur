@@ -263,31 +263,11 @@ impl AppDriver for BridgeDriver {
     }
 
     fn capture_failure(&mut self, ctx: &mut StepCtx<'_>) {
-        let index = ctx.step_index;
-        let step_id = Some(format!("step-{index}"));
-        if let Ok(png) =
-            self.session
-                .screenshot_png(None, ctx.test_id.clone(), step_id, CAPTURE_TIMEOUT)
-        {
-            let _ = ctx.writer.attach(
-                "failure screenshot",
-                "image/png",
-                &format!("step-{index}-failure.png"),
-                &png,
-            );
-        }
-        if let Ok(reply) = self.request(ctx, "snapshot", None, None, CAPTURE_TIMEOUT) {
-            if reply.ok {
-                if let Ok(bytes) = serde_json::to_vec_pretty(&reply.payload) {
-                    let _ = ctx.writer.attach(
-                        "failure dom",
-                        "application/json",
-                        &format!("step-{index}-failure-dom.json"),
-                        &bytes,
-                    );
-                }
-            }
-        }
+        self.capture(ctx, "failure");
+    }
+
+    fn capture_step(&mut self, ctx: &mut StepCtx<'_>) {
+        self.capture(ctx, "trace");
     }
 
     fn telemetry(&mut self, since_unix_nanos: i64, live: bool) -> Option<Value> {
@@ -386,6 +366,36 @@ fn explain(error: String) -> String {
 }
 
 impl BridgeDriver {
+    /// Attach a screenshot and DOM snapshot to the current step, named `<kind> screenshot` and
+    /// `<kind> dom`. Best effort.
+    fn capture(&mut self, ctx: &mut StepCtx<'_>, kind: &str) {
+        let index = ctx.step_index;
+        let step_id = Some(format!("step-{index}"));
+        if let Ok(png) =
+            self.session
+                .screenshot_png(None, ctx.test_id.clone(), step_id, CAPTURE_TIMEOUT)
+        {
+            let _ = ctx.writer.attach(
+                &format!("{kind} screenshot"),
+                "image/png",
+                &format!("step-{index}-{kind}.png"),
+                &png,
+            );
+        }
+        if let Ok(reply) = self.request(ctx, "snapshot", None, None, CAPTURE_TIMEOUT) {
+            if reply.ok {
+                if let Ok(bytes) = serde_json::to_vec_pretty(&reply.payload) {
+                    let _ = ctx.writer.attach(
+                        &format!("{kind} dom"),
+                        "application/json",
+                        &format!("step-{index}-{kind}-dom.json"),
+                        &bytes,
+                    );
+                }
+            }
+        }
+    }
+
     /// Wait for a human (or agent) through the gate queue; see [`drill::run_test_gate`].
     fn gate(&mut self, ctx: &mut StepCtx<'_>, gate: &Value) -> StepOutcome {
         let target = self.session.gate_target();

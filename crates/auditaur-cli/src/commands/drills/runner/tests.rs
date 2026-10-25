@@ -126,6 +126,15 @@ impl AppDriver for FakeDriver {
             .unwrap();
     }
 
+    fn capture_step(&mut self, ctx: &mut StepCtx<'_>) {
+        // Slower than the timeout in `trace_capture_does_not_count_against_the_timeout`.
+        thread::sleep(std::time::Duration::from_millis(80));
+        self.state
+            .borrow_mut()
+            .log
+            .push(format!("trace {}", ctx.step_index));
+    }
+
     fn exited(&mut self) -> Option<String> {
         self.state.borrow().dead.then(|| "crashed".to_string())
     }
@@ -452,6 +461,50 @@ fn retries_fall_back_to_suite_then_cli() {
         },
     );
     assert_eq!(suite_level.report.suites[0].tests[0].attempts.len(), 2);
+}
+
+#[test]
+fn trace_modes_capture_every_step_or_only_the_first_retry() {
+    let suite = r##"{ "tests": [{ "name": "t", "retries": 2, "steps": [
+        { "click": "#ok" }, { "click": "#flaky" }
+    ] }] }"##;
+    let traces = |trace| -> Vec<String> {
+        run_with(
+            suite,
+            RunnerOptions {
+                trace,
+                ..RunnerOptions::default()
+            },
+        )
+        .log
+        .into_iter()
+        .filter(|line| line.starts_with("trace") || line == "capture")
+        .collect()
+    };
+    // The failing step captures failure evidence instead of a trace.
+    assert_eq!(traces(TraceMode::Off), ["capture"]);
+    assert_eq!(
+        traces(TraceMode::On),
+        ["trace 0", "capture", "trace 0", "trace 1"]
+    );
+    assert_eq!(
+        traces(TraceMode::OnFirstRetry),
+        ["capture", "trace 0", "trace 1"]
+    );
+}
+
+#[test]
+fn trace_capture_does_not_count_against_the_timeout() {
+    let ran = run_with(
+        r##"{ "tests": [{ "name": "t", "timeoutMs": 60, "steps": [
+            { "click": "#ok" }, { "click": "#ok" }, { "click": "#ok" }
+        ] }] }"##,
+        RunnerOptions {
+            trace: TraceMode::On,
+            ..RunnerOptions::default()
+        },
+    );
+    assert_eq!(test(&ran, "t").status, Status::Passed);
 }
 
 #[test]

@@ -211,7 +211,7 @@ auditaur drill show                          # latest run and its failures
 - Assert telemetry, not just UI: a passing click whose IPC failed is still a bug.
 - Snapshot baselines go in `__snapshots__/` beside the suite. A missing baseline is written and fails; review it before committing. Use `--update-snapshots=changed` (the `=` is required) only for intended UI changes.
 - Read failures from `.auditaur/drill-runs/<runId>/` (`run.json`, `tests/<id>/attempt-<n>/attempt.json`), not by rerunning blindly.
-- When the user wants to see drills, open the `auditaur-drill-explorer` canvas (installed by `auditaur init extension`) instead of pasting result tables. To watch a run or answer its `gate` steps, open the `auditaur-drill-run` canvas.
+- When the user wants to see drills, open the `auditaur-drill-explorer` canvas (installed by `auditaur init extension`) instead of pasting result tables. To watch a run or answer its `gate` steps, open the `auditaur-drill-run` canvas. To debug a failed test step by step, rerun with `--trace on` (or MCP `trace: "on"`) and open the `auditaur-drill-trace` canvas.
 - A `gate` step in a drill test pauses for a human. `drill test` never reads the terminal: surface the gate in `auditaur-drill-run` (or answer with `respond_human_gate` when the user tells you to). Gate waits count against the test `timeoutMs`.
 
 ## Human gates in drills

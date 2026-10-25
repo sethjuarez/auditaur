@@ -20,6 +20,7 @@ use crate::commands::drills::{self, run};
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const LOG_TAIL_BYTES: usize = 4_000;
 const UPDATE_MODES: &[&str] = &["none", "missing", "changed", "all"];
+const TRACE_MODES: &[&str] = &["off", "on", "on-first-retry"];
 /// The background run's stdout/stderr, moved into its run folder when it exits.
 const RUN_LOG_FILE: &str = "drill-test.log";
 
@@ -131,6 +132,12 @@ fn test(arguments: &Value) -> Result<Value> {
             );
         }
         args.push(format!("--update-snapshots={mode}"));
+    }
+    if let Some(mode) = string(arguments, "trace")? {
+        if !TRACE_MODES.contains(&mode.as_str()) {
+            bail!("`trace` must be one of {}", TRACE_MODES.join(", "));
+        }
+        args.push(format!("--trace={mode}"));
     }
     let command = string_array(arguments, "command")?;
     if !command.is_empty() {
@@ -409,6 +416,7 @@ pub fn tools() -> Vec<Value> {
                 "maxFailures": { "type": "integer", "minimum": 1 },
                 "lastFailed": { "type": "boolean" },
                 "updateSnapshots": { "type": "string", "enum": UPDATE_MODES },
+                "trace": { "type": "string", "enum": TRACE_MODES, "description": "Record a screenshot and DOM after each step." },
             })),
         ),
         drill_tool(

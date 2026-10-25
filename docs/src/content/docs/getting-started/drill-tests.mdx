@@ -66,6 +66,7 @@ In the test file, `"only": true` focuses tests, and `skip` and `fixme` (each tak
 | `--retries <n>` | Retry failed tests. A test that passes on retry is reported as **flaky**. |
 | `-x`, `--max-failures <n>` | Stop starting new tests after N failures. Cleanup still runs. |
 | `-u, --update-snapshots[=mode]` | `none`, `missing` (default), `changed` (bare `-u`), or `all`. The value needs `=`. |
+| `--trace <mode>` | `off` (default), `on`, or `on-first-retry`. Captures a screenshot and DOM snapshot after every step. |
 | `--require-frontend` | Treat a launched app as ready only once its frontend reports telemetry. |
 | `--timeout-seconds <n>` | Seconds to wait for a launched app to be ready (default 180). |
 | `--junit <file>` | Also write JUnit XML for CI. |
@@ -152,6 +153,8 @@ tests/<testId>/attempt-<n>/      attempt.json, plus screenshots, ARIA snapshots,
 drill-test.log                   console output, for runs started by the MCP drill_test tool
 ```
 
+Failed steps attach `step-<i>-failure.png` and `step-<i>-failure-dom.json`. With `--trace`, other steps attach `step-<i>-trace.png` and `step-<i>-trace-dom.json`; capture time is not counted in step durations. `on-first-retry` traces only the first retry, so passing runs stay cheap.
+
 The format is versioned by [`drill-run.schema.json`](/schemas/drill-run.schema.json). `drill show`, MCP tools, and canvases read it without recomputing anything.
 
 A running test command stops gracefully, like Ctrl+C, when a `cancel.request` file appears in its run folder.
@@ -184,6 +187,8 @@ Open input, all optional:
 Agents can call its `get_summary`, `refresh`, `run`, and `cancel` actions.
 
 The `auditaur-drill-run` canvas watches one run live: suites, tests, and each step ticking with its status and duration. Gates waiting for an answer appear at the top with their instructions, inputs, and choice buttons. It follows the newest run unless opened with `{ "runId": "..." }` or switched with its run picker. Agents can call its `get_status`, `respond_gate`, and `cancel` actions.
+
+The `auditaur-drill-trace` canvas replays one test attempt: a timeline of steps with IPC, event, log, and frontend-error ticks, each step's screenshots and DOM snapshot, and the telemetry recorded during it. Open it with `{ "runId", "testId", "attempt" }`, all optional; it defaults to the newest run's first failed test. Agents can call its `get_trace` and `select` actions.
 
 ## CI
 
