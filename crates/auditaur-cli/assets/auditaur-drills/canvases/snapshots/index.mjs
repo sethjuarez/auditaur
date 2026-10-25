@@ -58,6 +58,7 @@ export default {
     components: ["compare", "links"],
     view: {
         mode: field.choice(["side", "slider", "diff"], "side").about("How screenshot mismatches compare expected and actual."),
+        split: field.range(0, 100, 50).about("Slider mode: percent of the width showing expected (left) over actual."),
     },
     create: (input, view) => configure({ view }, input),
     reconfigure: configure,

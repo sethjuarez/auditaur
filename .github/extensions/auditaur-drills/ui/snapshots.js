@@ -12,6 +12,9 @@ let error = null;
 let notice = null;
 let busy = false;
 let timer = null;
+// While a slider is held, reloads keep its live split and skip replacing it.
+let dragSplit = null;
+let renderDeferred = false;
 
 const mode = () => view?.ui.mode ?? "side";
 const fileUrl = (path) => "/file?runId=" + encodeURIComponent(view.run.runId) + "&path=" + encodeURIComponent(path);
@@ -24,6 +27,7 @@ async function load() {
     const next = await fetchState();
     if (!next) return;
     view = next;
+    if (dragSplit !== null) view.ui.split = dragSplit;
     error = null;
   } catch (err) {
     error = "Canvas server unreachable: " + err.message;
@@ -60,7 +64,7 @@ async function accept(ids) {
 function body(item) {
   if (item.kind === "screenshot") {
     return '<div class="snap-message muted">' + esc(item.message) + "</div>" +
-      '<div class="snap-body">' + imageCompare({ expected: urlOf(item, "expected"), actual: urlOf(item, "actual"), diff: urlOf(item, "diff") }, mode()) + "</div>";
+      '<div class="snap-body">' + imageCompare({ expected: urlOf(item, "expected"), actual: urlOf(item, "actual"), diff: urlOf(item, "diff") }, mode(), view.ui.split ?? 50) + "</div>";
   }
   const files = ["expected", "actual"].filter((name) => item.files[name]).map((name) => textFile(name, urlOf(item, name))).join("");
   return '<div class="snap-body">' + lineDiff(item.message) + files + "</div>";
@@ -99,6 +103,10 @@ function render() {
     main.innerHTML = '<div class="empty muted">' + (view.pinned ? "Run " + esc(view.pinned) + " was not found." : 'No drill runs in <span class="path">.auditaur/drill-runs</span> yet.') + "</div>";
     return;
   }
+  if (dragSplit !== null) {
+    renderDeferred = true;
+    return;
+  }
   summary.innerHTML = esc(view.run.runId) + " · " + view.items.length + " snapshot result" + (view.items.length === 1 ? "" : "s") + " · " + pending.length + " to review";
   main.innerHTML = view.items.length
     ? view.items.map(card).join("")
@@ -122,5 +130,34 @@ document.addEventListener("click", (event) => {
   if (event.target.id === "refresh") load();
 });
 document.getElementById("run").addEventListener("change", (event) => select({ runId: event.target.value || null }));
+document.addEventListener("pointerdown", (event) => {
+  const range = event.target.closest?.(".compare-range");
+  if (range) dragSplit = Number(range.value);
+});
+document.addEventListener("input", (event) => {
+  const range = event.target.closest?.(".compare-range");
+  if (range && dragSplit !== null) dragSplit = Number(range.value);
+});
+// Runs after the slider's `change`, so the released value is already saved.
+const release = () => {
+  if (dragSplit === null) return;
+  dragSplit = null;
+  if (renderDeferred) {
+    renderDeferred = false;
+    setTimeout(render, 0);
+  }
+};
+document.addEventListener("pointerup", release);
+document.addEventListener("pointercancel", release);
+// A released slider; every compare slider shares one split, like the mode.
+document.addEventListener("change", (event) => {
+  const range = event.target.closest?.(".compare-range");
+  if (!range || !view) return;
+  view.ui.split = Number(range.value);
+  setView({ split: view.ui.split }).catch((err) => {
+    error = err.message;
+    load();
+  });
+});
 onServerChange(load);
 load();

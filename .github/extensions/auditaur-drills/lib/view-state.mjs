@@ -60,6 +60,15 @@ export const field = {
             return value;
         },
     }),
+    // An integer from `min` to `max`.
+    range: (min, max, initial) => spec({
+        schema: { type: "integer", minimum: min, maximum: max },
+        initial,
+        check: (value, name) => {
+            if (!Number.isSafeInteger(value) || value < min || value > max) throw invalid(name, `an integer from ${min} to ${max}`);
+            return value;
+        },
+    }),
     // Per-id open/closed overrides of a default; `{ id: boolean }`.
     toggles: (max = 500) => spec({
         schema: { type: "object", maxProperties: max, additionalProperties: { type: "boolean" } },
