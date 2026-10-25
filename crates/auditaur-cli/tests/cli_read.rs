@@ -989,6 +989,191 @@ fn drill_runs_and_show_read_run_folders() {
 }
 
 #[test]
+fn mcp_drill_tools_list_run_show_and_cancel() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("ws");
+    let drills = workspace.join(".auditaur").join("drills");
+    fs::create_dir_all(&drills).unwrap();
+    fs::write(
+        drills.join("smoke.drill.json"),
+        r##"{ "tests": [
+            { "name": "loads", "tags": ["fast"], "steps": [{ "expect": "#app", "toBeVisible": true }] },
+            { "name": "clicks", "steps": [{ "click": "#go" }] }
+        ] }"##,
+    )
+    .unwrap();
+    let cwd = workspace.to_str().unwrap();
+
+    // A finished run with one attempt on disk, and a run "owned" by this live test process.
+    let root = workspace.join(".auditaur").join("drill-runs");
+    let attempt_dir = "tests/fedcba9876543210/attempt-0";
+    let report = |id: &str, status: &str, pid: u32| {
+        json!({
+            "schemaVersion": 1, "runId": id, "status": status, "seq": 9,
+            "startedAt": "2026-01-01T00:00:00Z", "endedAt": null, "durationMs": 2500,
+            "pid": pid, "workspace": "/w",
+            "invocation": { "args": [], "patterns": [], "grep": null, "grepInvert": null, "tags": [] },
+            "environment": { "os": "windows", "arch": "x86_64", "auditaurVersion": "0.0.0" },
+            "totals": { "tests": 1, "passed": 0, "failed": 1, "flaky": 0, "skipped": 0, "notRun": 0 },
+            "suites": [{
+                "id": "00112233445566ff", "suite": "smoke", "path": ".auditaur/drills/smoke.drill.json",
+                "status": status, "startedAt": null, "durationMs": 2400, "app": null, "error": null, "hooks": [],
+                "tests": [{ "id": "fedcba9876543210", "name": "clicks", "title": "smoke > clicks", "tags": [],
+                    "mode": "run", "modeReason": null, "expectedStatus": "passed", "status": "failed",
+                    "outcome": "unexpected", "durationMs": 1200,
+                    "attempts": [{ "attempt": 0, "status": "failed", "startedAt": "2026-01-01T00:00:00Z",
+                        "durationMs": 1200, "dir": attempt_dir,
+                        "error": { "message": "#go not visible", "step": 0 } }] }]
+            }]
+        })
+    };
+    let finished = root.join("20260101-000000-000");
+    fs::create_dir_all(finished.join(attempt_dir)).unwrap();
+    fs::write(
+        finished.join("run.json"),
+        serde_json::to_vec(&report("20260101-000000-000", "failed", 1)).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        finished.join(attempt_dir).join("attempt.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1, "testId": "fedcba9876543210", "title": "smoke > clicks", "attempt": 0,
+            "status": "failed", "startedAt": "2026-01-01T00:00:00Z", "durationMs": 1200,
+            "error": { "message": "#go not visible", "step": 0 },
+            "steps": [], "attachments": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let running = root.join("20260102-000000-000");
+    fs::create_dir_all(&running).unwrap();
+    fs::write(
+        running.join("run.json"),
+        serde_json::to_vec(&report(
+            "20260102-000000-000",
+            "running",
+            std::process::id(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let calls = [
+        json!({ "name": "drill_list", "arguments": { "cwd": cwd, "tags": ["fast"] } }),
+        json!({ "name": "drill_validate", "arguments": { "cwd": cwd } }),
+        json!({ "name": "drill_runs", "arguments": { "cwd": cwd } }),
+        json!({ "name": "drill_show", "arguments": { "cwd": cwd, "runId": "20260101" } }),
+        json!({ "name": "drill_show", "arguments": { "cwd": cwd, "runId": "20260101", "test": "clicks" } }),
+        json!({ "name": "drill_cancel", "arguments": { "cwd": cwd, "runId": "20260101" } }),
+        json!({ "name": "drill_cancel", "arguments": { "cwd": cwd, "runId": "20260102" } }),
+        json!({ "name": "drill_list", "arguments": { "cwd": cwd, "filter": ["x"] } }),
+        json!({ "name": "drill_list", "arguments": { "cwd": cwd, "filters": ["--attach"] } }),
+        json!({ "name": "drill_test", "arguments": { "cwd": cwd, "filters": ["nothing-matches"] } }),
+        json!({ "name": "drill_test", "arguments": {
+            "cwd": cwd, "app": "auditaur-mcp-missing-app", "attach": true, "tags": ["fast"],
+            "timeoutSeconds": 1, "updateSnapshots": "none"
+        } }),
+    ];
+    let responses = mcp_session(&temp, &calls);
+    let text = |index: usize| -> String {
+        let result = &responses[index]["result"];
+        result["content"][0]["text"].as_str().unwrap().to_string()
+    };
+    let ok = |index: usize| -> Value {
+        assert_eq!(
+            responses[index]["result"]["isError"],
+            false,
+            "call {index}: {}",
+            text(index)
+        );
+        serde_json::from_str(&text(index)).unwrap()
+    };
+    let err = |index: usize| -> String {
+        assert_eq!(responses[index]["result"]["isError"], true, "call {index}");
+        text(index)
+    };
+
+    let listed = ok(0);
+    assert_eq!(listed["totals"]["tests"], 1);
+    assert_eq!(listed["suites"][0]["tests"][0]["name"], "loads");
+    assert_eq!(ok(1)["valid"], true);
+    let runs = ok(2);
+    assert_eq!(runs["runs"][0]["runId"], "20260102-000000-000");
+    assert_eq!(runs["runs"][0]["status"], "running");
+    assert_eq!(ok(3)["dir"], ".auditaur/drill-runs/20260101-000000-000");
+    let detail = ok(4);
+    assert_eq!(detail["test"]["title"], "smoke > clicks");
+    assert_eq!(detail["test"]["attempts"][0]["testId"], "fedcba9876543210");
+    assert_eq!(detail["test"]["attempts"][0]["dir"], attempt_dir);
+    assert!(err(5).contains("is not running"));
+    assert_eq!(ok(6)["cancelRequested"], true);
+    assert!(running.join("cancel.request").exists());
+    assert!(err(7).contains("does not take `filter`"), "{}", text(7));
+    assert!(err(8).contains("cannot start with `-`"), "{}", text(8));
+    let early = err(9);
+    assert!(early.contains("before starting a run"), "{early}");
+    assert!(early.contains("No tests found"), "{early}");
+
+    // A real background run: attaching to an app that does not exist fails the suite.
+    let started = ok(10);
+    assert_eq!(started["started"], true, "{started}");
+    let run_id = started["runId"].as_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let shown = loop {
+        let shown = run_json_command(
+            Command::new(env!("CARGO_BIN_EXE_auditaur"))
+                .args(["drill", "show", &run_id, "--json"])
+                .current_dir(&workspace),
+        );
+        if shown["status"] != "running" || Instant::now() > deadline {
+            break shown;
+        }
+        thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(shown["status"], "failed", "{shown}");
+    assert_eq!(shown["totals"]["tests"], 1);
+    assert_eq!(
+        shown["invocation"]["args"],
+        json!([
+            "drill",
+            "test",
+            "--tag=fast",
+            "--app=auditaur-mcp-missing-app",
+            "--attach",
+            "--timeout-seconds=1",
+            "--update-snapshots=none"
+        ])
+    );
+}
+
+/// Send `tools/call` requests to `auditaur mcp` and return one response per call.
+fn mcp_session(temp: &TempDir, calls: &[Value]) -> Vec<Value> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut server = Command::new(env!("CARGO_BIN_EXE_auditaur"))
+        .arg("mcp")
+        .env("AUDITAUR_DATA_DIR", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = server.stdin.take().unwrap();
+    for (id, call) in calls.iter().enumerate() {
+        let request = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": call });
+        writeln!(stdin, "{request}").unwrap();
+    }
+    drop(stdin);
+    // Read exactly one line per call: background runs may hold the pipe open past exit.
+    let mut lines = BufReader::new(server.stdout.take().unwrap()).lines();
+    let responses = calls
+        .iter()
+        .map(|_| serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap())
+        .collect();
+    let _ = server.wait();
+    responses
+}
+
+#[test]
 fn init_skill_installs_auditaur_debug_skill() {
     let repo = TempDir::new().unwrap();
     let skill_path = repo

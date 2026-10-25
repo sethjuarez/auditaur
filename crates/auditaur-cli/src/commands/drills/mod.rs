@@ -402,9 +402,9 @@ fn format_totals(totals: &run::Totals) -> String {
     parts.join(", ")
 }
 
-/// `auditaur drill runs`: recorded runs, newest first.
-pub fn runs(json: bool) -> Result<()> {
-    let root = std::env::current_dir()?.join(run::RUNS_DIR);
+/// Readable runs and unreadable folders under `workspace`, newest first.
+fn read_runs(workspace: &Path) -> Result<(Vec<run::RunReport>, Vec<Value>)> {
+    let root = workspace.join(run::RUNS_DIR);
     let mut runs = Vec::new();
     let mut unreadable = Vec::new();
     for id in run::run_ids(&root)?.into_iter().rev() {
@@ -413,21 +413,104 @@ pub fn runs(json: bool) -> Result<()> {
             Err(error) => unreadable.push(json!({ "runId": id, "error": format!("{error:#}") })),
         }
     }
+    Ok((runs, unreadable))
+}
+
+/// The `drill runs --json` document for `workspace`.
+pub fn runs_json(workspace: &Path) -> Result<Value> {
+    let (runs, unreadable) = read_runs(workspace)?;
+    Ok(json!({
+        "root": run::RUNS_DIR,
+        "runs": runs.iter().map(|report| json!({
+            "runId": report.run_id,
+            "status": report.status,
+            "startedAt": report.started_at,
+            "durationMs": report.duration_ms,
+            "totals": report.totals,
+        })).collect::<Vec<_>>(),
+        "unreadable": unreadable,
+    }))
+}
+
+/// The `drill show --json` document: the run report plus its workspace-relative `dir`.
+pub fn show_json(workspace: &Path, selector: Option<&str>) -> Result<Value> {
+    let dir = run::resolve_run(&workspace.join(run::RUNS_DIR), selector)?;
+    let report = run::read_run(&dir)?;
+    let mut value = serde_json::to_value(&report)?;
+    value["dir"] = json!(format!("{}/{}", run::RUNS_DIR, report.run_id));
+    Ok(value)
+}
+
+/// One test of a run with every attempt's full report (steps, errors, attachments).
+/// `test` is a test id, title (`suite > test`) or name; a name must be unique in the run.
+pub fn test_detail_json(workspace: &Path, selector: Option<&str>, test: &str) -> Result<Value> {
+    let dir = run::resolve_run(&workspace.join(run::RUNS_DIR), selector)?;
+    let report = run::read_run(&dir)?;
+    let tests: Vec<&run::TestReport> = report
+        .suites
+        .iter()
+        .flat_map(|suite| &suite.tests)
+        .collect();
+    let matched = match tests
+        .iter()
+        .find(|candidate| candidate.id == test || candidate.title == test)
+    {
+        Some(found) => *found,
+        None => {
+            let named: Vec<&&run::TestReport> = tests
+                .iter()
+                .filter(|candidate| candidate.name == test)
+                .collect();
+            match named.as_slice() {
+                [found] => **found,
+                [] => return Err(anyhow!("run {} has no test `{test}`", report.run_id)),
+                many => {
+                    return Err(anyhow!(
+                        "`{test}` names {} tests in run {}; use the id or `suite > test` title",
+                        many.len(),
+                        report.run_id
+                    ))
+                }
+            }
+        }
+    };
+    let attempts: Vec<Value> = matched
+        .attempts
+        .iter()
+        .map(|summary| match run::read_attempt(&dir, summary) {
+            Ok(attempt) => {
+                let mut value = serde_json::to_value(attempt).unwrap_or(Value::Null);
+                value["dir"] = json!(summary.dir);
+                value
+            }
+            Err(error) => {
+                let mut value = serde_json::to_value(summary).unwrap_or(Value::Null);
+                // A running attempt has no attempt.json yet; that is not a read failure.
+                if summary.status != run::Status::Running {
+                    value["readError"] = json!(format!("{error:#}"));
+                }
+                value
+            }
+        })
+        .collect();
+    let mut test_value = serde_json::to_value(matched)?;
+    test_value["attempts"] = Value::Array(attempts);
+    Ok(json!({
+        "runId": report.run_id,
+        "runStatus": report.status,
+        "dir": format!("{}/{}", run::RUNS_DIR, report.run_id),
+        "test": test_value,
+    }))
+}
+
+/// `auditaur drill runs`: recorded runs, newest first.
+pub fn runs(json: bool) -> Result<()> {
+    let workspace = std::env::current_dir()?;
     if json {
-        let output = json!({
-            "root": run::RUNS_DIR,
-            "runs": runs.iter().map(|report| json!({
-                "runId": report.run_id,
-                "status": report.status,
-                "startedAt": report.started_at,
-                "durationMs": report.duration_ms,
-                "totals": report.totals,
-            })).collect::<Vec<_>>(),
-            "unreadable": unreadable,
-        });
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        println!("{}", serde_json::to_string_pretty(&runs_json(&workspace)?)?);
         return Ok(());
     }
+    let (runs, unreadable) = read_runs(&workspace)?;
     if runs.is_empty() && unreadable.is_empty() {
         println!("No drill runs under {}", run::RUNS_DIR);
         return Ok(());
@@ -449,15 +532,16 @@ pub fn runs(json: bool) -> Result<()> {
 
 /// `auditaur drill show [run]`: one run's suites, tests and failures.
 pub fn show(selector: Option<&str>, json: bool) -> Result<()> {
-    let root = std::env::current_dir()?.join(run::RUNS_DIR);
-    let dir = run::resolve_run(&root, selector)?;
-    let report = run::read_run(&dir)?;
+    let workspace = std::env::current_dir()?;
     if json {
-        let mut value = serde_json::to_value(&report)?;
-        value["dir"] = json!(format!("{}/{}", run::RUNS_DIR, report.run_id));
-        println!("{}", serde_json::to_string_pretty(&value)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&show_json(&workspace, selector)?)?
+        );
         return Ok(());
     }
+    let dir = run::resolve_run(&workspace.join(run::RUNS_DIR), selector)?;
+    let report = run::read_run(&dir)?;
     println!(
         "Run {}  {}  ({})",
         report.run_id,

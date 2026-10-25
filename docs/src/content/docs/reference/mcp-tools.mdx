@@ -62,5 +62,11 @@ The server speaks stdio JSON-RPC and does not write non-MCP content to stdout. T
 | `list_ipc_calls` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
 | `list_events` | none | Optional `db`, `sessionId`, `traceId`, `limit`. |
 | `list_windows` | none | Optional `db`, `sessionId`, `limit`; returns latest stored window states. |
+| `drill_list` | none | Optional `cwd`, `filters`, `grep`, `grepInvert`, `tags`. Lists drill suites and tests. |
+| `drill_validate` | none | Optional `cwd`, `paths`. Reports schema and semantic errors. |
+| `drill_test` | none | Starts `drill test` in the background and returns `runId`, `pid`, and a `log` path. Accepts the CLI's filters and options, plus `command` (the app command as an array). |
+| `drill_runs` | none | Optional `cwd`. Lists recorded runs, newest first. |
+| `drill_show` | none | Optional `cwd`, `runId` (defaults to newest), and `test` (id or title) for that test's full attempts. |
+| `drill_cancel` | none | Optional `cwd`, `runId`. Asks a running run to stop; it finishes as `interrupted`. |
 
 For the dogfood app, tools can use discovery automatically while exactly one active readable session is present. Pass `db` when multiple sessions are active.

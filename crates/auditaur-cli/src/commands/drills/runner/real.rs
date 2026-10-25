@@ -4,6 +4,10 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     process::Child,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -67,6 +71,8 @@ pub struct RealHost {
     pub require_frontend: bool,
     pub ready_timeout: Duration,
     pub workspace_root: PathBuf,
+    /// Set by Ctrl+C or `cancel.request`; stops the readiness wait early.
+    pub cancel: Arc<AtomicBool>,
 }
 
 impl Host for RealHost {
@@ -97,6 +103,13 @@ impl Host for RealHost {
 }
 
 impl RealHost {
+    fn check_cancel(&self) -> Result<()> {
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err(anyhow!("cancelled while waiting for the app"));
+        }
+        Ok(())
+    }
+
     fn attach(&self) -> Result<Box<dyn AppDriver>> {
         let selector = DriveAppSelector {
             app: Some(self.app.clone()),
@@ -156,6 +169,7 @@ impl RealHost {
                     self.app
                 ));
             }
+            self.check_cancel()?;
             if Instant::now() >= deadline {
                 return Err(anyhow!(
                     "timed out after {timeout}s waiting for a new `{}` Auditaur session",
@@ -184,6 +198,7 @@ impl RealHost {
             if let Some(exit) = child.try_wait()? {
                 return Err(anyhow!("app exited ({exit}) before it was ready"));
             }
+            self.check_cancel()?;
             if Instant::now() >= deadline {
                 let waiting = status
                     .stages

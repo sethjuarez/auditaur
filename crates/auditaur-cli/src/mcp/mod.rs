@@ -16,6 +16,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 pub const MCP_COMMAND_NAME: &str = "mcp";
+
+mod drills;
 const MAX_LIST_LIMIT: usize = 1_000;
 const MAX_TRACE_COMPONENT_LIMIT: usize = 2_000;
 const MAX_TOOL_RESPONSE_BYTES: usize = 1_000_000;
@@ -90,6 +92,9 @@ fn handle_request(request: JsonRpcRequest) -> Option<Value> {
 fn call_tool(params: Value) -> Result<Value> {
     let call: ToolCall = serde_json::from_value(params)?;
     let arguments = call.arguments.unwrap_or_default();
+    if let Some(result) = drills::call(&call.name, &arguments) {
+        return result;
+    }
     match call.name.as_str() {
         "doctor" => {
             let db = optional_path(&arguments, "db")?;
@@ -444,6 +449,12 @@ fn json_rpc_error(id: Value, code: i64, message: impl Into<String>) -> Value {
 }
 
 fn tools() -> Vec<Value> {
+    let mut tools = core_tools();
+    tools.extend(drills::tools());
+    tools
+}
+
+fn core_tools() -> Vec<Value> {
     vec![
         tool(
             "doctor",

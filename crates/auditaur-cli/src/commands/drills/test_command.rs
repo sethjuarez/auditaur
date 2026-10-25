@@ -115,6 +115,7 @@ pub fn test(options: TestOptions) -> Result<i32> {
         .timeout_seconds
         .or_else(|| config.as_ref().and_then(|config| config.timeout_seconds))
         .unwrap_or(DEFAULT_READY_TIMEOUT_SECONDS);
+    let cancel = Arc::new(AtomicBool::new(false));
     let mut host = RealHost {
         app,
         source,
@@ -124,6 +125,7 @@ pub fn test(options: TestOptions) -> Result<i32> {
                 .is_some_and(|config| config.require_frontend),
         ready_timeout: Duration::from_secs(timeout_seconds),
         workspace_root: workspace.clone(),
+        cancel: Arc::clone(&cancel),
     };
 
     let filters = &options.filters;
@@ -159,8 +161,12 @@ pub fn test(options: TestOptions) -> Result<i32> {
         plan.len(),
         if plan.len() == 1 { "suite" } else { "suites" },
     ));
-    let cancel = Arc::new(AtomicBool::new(false));
     install_ctrl_c(Arc::clone(&cancel), options.json)?;
+    let watcher = CancelWatcher::start(
+        writer.dir().join(run::CANCEL_REQUEST_FILE),
+        Arc::clone(&cancel),
+        options.json,
+    );
     let stopped = runner::execute(
         &mut writer,
         &plan,
@@ -172,7 +178,9 @@ pub fn test(options: TestOptions) -> Result<i32> {
             max_failures: options.max_failures,
             cancel: Some(Arc::clone(&cancel)),
         },
-    )?;
+    );
+    watcher.stop();
+    let stopped = stopped?;
     let report = writer.finish(stopped.is_some())?;
     let suite_failed = report.suites.iter().any(|suite| suite.error.is_some());
     let exit_code = if stopped == Some(Stopped::Cancelled) {
@@ -265,6 +273,49 @@ pub(crate) fn last_failed_ids(workspace: &std::path::Path) -> Result<HashSet<Str
         .filter(|test| matches!(test.outcome, None | Some(run::Outcome::Unexpected)))
         .map(|test| test.id.clone())
         .collect())
+}
+
+/// Watches the run folder for [`run::CANCEL_REQUEST_FILE`], which tools such as the MCP
+/// `drill_cancel` create to stop a run that has no console to send Ctrl+C to.
+struct CancelWatcher {
+    done: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl CancelWatcher {
+    fn start(path: PathBuf, cancel: Arc<AtomicBool>, quiet: bool) -> Self {
+        let done = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let done = Arc::clone(&done);
+            std::thread::spawn(move || {
+                while !done.load(Ordering::SeqCst) {
+                    if path.exists() {
+                        if !cancel.swap(true, Ordering::SeqCst) {
+                            let message = "\nStopping: cancel requested; finishing the current step and running teardown";
+                            if quiet {
+                                eprintln!("{message}");
+                            } else {
+                                println!("{message}");
+                            }
+                        }
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            })
+        };
+        Self {
+            done,
+            thread: Some(thread),
+        }
+    }
+
+    fn stop(mut self) {
+        self.done.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// First Ctrl+C stops the run gracefully; a second one exits at once.

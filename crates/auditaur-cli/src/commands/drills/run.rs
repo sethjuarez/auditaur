@@ -33,6 +33,8 @@ use super::{effective_tags, model::TestMode, title, Selected};
 pub const RUN_SCHEMA_VERSION: u32 = 1;
 pub const RUNS_DIR: &str = ".auditaur/drill-runs";
 pub const DEFAULT_KEEP_RUNS: usize = 20;
+/// Creating this file in a running run's folder asks its `drill test` to stop gracefully.
+pub const CANCEL_REQUEST_FILE: &str = "cancel.request";
 // Served to tools and canvases in later steps; tests validate against it now.
 #[allow(dead_code)]
 pub const RUN_SCHEMA: &str = include_str!("../../../assets/drill-run.schema.json");
@@ -641,7 +643,6 @@ impl RunWriter {
         Ok(writer)
     }
 
-    #[cfg(test)]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -1400,8 +1401,6 @@ pub fn read_run(dir: &Path) -> Result<RunReport> {
     Ok(report)
 }
 
-// Read by the trace canvas and MCP tools in later steps.
-#[allow(dead_code)]
 pub fn read_attempt(run_dir: &Path, summary: &AttemptSummary) -> Result<AttemptReport> {
     if !is_contained(&summary.dir) {
         return Err(anyhow!(

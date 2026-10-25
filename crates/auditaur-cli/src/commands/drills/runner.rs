@@ -335,6 +335,13 @@ impl SuiteRun<'_, '_> {
                 self.writer.set_suite_app(driver.app_info())?;
                 Ok(Some(driver))
             }
+            Err(_) if self.options.cancelled() => {
+                // Cancelled while waiting for the app: an interruption, not a launch failure.
+                self.writer
+                    .step_finished(Status::Interrupted, false, None)?;
+                self.stopped = Some(Stopped::Cancelled);
+                Ok(None)
+            }
             Err(error) => {
                 let error = ErrorInfo {
                     step: Some(index),

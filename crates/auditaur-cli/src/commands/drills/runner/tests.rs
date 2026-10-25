@@ -155,6 +155,11 @@ impl Host for FakeHost {
         if suite.suite == "nolaunch" {
             return Err(anyhow!("no app"));
         }
+        if suite.suite == "cancelledlaunch" {
+            let state = self.state.borrow();
+            state.cancel.as_ref().unwrap().store(true, Ordering::SeqCst);
+            return Err(anyhow!("cancelled while waiting for the app"));
+        }
         Ok(Box::new(FakeDriver {
             state: self.state.clone(),
         }))
@@ -993,6 +998,23 @@ fn cancel_during_the_last_setup_hook_skips_launch() {
     );
     assert_eq!(ran.stopped, Some(Stopped::Cancelled));
     assert_eq!(ran.log, vec!["hook cancel", "hook down"]);
+    assert_eq!(ran.report.totals.not_run, 1);
+    assert_eq!(ran.report.status, Status::Interrupted);
+}
+
+#[test]
+fn cancel_while_waiting_for_the_app_interrupts_instead_of_failing() {
+    let ran = run_with(
+        r##"{
+        "suite": "cancelledlaunch",
+        "teardown": [{ "name": "down", "run": "x" }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }]
+    }"##,
+        cancel_flag(),
+    );
+    assert_eq!(ran.stopped, Some(Stopped::Cancelled));
+    assert_eq!(ran.log, vec!["launch", "hook down"]);
+    assert!(ran.report.suites[0].error.is_none());
     assert_eq!(ran.report.totals.not_run, 1);
     assert_eq!(ran.report.status, Status::Interrupted);
 }
