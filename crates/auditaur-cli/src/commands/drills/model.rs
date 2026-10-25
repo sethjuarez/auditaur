@@ -1280,6 +1280,18 @@ fn parse_expectation(
     })
 }
 
+/// Device names like `CON` or `com1.x` cannot be files on Windows, whatever the extension.
+fn is_reserved_on_windows(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+}
 /// Snapshot names become file names, so keep them to a safe character set.
 fn parse_snapshot_name(
     ctx: &mut Ctx,
@@ -1295,14 +1307,17 @@ fn parse_snapshot_name(
                 && name
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-            if valid {
-                Some(Some(name.clone()))
-            } else {
+            if !valid {
                 ctx.err(
                     path,
                     "snapshot names may only use letters, digits, `-`, `_` and `.`",
                 );
                 None
+            } else if is_reserved_on_windows(name) {
+                ctx.err(path, format!("`{name}` is a reserved file name on Windows"));
+                None
+            } else {
+                Some(Some(name.clone()))
             }
         }
         other => {
@@ -1847,6 +1862,7 @@ mod tests {
                 { "expect": "#a", "toHaveText": { "pattern": "(" } },
                 { "expect": "#a", "toBeVisible": true, "maxDiffPixels": 3 },
                 { "expect": "#a", "toHaveScreenshot": "../x" },
+                { "expect": "#a", "toMatchAriaSnapshot": "Com1.page" },
                 { "expect": "#a", "toHaveScreenshot": true, "not": true },
                 { "expectIpc": "greet", "not": true, "count": 2 },
                 { "expectIpc": "greet", "status": "fine" },
@@ -1857,6 +1873,7 @@ mod tests {
             "invalid regular expression",
             "only valid with `toHaveScreenshot`",
             "snapshot names",
+            "reserved file name on Windows",
             "`not` is not supported",
             "either `not` or `count`",
             "\"ok\" or \"error\"",

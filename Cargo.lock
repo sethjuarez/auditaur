@@ -282,6 +282,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "jsonschema",
+ "png",
  "regex",
  "serde",
  "serde_json",

@@ -435,13 +435,17 @@ fn elapsed_ms(start: Instant) -> u64 {
 /// Write via a uniquely named temp file and rename so readers never see a partial
 /// file. Retries briefly when a Windows reader holds the target open.
 pub fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+    write_atomic(path, &serde_json::to_vec_pretty(value)?)
+}
+
+/// Write bytes via a uniquely named temp file and rename (see [`write_json_atomic`]).
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let tmp = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
-    fs::write(&tmp, serde_json::to_vec_pretty(value)?)
-        .with_context(|| format!("failed to write `{}`", tmp.display()))?;
+    fs::write(&tmp, bytes).with_context(|| format!("failed to write `{}`", tmp.display()))?;
     let mut attempts = 0;
     loop {
         match fs::rename(&tmp, path) {
@@ -491,6 +495,8 @@ struct ActiveAttempt {
     start: Instant,
     steps: Vec<StepReport>,
     attachments: Vec<Attachment>,
+    /// Fail the test whatever its expected status (see [`RunWriter::require_review`]).
+    needs_review: bool,
 }
 
 struct ActiveStep {
@@ -797,6 +803,7 @@ impl RunWriter {
             start: Instant::now(),
             steps: Vec::new(),
             attachments: Vec::new(),
+            needs_review: false,
         });
         self.commit(event, true)?;
         Ok(dir)
@@ -1020,6 +1027,14 @@ impl RunWriter {
         )
     }
 
+    /// Make the running test's outcome unexpected even if it was expected to fail, e.g. because
+    /// it wrote a baseline that someone must review.
+    pub fn require_review(&mut self) {
+        if let Some(active) = &mut self.attempt {
+            active.needs_review = true;
+        }
+    }
+
     /// Finish the running attempt. With `will_retry`, the test stays running.
     pub fn test_finished(
         &mut self,
@@ -1064,7 +1079,11 @@ impl RunWriter {
             None
         } else {
             report.status = status;
-            let outcome = outcome_for(report);
+            let outcome = if active.needs_review {
+                Outcome::Unexpected
+            } else {
+                outcome_for(report)
+            };
             report.outcome = Some(outcome);
             Some(outcome)
         };

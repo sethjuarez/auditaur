@@ -28,7 +28,8 @@ type State = Rc<RefCell<Shared>>;
 
 /// Behaviour comes from the step's selector:
 /// `#fail` fails, `#flaky` fails on its first call, `#slow` runs out the clock,
-/// `#die` kills the app, `#shot` attaches a file, anything else passes.
+/// `#die` kills the app, `#shot` attaches a file, `#newbaseline` writes a missing baseline,
+/// anything else passes.
 struct FakeDriver {
     state: State,
 }
@@ -47,6 +48,12 @@ impl AppDriver for FakeDriver {
             .to_string();
         let mut state = self.state.borrow_mut();
         state.log.push(step.title.clone());
+        if let Some(snapshot) = &ctx.snapshot {
+            let file = snapshot.baseline.file_name().unwrap().to_string_lossy();
+            let dir = snapshot.baseline.parent().unwrap();
+            assert!(dir.ends_with("__snapshots__/s"), "{}", dir.display());
+            state.log.push(format!("snapshot {} {file}", snapshot.name));
+        }
         state.since.push(ctx.since_unix_nanos);
         let calls = {
             let count = state.calls.entry(target.clone()).or_default();
@@ -55,6 +62,10 @@ impl AppDriver for FakeDriver {
         };
         match target.as_str() {
             "#fail" => StepResult::Failed(ErrorInfo::new("boom")),
+            "#newbaseline" => {
+                ctx.wrote_baseline = true;
+                StepResult::Failed(ErrorInfo::new("wrote baseline"))
+            }
             "#flaky" if calls == 1 => StepResult::Failed(ErrorInfo::new("flake")),
             "#slow" => {
                 drop(state);
@@ -364,11 +375,20 @@ fn retries_turn_a_recovered_failure_into_flaky() {
 fn retries_fall_back_to_suite_then_cli() {
     let suite = r##"{ "tests": [{ "name": "f", "steps": [{ "click": "#fail" }] }] }"##;
     assert_eq!(run(suite).report.suites[0].tests[0].attempts.len(), 1);
-    let cli = run_with(suite, RunnerOptions { retries: Some(2) });
+    let cli = run_with(
+        suite,
+        RunnerOptions {
+            retries: Some(2),
+            ..RunnerOptions::default()
+        },
+    );
     assert_eq!(cli.report.suites[0].tests[0].attempts.len(), 3);
     let suite_level = run_with(
         r##"{ "retries": 1, "tests": [{ "name": "f", "steps": [{ "click": "#fail" }] }] }"##,
-        RunnerOptions { retries: Some(3) },
+        RunnerOptions {
+            retries: Some(3),
+            ..RunnerOptions::default()
+        },
     );
     assert_eq!(suite_level.report.suites[0].tests[0].attempts.len(), 2);
 }
@@ -628,4 +648,60 @@ fn timeout_on_an_assertion_is_its_retry_window() {
         windows,
         vec!["window 50", "window 5000", "short deadline", "window 5000"]
     );
+}
+
+#[test]
+fn snapshots_resolve_beside_the_suite_and_number_per_attempt() {
+    let ran = run(r##"{ "suite": "s", "retries": 1,
+            "beforeAll": [{ "expect": "main", "toMatchAriaSnapshot": true }],
+            "beforeEach": [{ "expect": "main", "toMatchAriaSnapshot": true }],
+            "tests": [{ "name": "Main view!", "steps": [
+                { "expect": "main", "toMatchAriaSnapshot": true },
+                { "expect": "body", "toHaveScreenshot": true },
+                { "expect": "nav", "toMatchAriaSnapshot": "menu" },
+                { "click": "#flaky" }
+            ] }] }"##);
+    let os = std::env::consts::OS;
+    let snapshots: Vec<String> = ran
+        .log
+        .iter()
+        .filter(|line| line.starts_with("snapshot "))
+        .cloned()
+        .collect();
+    let attempt = [
+        "snapshot main-view-1 main-view-1.aria.yml".to_string(),
+        "snapshot main-view-2 main-view-2.aria.yml".to_string(),
+        format!("snapshot main-view-3 main-view-3-{os}.png"),
+        "snapshot menu menu.aria.yml".to_string(),
+    ];
+    let mut expected = vec!["snapshot beforeall-1 beforeall-1.aria.yml".to_string()];
+    // The retry starts numbering again, so it checks the same baselines.
+    expected.extend(attempt.iter().cloned());
+    expected.extend(attempt.iter().cloned());
+    assert_eq!(snapshots, expected);
+    assert_eq!(test(&ran, "Main view!").outcome, Some(Outcome::Flaky));
+}
+
+#[test]
+fn writing_a_missing_baseline_is_never_retried_into_a_pass() {
+    let ran = run(r##"{ "suite": "s", "retries": 2, "tests": [
+            { "name": "new", "steps": [{ "click": "#newbaseline" }, { "click": "#next" }] },
+            { "name": "later", "steps": [{ "click": "#flaky" }] },
+            { "name": "known", "expectFail": "bug", "steps": [{ "click": "#newbaseline" }] }
+        ] }"##);
+    assert_eq!(test(&ran, "new").attempts.len(), 1);
+    // Like a soft failure, the rest of the test still runs and records its baselines.
+    assert_eq!(
+        steps(&ran, "new", 0)
+            .into_iter()
+            .map(|(_, status)| status)
+            .collect::<Vec<_>>(),
+        [Status::Failed, Status::Passed]
+    );
+    assert_eq!(test(&ran, "new").outcome, Some(Outcome::Unexpected));
+    // The flag is per test: the next test still retries.
+    assert_eq!(test(&ran, "later").outcome, Some(Outcome::Flaky));
+    // A new baseline needs review even when the test was expected to fail.
+    assert_eq!(test(&ran, "known").outcome, Some(Outcome::Unexpected));
+    assert_eq!(ran.report.totals.failed, 2);
 }

@@ -6,6 +6,7 @@
 
 pub mod expect;
 pub mod real;
+pub mod snapshot;
 pub mod telemetry;
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,10 +16,11 @@ use auditaur_core::redaction::redact_json;
 use serde_json::Value;
 
 use super::{
-    model::{DrillSuite, Step, StepKind, TelemetryExpectation, TestCase, TestMode},
+    model::{DrillSuite, Matcher, Step, StepKind, TelemetryExpectation, TestCase, TestMode},
     run::{ErrorInfo, Outcome, Phase, RunWriter, Status},
     title, Selected,
 };
+use snapshot::{SnapshotKind, SnapshotTarget, UpdateMode};
 
 pub const DEFAULT_TEST_TIMEOUT_MS: u64 = 30_000;
 pub const DEFAULT_EXPECT_TIMEOUT_MS: u64 = 5_000;
@@ -36,6 +38,11 @@ pub struct StepCtx<'a> {
     pub step_index: usize,
     /// Telemetry assertions see what the app recorded from this instant (Unix nanos) on.
     pub since_unix_nanos: i64,
+    /// The baseline a snapshot assertion checks.
+    pub snapshot: Option<SnapshotTarget>,
+    /// Set by the driver when it created a missing baseline. The failure is soft, and the test
+    /// is not retried: a retry would compare the app against itself.
+    pub wrote_baseline: bool,
 }
 
 impl StepCtx<'_> {
@@ -111,6 +118,7 @@ impl Reporter for NoReporter {}
 pub struct RunnerOptions {
     /// Used when neither the test nor its suite sets `retries`.
     pub retries: Option<u32>,
+    pub update_snapshots: UpdateMode,
 }
 
 /// Run every selected test. Writer errors abort the run; everything else is recorded.
@@ -131,6 +139,8 @@ pub fn execute(
             selected,
             error: None,
             exited: None,
+            auto_snapshots: 0,
+            wrote_baseline: false,
         }
         .run()?;
     }
@@ -148,6 +158,10 @@ struct SuiteRun<'r, 'p> {
     error: Option<ErrorInfo>,
     /// Set once the app dies; nothing else can be driven.
     exited: Option<String>,
+    /// Unnamed snapshots taken so far in this test (or suite hook phase).
+    auto_snapshots: u32,
+    /// A missing baseline was written during the current test.
+    wrote_baseline: bool,
 }
 
 /// Failures collected while running a list of steps.
@@ -190,6 +204,8 @@ struct Budget {
     timeout_ms: u64,
     test_id: Option<String>,
     since_unix_nanos: i64,
+    /// Base for unnamed snapshot names.
+    snapshot_base: String,
 }
 
 impl SuiteRun<'_, '_> {
@@ -266,6 +282,7 @@ impl SuiteRun<'_, '_> {
         let timeout_ms = suite.timeout_ms.unwrap_or(DEFAULT_TEST_TIMEOUT_MS);
         let since = now_unix_nanos();
 
+        self.auto_snapshots = 0;
         let tally = self.run_steps(
             driver,
             &suite.before_all,
@@ -286,6 +303,7 @@ impl SuiteRun<'_, '_> {
         }
 
         if self.exited.is_none() {
+            self.auto_snapshots = 0;
             let tally = self.run_steps(
                 driver,
                 &suite.after_all,
@@ -344,6 +362,7 @@ impl SuiteRun<'_, '_> {
             .id
             .clone();
 
+        self.wrote_baseline = false;
         for attempt in 0..=retries {
             self.writer.test_started(self.index, index, attempt)?;
             let started = Instant::now();
@@ -371,7 +390,10 @@ impl SuiteRun<'_, '_> {
                     None => ErrorInfo::new(message),
                 });
             }
-            let will_retry = status != expected && attempt < retries && self.exited.is_none();
+            let will_retry = status != expected
+                && attempt < retries
+                && self.exited.is_none()
+                && !self.wrote_baseline;
             self.writer
                 .test_finished(status, error.clone(), will_retry)?;
             let outcome = if will_retry {
@@ -403,7 +425,9 @@ impl SuiteRun<'_, '_> {
         since: i64,
     ) -> Result<Tally> {
         let suite = self.selected.suite;
-        let budget = Budget::new(Phase::BeforeEach, timeout_ms, Some(id.to_string()), since);
+        self.auto_snapshots = 0;
+        let budget = Budget::new(Phase::BeforeEach, timeout_ms, Some(id.to_string()), since)
+            .for_test(&test.name);
         let mut tally = self.run_steps(driver, &suite.before_each, &budget)?;
         if tally.hard.is_none() && self.exited.is_none() {
             let budget = Budget {
@@ -415,7 +439,8 @@ impl SuiteRun<'_, '_> {
         }
         // afterEach always runs (unless the app died), with its own time budget.
         if self.exited.is_none() {
-            let budget = Budget::new(Phase::AfterEach, timeout_ms, Some(id.to_string()), since);
+            let budget = Budget::new(Phase::AfterEach, timeout_ms, Some(id.to_string()), since)
+                .for_test(&test.name);
             let after = self.run_steps(driver, &suite.after_each, &budget)?;
             tally.merge(after);
         }
@@ -453,6 +478,7 @@ impl SuiteRun<'_, '_> {
                 ),
                 None => (budget.deadline, expect_timeout),
             };
+            let snapshot = self.snapshot_target(step, &budget.snapshot_base);
             let mut ctx = StepCtx {
                 writer: &mut *self.writer,
                 deadline,
@@ -460,8 +486,14 @@ impl SuiteRun<'_, '_> {
                 test_id: budget.test_id.clone(),
                 step_index: index,
                 since_unix_nanos: budget.since_unix_nanos,
+                snapshot,
+                wrote_baseline: false,
             };
             let result = driver.run_step(step, &mut ctx);
+            if ctx.wrote_baseline {
+                self.wrote_baseline = true;
+                ctx.writer.require_review();
+            }
             let (step_status, mut error) = match result {
                 StepResult::Passed => {
                     self.writer.step_finished(Status::Passed, false, None)?;
@@ -471,7 +503,9 @@ impl SuiteRun<'_, '_> {
                 StepResult::TimedOut(error) => (Status::TimedOut, error),
             };
             error.step = Some(index);
-            let soft = is_soft(step);
+            // Writing a missing baseline fails the test but, as in Playwright, lets the rest
+            // run so one pass records every new baseline.
+            let soft = is_soft(step) || ctx.wrote_baseline;
             if !soft {
                 if let Some(reason) = driver.exited() {
                     self.exited = Some(reason);
@@ -496,6 +530,28 @@ impl SuiteRun<'_, '_> {
             break;
         }
         Ok(tally)
+    }
+
+    /// Resolve which baseline a snapshot assertion checks, numbering unnamed ones.
+    fn snapshot_target(&mut self, step: &Step, base: &str) -> Option<SnapshotTarget> {
+        let StepKind::Expect(expectation) = &step.kind else {
+            return None;
+        };
+        let (kind, name) = match &expectation.matcher {
+            Matcher::ToMatchAriaSnapshot(name) => (SnapshotKind::Aria, name),
+            Matcher::ToHaveScreenshot(options) => (SnapshotKind::Screenshot, &options.name),
+            _ => return None,
+        };
+        let name = name.clone().unwrap_or_else(|| {
+            self.auto_snapshots += 1;
+            snapshot::auto_name(base, self.auto_snapshots)
+        });
+        Some(SnapshotTarget::new(
+            &self.suite().path,
+            kind,
+            &name,
+            self.options.update_snapshots,
+        ))
     }
 
     fn probe_exit(&mut self, driver: &mut dyn AppDriver) {
@@ -595,7 +651,14 @@ impl Budget {
             timeout_ms,
             test_id,
             since_unix_nanos,
+            snapshot_base: format!("{phase:?}"),
         }
+    }
+
+    /// Unnamed snapshots in tests are named after the test.
+    fn for_test(mut self, name: &str) -> Self {
+        self.snapshot_base = name.to_string();
+        self
     }
 
     fn timeout_error(&self) -> ErrorInfo {

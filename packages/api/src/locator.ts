@@ -22,8 +22,8 @@ export interface LocatorSpec {
 }
 
 const KINDS: readonly LocatorKind[] = ['css', 'role', 'text', 'testId', 'label', 'placeholder'];
-const SKIPPED_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'TITLE', 'META', 'LINK']);
-const NAME_FROM_CONTENT = new Set([
+export const SKIPPED_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'TITLE', 'META', 'LINK']);
+export const NAME_FROM_CONTENT = new Set([
   'button', 'cell', 'checkbox', 'columnheader', 'gridcell', 'heading', 'link', 'menuitem',
   'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'row', 'rowheader', 'switch', 'tab',
   'tooltip', 'treeitem', 'listitem',
@@ -281,6 +281,8 @@ export function roleOf(el: Element): string | undefined {
       return 'progressbar';
     case 'hr':
       return 'separator';
+    case 'p':
+      return 'paragraph';
     case 'article':
       return 'article';
     case 'section':

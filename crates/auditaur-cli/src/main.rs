@@ -629,6 +629,17 @@ enum DrillCommand {
         /// Seconds to wait for each launched app to be ready.
         #[arg(long)]
         timeout_seconds: Option<u64>,
+        /// Which snapshot baselines to write; bare `-u` means `changed`.
+        #[arg(
+            long,
+            short = 'u',
+            value_enum,
+            num_args = 0..=1,
+            require_equals = true,
+            default_value = "missing",
+            default_missing_value = "changed"
+        )]
+        update_snapshots: commands::drills::runner::snapshot::UpdateMode,
         #[arg(long)]
         json: bool,
         /// Launch command; defaults to the config `start` command.
@@ -1087,6 +1098,7 @@ fn inner_main() -> Result<()> {
                 attach,
                 require_frontend,
                 timeout_seconds,
+                update_snapshots,
                 json,
                 command,
             }) => {
@@ -1104,6 +1116,7 @@ fn inner_main() -> Result<()> {
                     attach,
                     require_frontend,
                     timeout_seconds,
+                    update_snapshots,
                     json,
                     command,
                 })?;

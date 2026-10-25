@@ -29,6 +29,7 @@ pub struct TestOptions {
     pub attach: bool,
     pub require_frontend: bool,
     pub timeout_seconds: Option<u64>,
+    pub update_snapshots: runner::snapshot::UpdateMode,
     pub json: bool,
     /// Launch command from `-- <command>`; wins over the config `start` command.
     pub command: Vec<String>,
@@ -133,6 +134,7 @@ pub fn test(options: TestOptions) -> Result<i32> {
         &mut reporter,
         &RunnerOptions {
             retries: options.retries,
+            update_snapshots: options.update_snapshots,
         },
     )?;
     let report = writer.finish(false)?;

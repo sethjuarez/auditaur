@@ -1336,20 +1336,37 @@ impl BridgeSession {
         step_id: Option<String>,
         timeout: Duration,
     ) -> Result<Vec<u8>> {
+        self.screenshot(selector, None, Vec::new(), test_id, step_id, timeout)
+            .map(|shot| shot.png)
+    }
+
+    /// A screenshot plus what the bridge said about it (backend, masks, fallback errors).
+    /// `value` and `values` pass capture options through (`"expect"` stabilizes; masks).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn screenshot(
+        &self,
+        selector: Option<String>,
+        value: Option<String>,
+        values: Vec<String>,
+        test_id: Option<String>,
+        step_id: Option<String>,
+        timeout: Duration,
+    ) -> Result<Screenshot> {
         let reply = self.request(
             "screenshot",
             selector,
-            None,
-            Vec::new(),
+            value,
+            values,
             false,
             test_id,
             step_id,
             timeout,
         )?;
-        let png = reply
-            .payload
-            .get("pngBase64")
-            .and_then(Value::as_str)
+        let mut payload = reply.payload;
+        let png = payload
+            .as_object_mut()
+            .and_then(|object| object.remove("pngBase64"))
+            .and_then(|png| png.as_str().map(ToString::to_string))
             .ok_or_else(|| {
                 anyhow!(
                     "screenshot failed: {}",
@@ -1359,10 +1376,17 @@ impl BridgeSession {
                         .unwrap_or("bridge response did not include pngBase64")
                 )
             })?;
-        BASE64_STANDARD
+        let png = BASE64_STANDARD
             .decode(png.as_bytes())
-            .context("screenshot failed: bridge response had invalid pngBase64")
+            .context("screenshot failed: bridge response had invalid pngBase64")?;
+        Ok(Screenshot { png, payload })
     }
+}
+
+pub(crate) struct Screenshot {
+    pub png: Vec<u8>,
+    /// The bridge reply without `pngBase64`.
+    pub payload: Value,
 }
 
 fn require_bridge_active(attach: &DriveAttachInfo) -> Result<()> {

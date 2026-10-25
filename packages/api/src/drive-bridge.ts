@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { ariaSnapshot } from './aria-snapshot';
 import type { AuditaurExporter } from './exporter';
 import {
   describeLocator,
@@ -329,6 +330,10 @@ export async function executeDriveBridgeRequest(
     case 'inspect': {
       return inspectSelector(request.selector);
     }
+    case 'ariaSnapshot': {
+      const root = request.selector ? requireSelector(request.selector, false) : document.body;
+      return { snapshot: ariaSnapshot(root) };
+    }
     case 'flush': {
       if (!exporter) {
         throw new Error('flush needs the Auditaur exporter');
@@ -337,7 +342,10 @@ export async function executeDriveBridgeRequest(
       return { ok: true };
     }
     case 'screenshot': {
-      return captureScreenshot(request.selector, request.windowLabel);
+      return captureScreenshot(request.selector, request.windowLabel, {
+        masks: request.values ?? [],
+        stabilize: request.value === 'expect',
+      });
     }
     default:
       throw new Error(`unsupported drive bridge action: ${request.action}`);
@@ -627,9 +635,17 @@ function captureSnapshot(
   };
 }
 
+interface ScreenshotOptions {
+  /** Selectors whose matches are painted over (all matches, like Playwright's `mask`). */
+  masks: string[];
+  /** Finish animations and hide the caret so repeated captures are comparable. */
+  stabilize: boolean;
+}
+
 async function captureScreenshot(
   selector: string | undefined,
   windowLabel: string | undefined,
+  options: ScreenshotOptions = { masks: [], stabilize: false },
 ): Promise<Record<string, unknown>> {
   const target = selector ? resolveSelector(selector, false) : document.documentElement;
   if (!target) {
@@ -639,22 +655,106 @@ async function captureScreenshot(
     await scrollTargetIntoViewForScreenshot(target);
   }
   const snapshot = captureSnapshot(selector, selector ? target : undefined);
-  const targetRect = selector ? screenshotTargetRect(target) : undefined;
+  const cleanup: Array<() => void> = [];
   try {
-    const nativeScreenshot = await nativeScreenshotInvoker({ windowLabel, targetRect });
-    return {
-      ...nativeScreenshot,
-      selector,
-      screenshotScope: nativeScreenshot.screenshotScope ?? (targetRect ? 'selector' : 'webview'),
-      selectorRect: targetRect,
-      snapshot,
-    };
-  } catch (error) {
-    return {
-      ...captureDomSummaryScreenshot(target, selector, snapshot),
-      nativeScreenshotError: errorMessage(error),
-    };
+    const prepared = options.stabilize || options.masks.length > 0;
+    if (options.stabilize) {
+      cleanup.push(stabilizePage());
+    }
+    const masked = maskElements(options.masks, cleanup);
+    if (prepared) {
+      await waitForScrollSettle();
+    }
+    const extra = prepared ? { masked, stabilized: options.stabilize } : {};
+    const targetRect = selector ? screenshotTargetRect(target) : undefined;
+    try {
+      const nativeScreenshot = await nativeScreenshotInvoker({ windowLabel, targetRect });
+      return {
+        ...nativeScreenshot,
+        selector,
+        screenshotScope: nativeScreenshot.screenshotScope ?? (targetRect ? 'selector' : 'webview'),
+        selectorRect: targetRect,
+        snapshot,
+        ...extra,
+      };
+    } catch (error) {
+      return {
+        ...captureDomSummaryScreenshot(target, selector, snapshot),
+        nativeScreenshotError: errorMessage(error),
+        ...extra,
+      };
+    }
+  } finally {
+    for (const undo of cleanup.reverse()) {
+      undo();
+    }
   }
+}
+
+const MASK_COLOR = '#FF00FF';
+const STABILIZE_CSS = '*, *::before, *::after { transition: none !important; caret-color: transparent !important; }';
+
+/** Finish finite animations, cancel infinite ones, and freeze transitions and the caret. */
+function stabilizePage(): () => void {
+  // As in Playwright: finite animations jump to their end state, infinite ones reset and
+  // play again once the screenshot is taken.
+  const cancelled: Animation[] = [];
+  for (const animation of document.getAnimations?.() ?? []) {
+    if (animation.effect?.getTiming().iterations === Infinity) {
+      if (animation.playState === 'running') {
+        cancelled.push(animation);
+      }
+      animation.cancel();
+    } else {
+      animation.finish();
+    }
+  }
+  const style = document.createElement('style');
+  style.setAttribute('data-auditaur-screenshot', 'stabilize');
+  style.textContent = STABILIZE_CSS;
+  (document.head ?? document.documentElement).appendChild(style);
+  return () => {
+    style.remove();
+    for (const animation of cancelled) {
+      try {
+        animation.play();
+      } catch {
+        // The animation's element may be gone.
+      }
+    }
+  };
+}
+
+/** Cover every visible match of each mask selector with a solid box; returns how many. */
+function maskElements(selectors: string[], cleanup: Array<() => void>): number {
+  let masked = 0;
+  for (const selector of selectors) {
+    const matches = isLocatorSelector(selector)
+      ? queryLocator(parseLocator(selector))
+      : Array.from(document.querySelectorAll(selector));
+    for (const el of matches) {
+      if (!isVisible(el)) {
+        continue;
+      }
+      const rect = el.getBoundingClientRect();
+      const box = document.createElement('div');
+      box.setAttribute('data-auditaur-screenshot', 'mask');
+      Object.assign(box.style, {
+        position: 'fixed',
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+        background: MASK_COLOR,
+        zIndex: '2147483647',
+        pointerEvents: 'none',
+      });
+      document.documentElement.appendChild(box);
+      cleanup.push(() => box.remove());
+      masked += 1;
+    }
+  }
+  return masked;
 }
 
 async function scrollTargetIntoViewForScreenshot(target: Element): Promise<void> {

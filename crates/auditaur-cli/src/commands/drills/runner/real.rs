@@ -16,6 +16,10 @@ use time::OffsetDateTime;
 
 use super::{
     expect::{judge, Inspection, Verdict},
+    snapshot::{
+        compare_images, decide, line_diff, normalize_aria, Comparison, Decision, Image,
+        SnapshotTarget, Tolerance,
+    },
     telemetry::{self, Judgement},
     AppDriver, HookResult, Host, StepCtx, StepResult,
 };
@@ -25,8 +29,8 @@ use crate::{
         drill,
         drills::{
             model::{
-                DrillSuite, Expectation, Locator, Matcher, Step, StepKind, TelemetryExpectation,
-                WaitState,
+                DrillSuite, Expectation, Locator, Matcher, ScreenshotMatch, Step, StepKind,
+                TelemetryExpectation, WaitState,
             },
             run::ErrorInfo,
         },
@@ -416,10 +420,11 @@ impl BridgeDriver {
             }
             StepKind::Screenshot { name, target } => self.screenshot(ctx, name, target.as_ref()),
             StepKind::Gate(_) => Err(unsupported("`gate`")),
-            StepKind::Expect(expectation) => match expectation.matcher {
-                Matcher::ToMatchAriaSnapshot(_) | Matcher::ToHaveScreenshot(_) => Err(unsupported(
-                    &format!("`expect.{}`", expectation.matcher.key()),
-                )),
+            StepKind::Expect(expectation) => match &expectation.matcher {
+                Matcher::ToMatchAriaSnapshot(_) => self.expect_aria(ctx, expectation),
+                Matcher::ToHaveScreenshot(options) => {
+                    self.expect_screenshot(ctx, expectation, options)
+                }
                 _ => self.expect(ctx, expectation),
             },
             StepKind::Telemetry(expectation) => self.expect_telemetry(ctx, step, expectation),
@@ -746,9 +751,24 @@ impl BridgeDriver {
         visible_only: bool,
         want: bool,
     ) -> StepOutcome {
+        self.poll_until(ctx, target, visible_only, want, ctx.deadline)
+    }
+
+    /// Poll `exists` until it equals `want` or `until` (capped by the step deadline) passes;
+    /// running out is reported as `TimedOut`.
+    fn poll_until(
+        &self,
+        ctx: &StepCtx<'_>,
+        target: &Locator,
+        visible_only: bool,
+        want: bool,
+        until: Instant,
+    ) -> StepOutcome {
         let selector = bridge_selector(target);
+        let until = until.min(ctx.deadline);
+        let left = || until.saturating_duration_since(Instant::now());
         loop {
-            if ctx.expired() {
+            if Instant::now() >= until {
                 return Err(timed_out("wait: step timed out"));
             }
             let reply = self.request_full(
@@ -758,7 +778,7 @@ impl BridgeDriver {
                 None,
                 Vec::new(),
                 visible_only,
-                ctx.remaining(),
+                left(),
             );
             match reply {
                 Ok(reply) => {
@@ -774,10 +794,10 @@ impl BridgeDriver {
                         return Ok(());
                     }
                 }
-                Err(_) if ctx.expired() => return Err(timed_out("wait: step timed out")),
+                Err(_) if Instant::now() >= until => return Err(timed_out("wait: step timed out")),
                 Err(error) => return Err(failed(explain(about(target, format!("{error:#}"))))),
             }
-            thread::sleep(WAIT_POLL.min(ctx.remaining()));
+            thread::sleep(WAIT_POLL.min(left()));
         }
     }
 
@@ -808,6 +828,381 @@ impl BridgeDriver {
                 }
             }
             thread::sleep(WAIT_POLL.min(ctx.remaining()));
+        }
+    }
+
+    /// Capture the target's ARIA snapshot until it matches the baseline, or settles when a
+    /// baseline will be written, or the expect timeout runs out.
+    fn expect_aria(&self, ctx: &mut StepCtx<'_>, expectation: &Expectation) -> StepOutcome {
+        let snapshot = snapshot_of(ctx)?;
+        let target = &expectation.target;
+        let baseline = snapshot
+            .read()
+            .map_err(|error| failed(format!("{error:#}")))?
+            .map(|bytes| normalize_aria(&String::from_utf8_lossy(&bytes)));
+        let started = Instant::now();
+        let give_up = (started + ctx.expect_timeout).min(ctx.deadline);
+        let selector = bridge_selector(target);
+        let mut last: Option<String> = None;
+        let mut stable = false;
+        let mut first = true;
+        loop {
+            let now = Instant::now();
+            if now >= give_up && !first {
+                break;
+            }
+            let budget = give_up.saturating_duration_since(now);
+            let wait = if first {
+                budget.max(MIN_INSPECT_TIMEOUT)
+            } else {
+                budget
+            }
+            .min(ctx.remaining());
+            first = false;
+            if wait.is_zero() {
+                break;
+            }
+            match self.request(ctx, "ariaSnapshot", Some(selector.clone()), None, wait) {
+                Ok(reply) if reply.ok => {
+                    let Some(text) = reply.payload.get("snapshot").and_then(Value::as_str) else {
+                        return Err(failed("bridge `ariaSnapshot` reply had no `snapshot`"));
+                    };
+                    let actual = normalize_aria(text);
+                    let comparison = aria_comparison(baseline.as_deref(), &actual);
+                    if decide(comparison, snapshot.update) == Decision::Pass {
+                        return Ok(());
+                    }
+                    stable = last.as_deref() == Some(actual.as_str());
+                    last = Some(actual);
+                    // A mismatch may still turn into a match; only writes need a settled value.
+                    if stable && decide(comparison, snapshot.update) != Decision::Fail {
+                        break;
+                    }
+                }
+                Ok(reply) if reply.error.as_deref() == Some(SELECTOR_NOT_FOUND) => {
+                    last = None;
+                    stable = false;
+                }
+                Ok(reply) => {
+                    let error = reply
+                        .error
+                        .unwrap_or_else(|| "bridge returned ok=false".to_string());
+                    return Err(failed(explain(about(target, error))));
+                }
+                Err(_) if Instant::now() >= give_up => break,
+                Err(error) => return Err(failed(explain(about(target, format!("{error:#}"))))),
+            }
+            thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
+        }
+        let headline = snapshot_headline(expectation, started);
+        let Some(actual) = last else {
+            let info = ErrorInfo::new(format!("{headline}: `{target}` was not found"));
+            return Err(cut_short(ctx, started, give_up, info));
+        };
+        let comparison = aria_comparison(baseline.as_deref(), &actual);
+        let detail = match &baseline {
+            Some(expected) => line_diff(expected, &actual),
+            None => String::new(),
+        };
+        self.settle_snapshot(
+            ctx,
+            &snapshot,
+            comparison,
+            stable,
+            Captured {
+                headline,
+                actual: actual.clone().into_bytes(),
+                expected: baseline.map(String::into_bytes),
+                diff: None,
+                extension: "aria.yml",
+                content_type: "text/yaml",
+                detail,
+                received: Value::String(actual),
+            },
+            (started, give_up),
+        )
+    }
+
+    /// Capture stabilized screenshots of the target until one matches the baseline or two in a
+    /// row are identical, then compare the last one (Playwright's `toHaveScreenshot`).
+    fn expect_screenshot(
+        &self,
+        ctx: &mut StepCtx<'_>,
+        expectation: &Expectation,
+        options: &ScreenshotMatch,
+    ) -> StepOutcome {
+        let snapshot = snapshot_of(ctx)?;
+        let target = &expectation.target;
+        let started = Instant::now();
+        let give_up = (started + ctx.expect_timeout).min(ctx.deadline);
+        self.poll_until(ctx, target, true, true, give_up)
+            .map_err(|error| match error {
+                StepResult::TimedOut(_) => {
+                    let info = ErrorInfo::new(format!(
+                        "{}: `{target}` never became visible",
+                        snapshot_headline(expectation, started)
+                    ));
+                    cut_short(ctx, started, give_up, info)
+                }
+                other => other,
+            })?;
+        let baseline_png = snapshot
+            .read()
+            .map_err(|error| failed(format!("{error:#}")))?;
+        let baseline = baseline_png
+            .as_deref()
+            .map(Image::decode)
+            .transpose()
+            .map_err(|error| {
+                failed(format!(
+                    "snapshot `{}` is not a valid PNG: {error:#}",
+                    snapshot.display
+                ))
+            })?;
+        let tolerance = Tolerance {
+            threshold: options.threshold,
+            max_diff_pixels: options.max_diff_pixels,
+            max_diff_pixel_ratio: options.max_diff_pixel_ratio,
+        };
+        let masks: Vec<String> = options.mask.iter().map(bridge_selector).collect();
+
+        let selector = bridge_selector(target);
+        let mut last: Option<(Vec<u8>, Image)> = None;
+        let mut stable = false;
+        let mut first = true;
+        loop {
+            let now = Instant::now();
+            if now >= give_up && !first {
+                break;
+            }
+            let budget = give_up.saturating_duration_since(now);
+            let wait = if first {
+                budget.max(CAPTURE_TIMEOUT)
+            } else {
+                budget
+            }
+            .min(ctx.remaining());
+            first = false;
+            if wait.is_zero() {
+                break;
+            }
+            let shot = self.session.screenshot(
+                Some(selector.clone()),
+                Some("expect".to_string()),
+                masks.clone(),
+                ctx.test_id.clone(),
+                Some(format!("step-{}", ctx.step_index)),
+                wait,
+            );
+            let shot = match shot {
+                Ok(shot) => shot,
+                Err(error) if format!("{error:#}").contains(SELECTOR_NOT_FOUND) => {
+                    last = None;
+                    stable = false;
+                    thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
+                    continue;
+                }
+                Err(_) if Instant::now() >= give_up => break,
+                Err(error) => return Err(failed(explain(about(target, format!("{error:#}"))))),
+            };
+            if shot
+                .payload
+                .get("screenshotBackend")
+                .and_then(Value::as_str)
+                == Some(DOM_SUMMARY_BACKEND)
+            {
+                let reason = shot
+                    .payload
+                    .get("nativeScreenshotError")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown error");
+                return Err(failed(format!(
+                    "toHaveScreenshot needs a native screenshot, but capturing one failed: {reason}"
+                )));
+            }
+            if !masks.is_empty() && shot.payload.get("masked").is_none() {
+                return Err(failed(
+                    "this app's @auditaur/api cannot mask screenshots; upgrade it to use `mask`",
+                ));
+            }
+            let image = Image::decode(&shot.png)
+                .map_err(|error| failed(format!("bridge screenshot was not a PNG: {error:#}")))?;
+            if let Some(expected) = &baseline {
+                let comparison = if compare_images(expected, &image, tolerance).passed {
+                    Comparison::Match
+                } else {
+                    Comparison::Mismatch
+                };
+                if decide(comparison, snapshot.update) == Decision::Pass {
+                    return Ok(());
+                }
+            }
+            stable = last
+                .as_ref()
+                .is_some_and(|(_, previous)| *previous == image);
+            last = Some((shot.png, image));
+            if stable {
+                break;
+            }
+            thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
+        }
+        let headline = snapshot_headline(expectation, started);
+        let Some((png, image)) = last else {
+            let info = ErrorInfo::new(format!("{headline}: `{target}` was not found"));
+            return Err(cut_short(ctx, started, give_up, info));
+        };
+        let (comparison, diff) = match &baseline {
+            Some(expected) => {
+                let diff = compare_images(expected, &image, tolerance);
+                let comparison = if diff.passed {
+                    Comparison::Match
+                } else {
+                    Comparison::Mismatch
+                };
+                (comparison, Some(diff))
+            }
+            None => (Comparison::Missing, None),
+        };
+        let received = match &diff {
+            Some(diff) => json!({
+                "diffPixels": diff.diff_pixels,
+                "totalPixels": diff.total_pixels,
+                "size": [image.width, image.height],
+            }),
+            None => json!({ "size": [image.width, image.height] }),
+        };
+        self.settle_snapshot(
+            ctx,
+            &snapshot,
+            comparison,
+            stable,
+            Captured {
+                headline,
+                actual: png,
+                expected: baseline_png,
+                diff: diff.as_ref().and_then(|diff| diff.diff.encode().ok()),
+                extension: "png",
+                content_type: "image/png",
+                detail: diff.as_ref().map(|diff| diff.summary()).unwrap_or_default(),
+                received,
+            },
+            (started, give_up),
+        )
+    }
+
+    /// Apply the update mode to a final comparison: pass, write the baseline, or fail with
+    /// expected/actual/diff attachments.
+    fn settle_snapshot(
+        &self,
+        ctx: &mut StepCtx<'_>,
+        snapshot: &SnapshotTarget,
+        comparison: Comparison,
+        stable: bool,
+        captured: Captured,
+        (started, give_up): (Instant, Instant),
+    ) -> StepOutcome {
+        let decision = decide(comparison, snapshot.update);
+        let writes = matches!(decision, Decision::Update | Decision::WriteMissing);
+        let expected_info = json!({ "snapshot": snapshot.display });
+        let attach = |ctx: &mut StepCtx<'_>, label: &str, bytes: &[u8], extension: &str, mime| {
+            let file = format!(
+                "step-{}-{}-{label}.{extension}",
+                ctx.step_index,
+                file_safe(&snapshot.name)
+            );
+            let _ = ctx.writer.attach(label, mime, &file, bytes);
+        };
+        if writes && !stable {
+            // Never record a baseline that was still changing.
+            attach(
+                ctx,
+                "actual",
+                &captured.actual,
+                captured.extension,
+                captured.content_type,
+            );
+            if comparison == Comparison::Match {
+                return Ok(());
+            }
+            let info = ErrorInfo {
+                message: format!(
+                    "{}\nthe {} never stabilized, so `{}` was not written",
+                    captured.headline,
+                    snapshot_noun(snapshot),
+                    snapshot.display
+                ),
+                expected: Some(expected_info),
+                actual: Some(captured.received),
+                ..ErrorInfo::default()
+            };
+            return Err(cut_short(ctx, started, give_up, info));
+        }
+        match decision {
+            Decision::Pass => Ok(()),
+            Decision::Update => snapshot
+                .write(&captured.actual)
+                .map_err(|error| failed(format!("{error:#}"))),
+            Decision::WriteMissing | Decision::Fail if comparison == Comparison::Missing => {
+                attach(
+                    ctx,
+                    "actual",
+                    &captured.actual,
+                    captured.extension,
+                    captured.content_type,
+                );
+                let note = if decision == Decision::WriteMissing {
+                    snapshot
+                        .write(&captured.actual)
+                        .map_err(|error| failed(format!("{error:#}")))?;
+                    ctx.wrote_baseline = true;
+                    "wrote the actual one; review it and re-run"
+                } else {
+                    "run with `--update-snapshots` to create it"
+                };
+                Err(StepResult::Failed(ErrorInfo {
+                    message: format!(
+                        "{}\nno baseline at `{}`; {note}",
+                        captured.headline, snapshot.display
+                    ),
+                    expected: Some(expected_info),
+                    actual: Some(captured.received),
+                    ..ErrorInfo::default()
+                }))
+            }
+            Decision::WriteMissing | Decision::Fail => {
+                if let Some(expected) = &captured.expected {
+                    attach(
+                        ctx,
+                        "expected",
+                        expected,
+                        captured.extension,
+                        captured.content_type,
+                    );
+                }
+                attach(
+                    ctx,
+                    "actual",
+                    &captured.actual,
+                    captured.extension,
+                    captured.content_type,
+                );
+                if let Some(diff) = &captured.diff {
+                    attach(ctx, "diff", diff, "png", "image/png");
+                }
+                let info = ErrorInfo {
+                    message: format!(
+                        "{}\n{} does not match `{}`:\n{}",
+                        captured.headline,
+                        snapshot_noun(snapshot),
+                        snapshot.display,
+                        captured.detail
+                    ),
+                    expected: Some(expected_info),
+                    actual: Some(captured.received),
+                    ..ErrorInfo::default()
+                };
+                Err(cut_short(ctx, started, give_up, info))
+            }
         }
     }
 
@@ -844,6 +1239,63 @@ impl BridgeDriver {
             .attach(name, "image/png", &file, &png)
             .map_err(|error| failed(format!("could not save screenshot: {error:#}")))?;
         Ok(())
+    }
+}
+
+/// The bridge's text-only fallback when native capture fails; useless for pixel comparison.
+const DOM_SUMMARY_BACKEND: &str = "bridge_dom_summary_canvas";
+
+/// A final snapshot capture and what to report about it.
+struct Captured {
+    headline: String,
+    /// Bytes to write as the baseline.
+    actual: Vec<u8>,
+    expected: Option<Vec<u8>>,
+    /// A PNG highlighting differing pixels (screenshots only).
+    diff: Option<Vec<u8>>,
+    extension: &'static str,
+    content_type: &'static str,
+    /// Why it mismatched: a line diff or a pixel summary.
+    detail: String,
+    received: Value,
+}
+
+fn snapshot_of(ctx: &StepCtx<'_>) -> std::result::Result<SnapshotTarget, StepResult> {
+    ctx.snapshot
+        .clone()
+        .ok_or_else(|| failed("internal error: snapshot step without a snapshot target"))
+}
+
+fn aria_comparison(baseline: Option<&str>, actual: &str) -> Comparison {
+    match baseline {
+        None => Comparison::Missing,
+        Some(expected) if expected == actual => Comparison::Match,
+        Some(_) => Comparison::Mismatch,
+    }
+}
+
+fn snapshot_headline(expectation: &Expectation, started: Instant) -> String {
+    format!(
+        "expect(`{}`).{}() failed after {}ms",
+        expectation.target,
+        expectation.matcher.key(),
+        started.elapsed().as_millis()
+    )
+}
+
+fn snapshot_noun(snapshot: &SnapshotTarget) -> &'static str {
+    match snapshot.kind {
+        super::snapshot::SnapshotKind::Aria => "ARIA snapshot",
+        super::snapshot::SnapshotKind::Screenshot => "screenshot",
+    }
+}
+
+/// A step or test deadline that cut the assertion short is a timeout, not a failure.
+fn cut_short(ctx: &StepCtx<'_>, started: Instant, give_up: Instant, info: ErrorInfo) -> StepResult {
+    if ctx.expired() && give_up < started + ctx.expect_timeout {
+        StepResult::TimedOut(info)
+    } else {
+        StepResult::Failed(info)
     }
 }
 
