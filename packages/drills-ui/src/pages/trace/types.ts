@@ -102,6 +102,6 @@ export function shownStep(selected: TraceSelected, step: StepView): number | nul
   return step < selected.steps.length ? step : null;
 }
 
-export const fileUrl = (runId: string, path: string) => `/file?runId=${encodeURIComponent(runId)}&path=${encodeURIComponent(path)}`;
+export { fileUrl } from "../../lib/files";
 
 export const isImage = (attachment: TraceAttachment) => attachment.contentType.startsWith("image/");

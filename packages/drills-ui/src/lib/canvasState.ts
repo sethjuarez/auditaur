@@ -23,12 +23,17 @@ export async function fetchState<T>(query = ""): Promise<T | null> {
   }
 }
 
+// Patches go out one at a time, so an older patch can never land after a newer one.
+let viewQueue: Promise<unknown> = Promise.resolve();
+
 // Patches the server-owned view; the server then tells every open copy of the page to reload.
 export async function setView(patch: ViewPatch) {
   const token = {};
   for (const [name, value] of Object.entries(patch)) pendingView.set(name, { value, token });
+  const request = viewQueue.then(() => postJson("/view", patch));
+  viewQueue = request.catch(() => {});
   try {
-    return await postJson("/view", patch);
+    return await request;
   } finally {
     for (const name of Object.keys(patch)) if (pendingView.get(name)?.token === token) pendingView.delete(name);
     viewEpoch += 1;

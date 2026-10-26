@@ -26,3 +26,6 @@ body { background: var(--bgColor-default); }
 .loading { display: flex; justify-content: center; padding: var(--base-size-32); color: var(--fgColor-muted); }
 
 :focus-visible { outline: 2px solid var(--focus-outlineColor); outline-offset: -2px; }
+
+/* Dialogs and menus above the sticky page header. */
+#__primerPortalRoot__ { position: relative; z-index: 100; }

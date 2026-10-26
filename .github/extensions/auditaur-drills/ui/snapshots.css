@@ -1,8 +1,0 @@
-/* Snapshots canvas: one card per snapshot result. */
-
-.snap { margin-top: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-default, #d0d7de); }
-.snap-head { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px; }
-.snap-title { min-width: 0; overflow-wrap: anywhere; }
-.snap-message { font-size: 11px; margin: 0 0 6px 28px; white-space: pre-wrap; }
-.snap-body { margin-left: 28px; }
-.banner.ok { background: var(--true-color-green-muted, #dafbe1); }

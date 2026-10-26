@@ -1,17 +1,19 @@
 // A page's POST actions (run, cancel, accept…): one at a time, with the last failure kept for a
-// notice, then a reload so the page shows what the action did. Resolves to whether it succeeded.
+// notice, then a reload so the page shows what the action did. Resolves to whether it succeeded;
+// `done` sees the server's answer before the reload.
 import { useCallback, useState } from "react";
 import { message, postJson } from "../lib/api";
 
 export function useAction(reload: () => Promise<void>) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const run = useCallback(async (path: string, body?: unknown) => {
+  const run = useCallback(async <T = unknown>(path: string, body?: unknown, done?: (result: T) => void) => {
     setBusy(true);
     setError(null);
     let ok = true;
     try {
-      await postJson(path, body);
+      const result = await postJson<T>(path, body);
+      done?.(result);
     } catch (err) {
       ok = false;
       setError(message(err));
@@ -25,5 +27,6 @@ export function useAction(reload: () => Promise<void>) {
     }
     return ok;
   }, [reload]);
-  return { busy, error, run };
+  const clearError = useCallback(() => setError(null), []);
+  return { busy, error, run, clearError };
 }

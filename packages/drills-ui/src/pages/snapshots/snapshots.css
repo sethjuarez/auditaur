@@ -1,0 +1,21 @@
+.snapshots-run { max-width: 260px; }
+.snapshots-run select { text-overflow: ellipsis; }
+.snapshots-status { display: inline-flex; align-items: center; gap: var(--base-size-4); font-size: var(--text-body-size-small); }
+.snapshots-summary { display: inline-flex; align-items: center; gap: var(--base-size-4); flex-wrap: wrap; font-size: var(--text-caption-size); }
+
+.snaps { display: flex; flex-direction: column; gap: var(--base-size-12); }
+.snap-head { align-items: flex-start; flex-wrap: nowrap; padding-top: var(--base-size-8); padding-bottom: var(--base-size-8); }
+.snap-head > .status-icon { margin-top: 2px; }
+.snap-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.snap-where { display: flex; align-items: center; gap: var(--base-size-4) var(--base-size-8); flex-wrap: wrap; min-width: 0; }
+.snap-test { font-size: var(--text-body-size-small); overflow-wrap: anywhere; }
+.snap-step { margin: 0; font-size: var(--text-body-size-medium); line-height: var(--text-body-lineHeight-medium); font-weight: var(--base-text-weight-semibold); overflow-wrap: anywhere; }
+.snap-baseline { overflow-wrap: anywhere; }
+.snap-accept { flex: none; }
+.snap-body { display: flex; flex-direction: column; gap: var(--base-size-8); padding: var(--base-size-12); }
+.snap-message { margin: 0; font-size: var(--text-body-size-small); overflow-wrap: anywhere; }
+.snap-hint { margin: 0; display: flex; align-items: flex-start; gap: var(--base-size-8); font-size: var(--text-body-size-small); }
+.snap-hint svg { flex: none; margin-top: 2px; }
+
+.accept-all-lede { margin: 0 0 var(--base-size-8); }
+.accept-all-files { margin: 0; padding-left: var(--base-size-20, 20px); display: flex; flex-direction: column; gap: var(--base-size-4); overflow-wrap: anywhere; }

@@ -6,12 +6,14 @@ import { Toast } from "./components/Toast";
 import { useColorMode } from "./hooks/useColorMode";
 import { ExplorerPage } from "./pages/explorer/ExplorerPage";
 import { LivePage } from "./pages/live/LivePage";
+import { SnapshotsPage } from "./pages/snapshots/SnapshotsPage";
 import { TracePage } from "./pages/trace/TracePage";
 import "./theme/base.css";
 
 const PAGES: Record<string, { title: string; Page: ComponentType }> = {
   explorer: { title: "Drill tests", Page: ExplorerPage },
   live: { title: "Drill run", Page: LivePage },
+  snapshots: { title: "Drill snapshots", Page: SnapshotsPage },
   trace: { title: "Drill trace", Page: TracePage },
 };
 
@@ -21,6 +23,8 @@ function App({ Page }: { Page: ComponentType }) {
     <BaseStyles className="drills-app" data-color-mode={mode} data-light-theme="light" data-dark-theme="dark">
       <Page />
       <Toast />
+      {/* Dialogs and overlays render here, inside the themed app, instead of at the end of body. */}
+      <div data-portal-root />
     </BaseStyles>
   );
 }
