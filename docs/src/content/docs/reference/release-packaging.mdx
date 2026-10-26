@@ -109,7 +109,7 @@ The live dogfood app smoke is also available as a manual GitHub Actions workflow
 2. Keep `.github/workflows/publish-api.yml` configured with `packages: write` and same-repository `GITHUB_TOKEN` package publishing for `@sethjuarez/auditaur-api`.
 3. Keep `CARGO_REGISTRY_TOKEN` available until crates.io trusted publishing is configured for all Rust crates.
 4. For the first release that includes `tauri-plugin-auditaur-macros`, confirm the release-plz run lists the macro crate before `tauri-plugin-auditaur`.
-5. Run `python scripts/check-skill-drift.py` after editing the Auditaur debug skill or gate canvas extension, and keep their matching files in `crates\auditaur-cli\assets` identical.
+5. Run `python scripts/check-skill-drift.py` after editing the Auditaur debug skill or the canvas extensions, and keep their matching files in `crates\auditaur-cli\assets` identical. After editing `packages\drills-ui`, run `npm --prefix packages\drills-ui run build`; it writes the drill canvas bundle to both locations.
 6. Run `.\scripts\preflight-release.ps1` before publishing release PRs. Use `-IncludeDogfoodSmoke` when a live Windows dogfood pass is appropriate.
 7. Before publishing the agent skill for real, review `gh skill publish .github --dry-run` warnings. Repo-level warnings such as secret scanning, push protection, and tag rulesets are GitHub repository settings, not code changes.
 8. Use Conventional Commits so release-plz and release-please can calculate semantic versions consistently.

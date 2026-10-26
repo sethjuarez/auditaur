@@ -58,6 +58,27 @@ jobs:
         working-directory: packages/api
         continue-on-error: true
 
+  drills-ui:
+    name: Drill canvases UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/drills-ui/package-lock.json
+      - run: npm ci
+        working-directory: packages/drills-ui
+      - run: npm run typecheck
+        working-directory: packages/drills-ui
+      - run: npm run build
+        working-directory: packages/drills-ui
+      # The bundle is committed so the extension and `auditaur init` need no Node build; it must match its source.
+      - name: Check committed bundle is current
+        run: git diff --exit-code -- .github/extensions/auditaur-drills/ui crates/auditaur-cli/assets/auditaur-drills/ui
+
   swift-apple-package:
     name: Swift Apple package
     runs-on: macos-latest

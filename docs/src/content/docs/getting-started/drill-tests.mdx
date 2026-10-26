@@ -201,9 +201,11 @@ The `auditaur-drill-run` canvas watches one run live: suites, tests, and each st
 
 The `auditaur-drill-trace` canvas replays one test attempt: a timeline of steps with IPC, event, log, and frontend-error ticks, each step's screenshots and DOM snapshot, and the telemetry recorded during it. Open it with `{ "runId", "testId", "attempt" }`, all optional; it defaults to the newest run's first failed test. Agents can call its `get_trace` and `select` actions.
 
-The `auditaur-drill-snapshots` canvas reviews a run's snapshot mismatches. ARIA results show the line diff; screenshots show expected and actual side by side, with a slider, or as the pixel diff. **Accept** copies the run's actual output over the baseline once the run has finished; output that never stabilized cannot be accepted. Open it with `{ "runId" }`, optional. Agents can call its `get_snapshots`, `select`, and `accept` actions.
+The `auditaur-drill-snapshots` canvas reviews a run's snapshot mismatches. The ARIA results show a line diff. Screenshot results show expected and actual side by side, with a slider, or as the pixel diff. **Accept as new baseline** copies the run's actual output over the baseline once the run has finished; **Accept all as new baselines (N)** asks for confirmation first, listing the files it overwrites. Output that never stabilized cannot be accepted. Open it with `{ "runId" }`, optional. Agents can call its `get_snapshots`, `select`, and `accept` actions.
 
 The `auditaur-drill-coverage` canvas shows which Tauri IPC commands and events a run's tests exercised: meters for the totals, then Commands, Events, Tests, and a test-by-item Map. A run only knows what it touched, so **Compare with app telemetry** picks sessions from `auditaur apps`; anything those sessions recorded that no test touched shows as unexercised. The same data comes from `auditaur drill coverage [run] --db <telemetry.sqlite>`. Agents can call its `get_coverage`, `select`, `list_app_stores`, and `set_sources` actions.
+
+The canvases share one React + [Primer](https://primer.style/react) bundle, so they match the Copilot app's look and theme. Its source is `packages/drills-ui`. After editing it, run `npm run build` to rebuild the committed `ui/app.js` and `ui/app.css`. CI fails if the bundle is out of date.
 
 ## CI
 
