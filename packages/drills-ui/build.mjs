@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bridgeCss } from "./theme-bridge.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "..", "..", ".github", "extensions", "auditaur-drills", "ui");
@@ -69,13 +70,16 @@ function usedVariables(sources, themes) {
 
 const scales = await Promise.all(SCALES.map(css));
 const themes = await Promise.all(THEMES.map(css));
-// The host bridge (theme/bridge.css) falls back to `--<role>-primer`, Primer's own value for a role
-// it overrides, so each bridged role is also emitted under that alias right where Primer defines it.
-const aliased = new Set([...outputs.css.matchAll(/var\(\s*(--[\w-]+)-primer\b/g)].map((match) => match[1]));
+const defined = new Set([...scales, ...themes].flatMap((text) => [...text.matchAll(DECLARATION)].map((match) => match[1])));
+const usedByBundle = usedVariables([outputs.js, outputs.css, ...scales], themes);
+const bridge = bridgeCss(usedByBundle, defined);
+if (bridge.missing.length) throw new Error(`theme-bridge.mjs maps roles Primer doesn't define: ${bridge.missing.join(", ")}`);
+// Each bridged role falls back to `--<role>-primer`: Primer's own value, emitted beside it.
+const aliased = new Set(bridge.roles);
 const withAliases = (text) => text.replace(DECLARATION, (all, name, value) => (aliased.has(name) ? `${all}${name}-primer:${value.trim()};` : all));
-const used = usedVariables([outputs.js, outputs.css, ...scales, [...aliased].map((name) => `var(${name})`).join(" ")], themes);
+const used = usedVariables([outputs.js, outputs.css, ...scales, bridge.css], themes);
 const trimmed = themes.map((theme) => withAliases(theme.replace(/\/\*\*[\s\S]*?\*\/\s*/, "").replace(DECLARATION, (all, name, value) => (used.has(name) ? `${name}:${value.trim()};` : "")).replace(/\n\s*\n/g, "\n")));
-const app = { js: outputs.js, css: [...scales.map(withAliases), ...trimmed, outputs.css].join("\n") };
+const app = { js: outputs.js, css: [...scales.map(withAliases), ...trimmed, outputs.css, bridge.css].join("\n") };
 
 // The extension serves ui/ from .github/extensions; `auditaur init` embeds the crate's copy.
 for (const dir of [out, mirror]) {
@@ -84,6 +88,4 @@ for (const dir of [out, mirror]) {
     await writeFile(join(dir, "app.css"), app.css);
 }
 const kb = (text) => `${Math.round(Buffer.byteLength(text) / 1024)} KB`;
-const missing = [...aliased].filter((name) => !app.css.includes(`${name}-primer:`));
-if (missing.length) throw new Error(`bridge fallbacks with no Primer value: ${missing.join(", ")}`);
-process.stdout.write(`ui/app.js ${kb(app.js)}, ui/app.css ${kb(app.css)}\n`);
+process.stdout.write(`ui/app.js ${kb(app.js)}, ui/app.css ${kb(app.css)}, ${bridge.roles.length} roles bridged to the host theme\n`);

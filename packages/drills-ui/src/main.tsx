@@ -6,7 +6,6 @@ import { Toast } from "./components/Toast";
 import { useColorMode } from "./hooks/useColorMode";
 import { ExplorerPage } from "./pages/explorer/ExplorerPage";
 import "./theme/base.css";
-import "./theme/bridge.css";
 
 const PAGES: Record<string, { title: string; Page: ComponentType }> = {
   explorer: { title: "Drill tests", Page: ExplorerPage },
