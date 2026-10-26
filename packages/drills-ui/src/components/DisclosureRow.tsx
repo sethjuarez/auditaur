@@ -6,6 +6,7 @@ import { ChevronDownIcon, ChevronRightIcon } from "@primer/octicons-react";
 import { useId, type MouseEvent, type ReactNode } from "react";
 import "./Box.css";
 import "./DisclosureRow.css";
+import "./ErrorText.css";
 
 interface Props {
   id: string;

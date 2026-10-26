@@ -1,6 +1,6 @@
 // The run's status beside the title: a progress ring while it runs, a clock while it waits on
 // someone, an alert when the page can't load, else the final result.
-import { AlertIcon } from "@primer/octicons-react";
+import { LoadAlert } from "../../components/LoadAlert";
 import { ProgressRing } from "../../components/ProgressRing";
 import { StatusIcon } from "../../components/StatusIcon";
 import { STATUS_LABELS, statusOf } from "../../lib/status";
@@ -11,12 +11,7 @@ export function RunStatus({ state, loadError }: { state: LiveState | null; loadE
   if (!run) {
     return (
       <span id="status" className="run-status">
-        {loadError && !state && (
-          <>
-            <span className="status-icon error" role="img" aria-label="Could not load"><AlertIcon size={16} /></span>
-            <span className="status-text error">unreachable</span>
-          </>
-        )}
+        {loadError && !state && <LoadAlert />}
       </span>
     );
   }

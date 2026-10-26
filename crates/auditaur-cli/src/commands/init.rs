@@ -83,9 +83,6 @@ pub(crate) const AUDITAUR_DRILLS_EXTENSION_FILES: &[(&str, &str)] = drills_exten
     "ui/snapshots.css",
     "ui/snapshots.html",
     "ui/snapshots.js",
-    "ui/trace.css",
-    "ui/trace.html",
-    "ui/trace.js",
 ];
 const DIAGNOSTICS_CONFIG_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.json"];
 const DIAGNOSTICS_GUIDE_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.md"];
