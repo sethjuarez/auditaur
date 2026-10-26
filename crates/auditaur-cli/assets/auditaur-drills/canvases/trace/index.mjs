@@ -58,7 +58,6 @@ export default {
     inputSchema,
     title: "Drill trace",
     page: "trace",
-    components: ["links"],
     view: {
         step: field.index(["auto", "all"], "auto").about(
             "Zero-based step to focus; `auto` focuses the failing step, `all` the whole attempt. Selecting another test resets it to `auto`.",

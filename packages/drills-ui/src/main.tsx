@@ -4,6 +4,7 @@ import { StrictMode, type ComponentType } from "react";
 import { createRoot } from "react-dom/client";
 import { Toast } from "./components/Toast";
 import { useColorMode } from "./hooks/useColorMode";
+import { CoveragePage } from "./pages/coverage/CoveragePage";
 import { ExplorerPage } from "./pages/explorer/ExplorerPage";
 import { LivePage } from "./pages/live/LivePage";
 import { SnapshotsPage } from "./pages/snapshots/SnapshotsPage";
@@ -11,6 +12,7 @@ import { TracePage } from "./pages/trace/TracePage";
 import "./theme/base.css";
 
 const PAGES: Record<string, { title: string; Page: ComponentType }> = {
+  coverage: { title: "Drill coverage", Page: CoveragePage },
   explorer: { title: "Drill tests", Page: ExplorerPage },
   live: { title: "Drill run", Page: LivePage },
   snapshots: { title: "Drill snapshots", Page: SnapshotsPage },

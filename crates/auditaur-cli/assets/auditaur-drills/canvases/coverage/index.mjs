@@ -69,7 +69,6 @@ export default {
     inputSchema,
     title: "Drill coverage",
     page: "coverage",
-    components: ["meter", "segmented", "matrix", "checklist", "links"],
     view: {
         tab: field.choice(["commands", "events", "tests", "map"], "commands").about("Which coverage list the page shows."),
         missedOnly: field.flag(false).about("Show only commands, events, and tests no test exercised."),

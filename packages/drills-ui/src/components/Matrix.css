@@ -1,0 +1,21 @@
+.matrix-wrap {
+  overflow: auto;
+  max-width: 100%;
+  border: var(--borderWidth-thin) solid var(--borderColor-default);
+  border-radius: var(--borderRadius-medium);
+}
+.matrix { border-collapse: collapse; font-size: var(--text-body-size-small); }
+.matrix th, .matrix td { border: var(--borderWidth-thin) solid var(--borderColor-muted); }
+.matrix tr > :first-child { border-left: 0; }
+.matrix tr > :last-child { border-right: 0; }
+.matrix thead tr:first-child > * { border-top: 0; }
+.matrix tbody tr:last-child > * { border-bottom: 0; }
+.matrix thead th { background: var(--bgColor-muted); }
+.matrix-corner { text-align: left; font-weight: var(--base-text-weight-normal); padding: var(--base-size-4) var(--base-size-8); vertical-align: bottom; font-size: var(--text-caption-size); }
+.matrix-col { height: 140px; width: 28px; padding: var(--base-size-8) 0; vertical-align: bottom; font-weight: var(--base-text-weight-normal); }
+.matrix-col span { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; font-family: var(--fontStack-monospace); font-size: var(--text-caption-size); }
+.matrix-row { text-align: left; font-weight: var(--base-text-weight-normal); padding: var(--base-size-4) var(--base-size-8); white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.matrix-cell { text-align: center; width: 28px; height: 28px; padding: 0; }
+.matrix-cell.marked { color: var(--fgColor-success); }
+.matrix-cell svg { vertical-align: middle; }
+.matrix tbody tr:hover { background: var(--control-transparent-bgColor-hover); }

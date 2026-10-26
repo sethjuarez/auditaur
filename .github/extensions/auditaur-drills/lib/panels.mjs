@@ -24,7 +24,7 @@ export class Panels {
             const state = canvas.create(input, view);
             const own = { ...this.#shared(state), ...canvas.routes(state) };
             const routes = withViewRoutes(own, view, async () => canvas.sync?.(state));
-            panel = { canvas, state, ...(await startServer(routes, canvas.page, canvas.components)) };
+            panel = { canvas, state, ...(await startServer(routes, canvas.page)) };
             this.#open.set(instanceId, panel);
         } else if (input && Object.keys(input).length > 0) {
             canvas.reconfigure(panel.state, input);

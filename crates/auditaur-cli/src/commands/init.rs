@@ -63,21 +63,6 @@ pub(crate) const AUDITAUR_DRILLS_EXTENSION_FILES: &[(&str, &str)] = drills_exten
     "lib/view-state.mjs",
     "ui/app.css",
     "ui/app.js",
-    "ui/base.css",
-    "ui/checklist.css",
-    "ui/checklist.js",
-    "ui/common.js",
-    "ui/coverage.css",
-    "ui/coverage.html",
-    "ui/coverage.js",
-    "ui/links.css",
-    "ui/links.js",
-    "ui/matrix.css",
-    "ui/matrix.js",
-    "ui/meter.css",
-    "ui/meter.js",
-    "ui/segmented.css",
-    "ui/segmented.js",
 ];
 const DIAGNOSTICS_CONFIG_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.json"];
 const DIAGNOSTICS_GUIDE_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.md"];

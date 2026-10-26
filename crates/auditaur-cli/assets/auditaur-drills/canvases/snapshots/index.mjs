@@ -55,7 +55,6 @@ export default {
     inputSchema,
     title: "Drill snapshots",
     page: "snapshots",
-    components: ["links"],
     view: {
         mode: field.choice(["side", "slider", "diff"], "side").about("How screenshot mismatches compare expected and actual."),
         split: field.range(0, 100, 50).about("Slider mode: percent of the width showing expected (left) over actual."),

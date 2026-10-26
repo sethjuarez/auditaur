@@ -1,14 +1,12 @@
 // One loopback HTTP server per open panel: the page's static assets from `ui/`, plus its routes.
 
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DrillError } from "./errors.mjs";
 
 const UI_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "ui");
-const SHARED_ASSETS = ["base.css", "common.js"];
 const CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -43,15 +41,10 @@ export const RAW = Symbol("raw");
 // A route returning `STREAMED` has written (and keeps writing) the response itself.
 export const STREAMED = Symbol("streamed");
 
-// Only the page's own files, the UI components it names (`<name>.js` and `.css`), and the shared ones
-// are served; nothing else under `ui/` is reachable. A page without its own `<page>.html` is part of
-// the React bundle (packages/drills-ui): a generated shell plus `app.js` and `app.css`.
-function assetsFor(page, components) {
-    if (!existsSync(join(UI_DIR, `${page}.html`))) {
-        return new Map([["/", { shell: page }], ["/app.js", "app.js"], ["/app.css", "app.css"]]);
-    }
-    const files = [`${page}.html`, `${page}.css`, `${page}.js`, ...SHARED_ASSETS, ...components.flatMap((name) => [`${name}.js`, `${name}.css`])];
-    return new Map(files.map((file) => [file === `${page}.html` ? "/" : `/${file}`, file]));
+// Only the generated page shell and the React bundle (packages/drills-ui) are served; nothing else
+// under `ui/` is reachable.
+function assetsFor(page) {
+    return new Map([["/", { shell: page }], ["/app.js", "app.js"], ["/app.css", "app.css"]]);
 }
 
 const shell = (page) =>
@@ -66,9 +59,10 @@ async function sendAsset(res, asset) {
         "Content-Type": CONTENT_TYPES[file.slice(file.lastIndexOf("."))],
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
-        // Scripts only from the page's own files; inline styles stay allowed for computed layout.
+        // Scripts only from the page's own files; inline styles stay allowed for computed layout, and data:
+        // images for Primer's inline icons (the checkbox checkmark).
         "Content-Security-Policy":
-            "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+            "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'",
     });
     res.end(body);
 }
@@ -83,8 +77,8 @@ function sendRaw(res, raw) {
     res.end(raw.body);
 }
 
-export async function startServer(routes, page, components = []) {
-    const assets = assetsFor(page, components);
+export async function startServer(routes, page) {
+    const assets = assetsFor(page);
     const server = createServer(async (req, res) => {
         try {
             const url = new URL(req.url ?? "/", "http://127.0.0.1");

@@ -70,7 +70,6 @@ export default {
     inputSchema,
     title: "Drill run",
     page: "live",
-    components: ["links"],
     view: {
         expanded: field.toggles().about(
             "Open (true) or closed (false) overrides by test id, or `hooks:<suite id>` for suite hooks. Without one, running and failed tests are open.",

@@ -1459,13 +1459,13 @@ fn init_extension_restores_missing_files_without_touching_edits() {
     ];
     run_json(args);
     let drills = repo.path().join(".github/extensions/auditaur-drills");
-    fs::remove_file(drills.join("ui").join("common.js")).unwrap();
+    fs::remove_file(drills.join("ui").join("app.js")).unwrap();
     fs::write(drills.join("extension.mjs"), "customized").unwrap();
 
     let repaired = run_json(args);
     assert_eq!(repaired["extensions"][0]["status"], "skipped");
     assert_eq!(repaired["extensions"][1]["status"], "repaired");
-    assert!(drills.join("ui").join("common.js").exists());
+    assert!(drills.join("ui").join("app.js").exists());
     assert_eq!(
         fs::read_to_string(drills.join("extension.mjs")).unwrap(),
         "customized"
@@ -1507,7 +1507,7 @@ fn packaged_init_drills_extension_matches_repo_extension() {
     let (mut installed, mut repo) = (Default::default(), Default::default());
     read_tree(&installed_dir, &installed_dir, &mut installed);
     read_tree(&repo_dir, &repo_dir, &mut repo);
-    assert!(installed.contains_key("ui/common.js"));
+    assert!(installed.contains_key("ui/app.js"));
     assert_eq!(installed, repo);
 }
 
