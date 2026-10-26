@@ -1,6 +1,7 @@
 // One loopback HTTP server per open panel: the page's static assets from `ui/`, plus its routes.
 
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,14 +44,24 @@ export const RAW = Symbol("raw");
 export const STREAMED = Symbol("streamed");
 
 // Only the page's own files, the UI components it names (`<name>.js` and `.css`), and the shared ones
-// are served; nothing else under `ui/` is reachable.
+// are served; nothing else under `ui/` is reachable. A page without its own `<page>.html` is part of
+// the React bundle (packages/drills-ui): a generated shell plus `app.js` and `app.css`.
 function assetsFor(page, components) {
+    if (!existsSync(join(UI_DIR, `${page}.html`))) {
+        return new Map([["/", { shell: page }], ["/app.js", "app.js"], ["/app.css", "app.css"]]);
+    }
     const files = [`${page}.html`, `${page}.css`, `${page}.js`, ...SHARED_ASSETS, ...components.flatMap((name) => [`${name}.js`, `${name}.css`])];
     return new Map(files.map((file) => [file === `${page}.html` ? "/" : `/${file}`, file]));
 }
 
-async function sendAsset(res, file) {
-    const body = await readFile(join(UI_DIR, file));
+const shell = (page) =>
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Drills</title>` +
+    `<link rel="stylesheet" href="app.css"></head><body><div id="root" data-page="${page}"></div>` +
+    `<script type="module" src="app.js"></script></body></html>`;
+
+async function sendAsset(res, asset) {
+    const body = asset.shell ? shell(asset.shell) : await readFile(join(UI_DIR, asset));
+    const file = asset.shell ? ".html" : asset;
     res.writeHead(200, {
         "Content-Type": CONTENT_TYPES[file.slice(file.lastIndexOf("."))],
         "Cache-Control": "no-store",

@@ -1,0 +1,22 @@
+/* Bordered list boxes, like GitHub's file and check lists: a muted header row, then rows. */
+.box {
+  border: var(--borderWidth-thin) solid var(--borderColor-default);
+  border-radius: var(--borderRadius-medium);
+  background: var(--bgColor-default);
+  overflow: hidden;
+}
+.box-header {
+  display: flex;
+  align-items: center;
+  gap: var(--base-size-8);
+  flex-wrap: wrap;
+  min-height: 40px;
+  padding: var(--base-size-4) var(--base-size-8) var(--base-size-4) var(--base-size-12);
+  background: var(--bgColor-muted);
+  border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
+}
+.box-title { font-weight: var(--base-text-weight-semibold); }
+.box-row { border-top: var(--borderWidth-thin) solid var(--borderColor-muted); }
+.box-header + .box-row { border-top: 0; }
+.box-row.clickable { cursor: pointer; }
+.box-row.clickable:hover { background: var(--control-transparent-bgColor-hover); }

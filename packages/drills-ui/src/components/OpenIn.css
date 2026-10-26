@@ -1,0 +1,3 @@
+.open-in { display: inline-flex; align-items: center; gap: 0; flex-wrap: wrap; }
+.open-in .open-in-link { color: var(--fgColor-muted); }
+.open-in .open-in-link:hover:not(:disabled) { color: var(--fgColor-accent); }

@@ -1,0 +1,27 @@
+/* Page-wide basics on Primer tokens. The app root carries the Primer theme attributes. */
+
+html, body { margin: 0; padding: 0; }
+body { background: var(--bgColor-default); }
+
+.drills-app {
+  min-height: 100vh;
+  background: var(--bgColor-default);
+  color: var(--fgColor-default);
+  font-family: var(--fontStack-sansSerif);
+  font-size: var(--text-body-size-medium);
+  line-height: var(--text-body-lineHeight-medium);
+  color-scheme: light;
+}
+.drills-app[data-color-mode="dark"] { color-scheme: dark; }
+
+.muted { color: var(--fgColor-muted); }
+.mono, .path { font-family: var(--fontStack-monospace); font-size: var(--text-caption-size); }
+.spacer { flex: 1; }
+.row { display: flex; align-items: center; gap: var(--base-size-8); flex-wrap: wrap; min-width: 0; }
+.nums { font-variant-numeric: tabular-nums; }
+
+.page-main { padding: var(--base-size-12) var(--base-size-16) var(--base-size-24); display: flex; flex-direction: column; gap: var(--base-size-12); }
+
+.loading { display: flex; justify-content: center; padding: var(--base-size-32); color: var(--fgColor-muted); }
+
+:focus-visible { outline: 2px solid var(--focus-outlineColor); outline-offset: -2px; }

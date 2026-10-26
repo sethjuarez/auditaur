@@ -11,3 +11,4 @@
 /examples/dogfood/src-tauri/target/
 /examples/dogfood/src-tauri/gen/
 /examples/dogfood/drill-results.xml
+/packages/drills-ui/node_modules/
