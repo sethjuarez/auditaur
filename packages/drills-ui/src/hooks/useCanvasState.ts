@@ -2,8 +2,10 @@
 // whatever pace the latest state asks for. `change` patches the server-owned view (`state.ui`)
 // at once and lets the server's answer, via the event stream, be what sticks.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePageApi } from "../app/PageApi";
+import { onServerEvent } from "../app/serverEvents";
 import { message } from "../lib/api";
-import { fetchState, onServerChange, setView, type ViewPatch } from "../lib/canvasState";
+import { canvasStateFor, type ViewPatch } from "../lib/canvasState";
 
 export interface CanvasState<T> {
   state: T | null;
@@ -14,6 +16,7 @@ export interface CanvasState<T> {
 }
 
 export function useCanvasState<T extends { ui?: object }>(pollMs: (state: T | null) => number | null): CanvasState<T> {
+  const api = canvasStateFor(usePageApi());
   const [state, setState] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Bumped after every load, so polling reschedules even when the state didn't change.
@@ -21,9 +24,13 @@ export function useCanvasState<T extends { ui?: object }>(pollMs: (state: T | nu
   const pace = useRef(pollMs);
   pace.current = pollMs;
 
-  const reload = useCallback(async (query = "") => {
+  // At most one load in flight and one queued: a burst of reasons to reload (the server's event, the
+  // action that caused it, a poll) costs two requests, not one each. A queued `?refresh` wins.
+  const flight = useRef<{ queued: string | null; done: Promise<void> } | null>(null);
+
+  const load = useCallback(async (query: string) => {
     try {
-      const next = await fetchState<T>(query);
+      const next = await api.fetch<T>(query);
       if (!next) return;
       setState(next);
       setError(null);
@@ -31,19 +38,37 @@ export function useCanvasState<T extends { ui?: object }>(pollMs: (state: T | nu
       setError(`Canvas server unreachable: ${message(err)}`);
     }
     setLoads((count) => count + 1);
-  }, []);
+  }, [api]);
+
+  const reload = useCallback((query = "") => {
+    const running = flight.current;
+    if (running) {
+      running.queued = running.queued && !query ? running.queued : query;
+      return running.done;
+    }
+    const entry = { queued: null as string | null, done: Promise.resolve() };
+    flight.current = entry;
+    entry.done = (async () => {
+      for (let next: string | null = query; next !== null; next = entry.queued) {
+        entry.queued = null;
+        await load(next);
+      }
+      flight.current = null;
+    })();
+    return entry.done;
+  }, [load]);
 
   const change = useCallback((patch: ViewPatch) => {
     setState((current) => (current ? { ...current, ui: { ...current.ui, ...patch } } : current));
-    setView(patch).catch((err) => {
+    api.setView(patch).catch((err) => {
       setError(message(err));
       void reload();
     });
-  }, [reload]);
+  }, [api, reload]);
 
   useEffect(() => {
     void reload();
-    return onServerChange(() => void reload());
+    return onServerEvent(() => void reload());
   }, [reload]);
 
   useEffect(() => {

@@ -26,7 +26,7 @@ export function useAppStores(open: boolean, inUse: string[]) {
   useEffect(() => {
     if (!open) return;
     let live = true;
-    getJson<{ stores: AppStore[]; error: string | null }>("/apps").then(
+    getJson<{ stores: AppStore[]; error: string | null }>("/api/coverage/apps").then(
       (result) => {
         if (!live) return;
         setFound(result.stores);

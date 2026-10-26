@@ -1274,14 +1274,15 @@ fn init_extension_installs_auditaur_gate_canvas() {
     let extension = fs::read_to_string(&extension_path).unwrap();
     assert!(extension.contains("id: \"auditaur-human-gate\""));
     assert!(extension.contains("respond"));
-    let explorer = extensions
-        .join("auditaur-drills")
-        .join("canvases")
-        .join("explorer")
-        .join("index.mjs");
-    assert!(fs::read_to_string(explorer)
+    assert!(fs::read_to_string(&drills_path)
         .unwrap()
-        .contains("id: \"auditaur-drill-explorer\""));
+        .contains("id: CANVAS_ID"));
+    assert!(extensions
+        .join("auditaur-drills")
+        .join("features")
+        .join("tests")
+        .join("index.mjs")
+        .is_file());
 
     let failure = run_failure([
         "init",

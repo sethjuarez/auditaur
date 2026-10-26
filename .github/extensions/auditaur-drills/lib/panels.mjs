@@ -1,68 +1,92 @@
-// Open panels by instance id. A panel is one canvas definition's state plus its server. The state
-// carries the panel's `view` (see view-state.mjs), which the canvas's own code may read.
+// Open panels by instance id. Each is an AppPanel (route, views, shared state) served by its own
+// loopback server. Panels save their route and views to the store, so a provider restart rehydrates
+// them where the user left them.
 
+import { randomUUID } from "node:crypto";
+import { apiRoutes } from "./api-routes.mjs";
+import { AppPanel } from "./app-panel.mjs";
+import { inheritedInput } from "./config.mjs";
 import { DrillError } from "./errors.mjs";
-import { workspaceKey } from "./paths.mjs";
+import { canonicalRoute } from "./route.mjs";
 import { startServer, stopServer } from "./server.mjs";
-import { ViewState } from "./view-state.mjs";
-import { withViewRoutes } from "./view-routes.mjs";
+
+export const CANVAS_ID = "auditaur-drills";
+// How long a rehydrating open waits for the session workspace (where saved panels live) before
+// starting without its saved route.
+const STORE_WAIT_MS = 3000;
 
 export class Panels {
+    #features;
+    #store;
     #open = new Map();
-    #shared = () => ({});
+    #rpc = null;
+    #storeReady;
+    #markStoreReady;
 
-    // Routes every panel gets besides its canvas's own, given the panel's state.
-    share(routes) {
-        this.#shared = routes;
+    constructor({ features, store }) {
+        this.#features = features;
+        this.#store = store;
+        this.#storeReady = new Promise((resolve) => (this.#markStoreReady = resolve));
     }
 
-    // Idempotent: reopening keeps the panel, and only non-empty input reconfigures it.
-    async open(canvas, instanceId, input) {
-        let panel = this.#open.get(instanceId);
-        if (!panel) {
-            const view = new ViewState(canvas.view ?? {});
-            const state = canvas.create(input, view);
-            const own = { ...this.#shared(state), ...canvas.routes(state) };
-            const routes = withViewRoutes(own, view, async () => canvas.sync?.(state));
-            panel = { canvas, state, ...(await startServer(routes, canvas.page)) };
-            this.#open.set(instanceId, panel);
-        } else if (input && Object.keys(input).length > 0) {
-            canvas.reconfigure(panel.state, input);
-            panel.state.view.changed();
+    // After joinSession: where panels are saved, and the RPC client that opens new panels.
+    bind({ workspacePath, rpc }) {
+        this.#store.bind(workspacePath);
+        this.#rpc = rpc?.canvas?.open ? rpc : null;
+        this.#markStoreReady();
+    }
+
+    // Idempotent: an open panel is returned as is. A rehydrate replays the original input, which must
+    // not undo what the user did since, so input only configures a panel that is not open yet.
+    open(instanceId, input) {
+        let entry = this.#open.get(instanceId);
+        if (!entry) {
+            entry = this.#create(instanceId, input);
+            this.#open.set(instanceId, entry);
+            entry.catch(() => this.#open.delete(instanceId));
         }
-        return panel;
+        return entry;
     }
 
-    state(instanceId) {
-        return this.#panel(instanceId).state;
+    async #create(instanceId, input) {
+        await Promise.race([this.#storeReady, new Promise((resolve) => setTimeout(resolve, STORE_WAIT_MS).unref?.())]);
+        const saved = await this.#store.load(instanceId);
+        const panel = new AppPanel({
+            features: this.#features,
+            input,
+            saved,
+            save: (data) => this.#store.save(instanceId, data),
+        });
+        const { server, url } = await startServer(apiRoutes(panel, (from, route) => this.openNew(from, route)));
+        return { panel, server, url };
     }
 
-    // What actions may need beyond state: the panel's page `url`.
-    panel(instanceId) {
-        const { url } = this.#panel(instanceId);
-        return { url };
+    async get(instanceId) {
+        const entry = this.#open.get(instanceId);
+        if (!entry) throw new DrillError("not_open", "this canvas instance is not open");
+        return entry;
     }
 
-    // The most recently opened panel of a canvas on `workspace`, as `{ instanceId, state }`, or null.
-    find(canvasId, workspace) {
-        const key = workspaceKey(workspace);
-        let found = null;
-        for (const [instanceId, panel] of this.#open) {
-            if (panel.canvas.id === canvasId && workspaceKey(panel.state.workspace) === key) found = { instanceId, state: panel.state };
+    // Opens `route` in a new panel that inherits `from`'s configuration (not its route).
+    async openNew(from, route) {
+        const path = canonicalRoute(route);
+        if (!this.#rpc) throw new DrillError("panels_unavailable", "this session cannot open canvases from a canvas");
+        const instanceId = `${CANVAS_ID}-${randomUUID()}`;
+        const input = { ...inheritedInput(from.input), dbs: from.shared.dbs, route: path };
+        try {
+            await this.#rpc.canvas.open({ canvasId: CANVAS_ID, instanceId, input });
+        } catch (error) {
+            throw new DrillError("open_failed", `could not open a new panel: ${error?.message ?? error}`);
         }
-        return found;
-    }
-
-    #panel(instanceId) {
-        const panel = this.#open.get(instanceId);
-        if (!panel) throw new DrillError("not_open", "this canvas instance is not open");
-        return panel;
+        return { instanceId, route: path };
     }
 
     async close(instanceId) {
-        const panel = this.#open.get(instanceId);
-        if (!panel) return;
+        const entry = this.#open.get(instanceId);
+        if (!entry) return;
         this.#open.delete(instanceId);
-        await stopServer(panel.server);
+        const { panel, server } = await entry.catch(() => ({}));
+        if (!panel) return;
+        await Promise.all([panel.dispose().then(() => this.#store.remove(instanceId)).catch(() => {}), stopServer(server)]);
     }
 }

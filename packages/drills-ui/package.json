@@ -7,6 +7,7 @@
   "license": "MIT",
   "scripts": {
     "build": "node build.mjs",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -14,7 +15,8 @@
     "@primer/primitives": "^11.10.0",
     "@primer/react": "^38.43.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "wouter": "^3.13.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",

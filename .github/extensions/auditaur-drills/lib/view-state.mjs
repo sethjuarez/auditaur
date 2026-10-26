@@ -1,14 +1,13 @@
-// Server-owned view state: what a panel shows (tab, filter, selection, mode), so the agent can read
-// and change it with the same effect as the user. Pages render it and write it back through
-// `POST /view`; agents use the `get_view` / `set_view` actions. `changed()` bumps `version` and
-// notifies subscribers, which the `/events` stream relays so open pages reload. The HTTP and action
-// wrappers call it after every write, so individual handlers never need to.
+// Server-owned view state of one page: what it shows (tab, filter, mode), so the agent can read and
+// change it with the same effect as the user. Pages render it and write it back through
+// `POST /api/<page>/view`; agents use the `get_view` / `set_view` actions. The panel (app-panel.mjs)
+// relays `changed()` to its event stream; the HTTP and action wrappers notify after every write.
 
 import { DrillError } from "./errors.mjs";
 
 const invalid = (name, message) => new DrillError("invalid_view", `${name}: ${message}`);
 
-// A field: `schema` is advertised on `set_view`; `check` validates the same value for page writes,
+// A field: `schema` describes it to the agent; `check` validates the same value for page writes,
 // which bypass the runtime's schema validation. `about(text)` adds the description the agent reads.
 function spec(definition) {
     return { ...definition, about: (text) => ({ ...definition, schema: { ...definition.schema, description: text } }) };
@@ -111,6 +110,17 @@ export class ViewState {
         return this.get();
     }
 
+    // Saved values from an earlier provider; fields that no longer exist or validate keep their default.
+    restore(values) {
+        for (const [name, value] of Object.entries(values ?? {})) {
+            try {
+                this.set({ [name]: value });
+            } catch {
+                // Keep the default.
+            }
+        }
+    }
+
     // Resets fields to their initial values, e.g. when the selection they describe goes away.
     reset(...names) {
         for (const name of names) this.#values[name] = structuredClone(this.#fields[name].initial);
@@ -136,13 +146,4 @@ export class ViewState {
         this.#listeners.add(listener);
         return () => this.#listeners.delete(listener);
     }
-}
-
-// The `set_view` input schema for a canvas's fields.
-export function viewSchema(fields) {
-    return {
-        type: "object",
-        additionalProperties: false,
-        properties: Object.fromEntries(Object.entries(fields).map(([name, spec]) => [name, spec.schema])),
-    };
 }

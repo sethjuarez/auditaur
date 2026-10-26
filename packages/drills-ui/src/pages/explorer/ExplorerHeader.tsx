@@ -55,7 +55,7 @@ export function ExplorerHeader({ state, busy, run, refresh, change }: Props) {
   const actions = (
     <>
       {state?.active && (
-        <Button id="cancel" variant="danger" size="small" leadingVisual={StopIcon} onClick={() => void run("/cancel")}>Cancel run</Button>
+        <Button id="cancel" variant="danger" size="small" leadingVisual={StopIcon} onClick={() => void run("/api/cancel")}>Cancel run</Button>
       )}
       {rerun > 0 && (
         <Button

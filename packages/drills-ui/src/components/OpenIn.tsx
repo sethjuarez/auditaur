@@ -1,41 +1,28 @@
-// "Open in" buttons from one drill canvas to another. Each posts the panel's `/open`
-// (lib/navigator.mjs), which opens or focuses the target canvas on the same run or test.
-import { ChecklistIcon, ImageIcon, ListOrderedIcon, PulseIcon, type Icon } from "@primer/octicons-react";
+// "Open in" buttons to another page on the same run or test. A click navigates this panel;
+// Ctrl- or Shift-click opens the page in a new panel and leaves this one as it is.
 import { Button, ButtonGroup } from "@primer/react";
-import { useId, useState, type MouseEvent } from "react";
-import { message, postJson } from "../lib/api";
-import { showToast } from "../lib/toast";
+import { useId, type MouseEvent } from "react";
+import { pageMeta } from "../app/pageMeta";
+import { routeFor, type PageId } from "../app/route";
+import { navigate, openInNewPanel } from "../app/routeStore";
 import "./OpenIn.css";
 
-export type CanvasName = "run" | "trace" | "snapshots" | "coverage";
+export type CanvasName = Exclude<PageId, "tests">;
 export interface OpenInLink { to: CanvasName; runId?: string; testId?: string; label?: string }
 
-// "run" is the live progress canvas; it is labelled "Progress" so it never reads as "execute".
-const CANVASES: Record<CanvasName, { label: string; icon: Icon; purpose: string }> = {
-  run: { label: "Progress", icon: PulseIcon, purpose: "live progress, results, and manual gates" },
-  trace: { label: "Trace", icon: ListOrderedIcon, purpose: "steps with screenshots, IPC, events, and logs" },
-  snapshots: { label: "Snapshots", icon: ImageIcon, purpose: "snapshot mismatches to review and accept" },
-  coverage: { label: "Coverage", icon: ChecklistIcon, purpose: "which commands and events tests exercised" },
-};
+const RUN_PAGES: CanvasName[] = ["run", "trace", "snapshots", "coverage"];
 
-// Buttons for every other run canvas for `runId`, from the page `here`.
+// Buttons for every other run page for `runId`, from the page `here`.
 export const runLinks = (runId: string | null | undefined, here: CanvasName | null): OpenInLink[] =>
-  runId ? (Object.keys(CANVASES) as CanvasName[]).filter((to) => to !== here).map((to) => ({ to, runId })) : [];
+  runId ? RUN_PAGES.filter((to) => to !== here).map((to) => ({ to, runId })) : [];
 
 function OpenInButton({ link }: { link: OpenInLink }) {
-  const [busy, setBusy] = useState(false);
-  const canvas = CANVASES[link.to];
-  // A button inside a clickable row opens the canvas without also toggling the row.
-  const open = async (event: MouseEvent) => {
+  const page = pageMeta(link.to)!;
+  const path = routeFor(link.to, { runId: link.runId, testId: link.testId });
+  // A button inside a clickable row opens the page without also toggling the row.
+  const open = (event: MouseEvent) => {
     event.stopPropagation();
-    setBusy(true);
-    try {
-      await postJson("/open", { to: link.to, ...(link.runId && { runId: link.runId }), ...(link.testId && { testId: link.testId }) });
-    } catch (err) {
-      showToast(`Could not open ${canvas.label.toLowerCase()}: ${message(err)}`);
-    } finally {
-      setBusy(false);
-    }
+    void (event.ctrlKey || event.metaKey || event.shiftKey ? openInNewPanel(path) : navigate(path));
   };
   return (
     <Button
@@ -44,12 +31,11 @@ function OpenInButton({ link }: { link: OpenInLink }) {
       data-open-to={link.to}
       data-open-run={link.runId}
       data-open-test={link.testId}
-      title={`Open the ${canvas.label} panel: ${canvas.purpose}${link.runId ? ` (${link.runId})` : ""}`}
-      leadingVisual={canvas.icon}
-      disabled={busy}
+      title={`${page.label}: ${page.purpose}${link.runId ? ` (${link.runId})` : ""}. Ctrl-click for a new panel.`}
+      leadingVisual={page.icon}
       onClick={open}
     >
-      {link.label ?? canvas.label}
+      {link.label ?? page.label}
     </Button>
   );
 }

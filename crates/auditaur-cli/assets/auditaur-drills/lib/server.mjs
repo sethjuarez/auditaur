@@ -1,5 +1,9 @@
-// One loopback HTTP server per open panel: the page's static assets from `ui/`, plus its routes.
+// One loopback HTTP server per open panel: the app's static assets from `ui/`, plus its API routes.
+// The API answers only requests carrying the panel's capability token (the `t` parameter of the URL
+// the panel opened, sent back as a header or, for event streams and images, as `t`), addressed to
+// this server by its loopback host. Another local page or process that finds the port gets nothing.
 
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -18,10 +22,18 @@ export function jsonResponse(res, value, status = 200) {
     res.end(JSON.stringify(value));
 }
 
+const MAX_BODY_BYTES = 1 << 20;
+export const TOKEN_HEADER = "x-drills-token";
+
 // A JSON object body; anything else is refused as a DrillError (409) rather than crashing a handler.
 export async function readBody(req) {
     const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
+    let size = 0;
+    for await (const chunk of req) {
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) throw new DrillError("invalid_body", "request body is too large");
+        chunks.push(chunk);
+    }
     const text = Buffer.concat(chunks).toString("utf8");
     if (!text) return {};
     let body;
@@ -41,20 +53,18 @@ export const RAW = Symbol("raw");
 // A route returning `STREAMED` has written (and keeps writing) the response itself.
 export const STREAMED = Symbol("streamed");
 
-// Only the generated page shell and the React bundle (packages/drills-ui) are served; nothing else
-// under `ui/` is reachable.
-function assetsFor(page) {
-    return new Map([["/", { shell: page }], ["/app.js", "app.js"], ["/app.css", "app.css"]]);
-}
+// Only the page shell and the React bundle (packages/drills-ui) are served; nothing else under `ui/`
+// is reachable. Every non-API path gets the shell, so the client router owns page paths.
+const ASSETS = new Map([["/app.js", "app.js"], ["/app.css", "app.css"]]);
 
-const shell = (page) =>
+const SHELL =
     `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Drills</title>` +
-    `<link rel="stylesheet" href="app.css"></head><body><div id="root" data-page="${page}"></div>` +
-    `<script type="module" src="app.js"></script></body></html>`;
+    `<link rel="stylesheet" href="/app.css"></head><body><div id="root"></div>` +
+    `<script type="module" src="/app.js"></script></body></html>`;
 
 async function sendAsset(res, asset) {
-    const body = asset.shell ? shell(asset.shell) : await readFile(join(UI_DIR, asset));
-    const file = asset.shell ? ".html" : asset;
+    const body = asset === null ? SHELL : await readFile(join(UI_DIR, asset));
+    const file = asset ?? ".html";
     res.writeHead(200, {
         "Content-Type": CONTENT_TYPES[file.slice(file.lastIndexOf("."))],
         "Cache-Control": "no-store",
@@ -77,19 +87,37 @@ function sendRaw(res, raw) {
     res.end(raw.body);
 }
 
-export async function startServer(routes, page) {
-    const assets = assetsFor(page);
+function allowed(req, url, host, token) {
+    if (req.headers.host !== host) return false;
+    const given = Buffer.from(String(req.headers[TOKEN_HEADER] ?? url.searchParams.get("t") ?? ""));
+    return given.length === token.length && timingSafeEqual(given, token);
+}
+
+export async function startServer(routes) {
+    const token = randomBytes(24).toString("base64url");
+    const secret = Buffer.from(token);
+    let host = null;
     const server = createServer(async (req, res) => {
         try {
             const url = new URL(req.url ?? "/", "http://127.0.0.1");
+            if (req.headers.host !== host) {
+                jsonResponse(res, { error: "wrong host" }, 421);
+                return;
+            }
+            if (url.pathname.startsWith("/api/") && !allowed(req, url, host, secret)) {
+                jsonResponse(res, { error: "forbidden" }, 403);
+                return;
+            }
             const route = routes[`${req.method} ${url.pathname}`];
             if (route) {
                 const value = await route(url, req, res);
                 if (value === STREAMED) return;
                 if (value?.[RAW]) sendRaw(res, value[RAW]);
                 else jsonResponse(res, value);
-            } else if (req.method === "GET" && assets.has(url.pathname)) {
-                await sendAsset(res, assets.get(url.pathname));
+            } else if (req.method === "GET" && ASSETS.has(url.pathname)) {
+                await sendAsset(res, ASSETS.get(url.pathname));
+            } else if (req.method === "GET" && !url.pathname.startsWith("/api/")) {
+                await sendAsset(res, null);
             } else {
                 jsonResponse(res, { error: "not found" }, 404);
             }
@@ -98,7 +126,8 @@ export async function startServer(routes, page) {
         }
     });
     await new Promise((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
-    return { server, url: `http://127.0.0.1:${server.address().port}/` };
+    host = `127.0.0.1:${server.address().port}`;
+    return { server, url: `http://${host}/?t=${token}` };
 }
 
 // Event streams never end on their own, so open connections are dropped rather than awaited.

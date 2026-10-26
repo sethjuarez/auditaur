@@ -1,6 +1,8 @@
 // Snapshots: review a drill run's ARIA and screenshot mismatches and accept new baselines.
 // Follows the newest run unless one is picked; the compare mode and slider split are the server's view.
 import { useState } from "react";
+import { routeFor } from "../../app/route";
+import { navigate } from "../../app/routeStore";
 import { Notice, Notices } from "../../components/Notice";
 import { useAction } from "../../hooks/useAction";
 import { useCanvasState } from "../../hooks/useCanvasState";
@@ -18,8 +20,9 @@ export function SnapshotsPage() {
   const [liveSplit, setLiveSplit] = useState<number | null>(null);
   const locked = action.busy || state?.run?.status === "running";
 
-  const select = async (runId: string | null) => {
-    if (await action.run("/select", { runId })) setNotice(null);
+  const select = (runId: string | null) => {
+    setNotice(null);
+    void navigate(routeFor("snapshots", { runId }));
   };
   const accept = (ids: string[]) => {
     if (!state?.run || !ids.length || locked) return;

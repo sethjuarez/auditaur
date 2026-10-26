@@ -1,5 +1,7 @@
 // Progress: one drill run live, step by step, with its human gates to answer; follows the newest
 // run unless one is picked.
+import { routeFor } from "../../app/route";
+import { navigate } from "../../app/routeStore";
 import { Notice, Notices } from "../../components/Notice";
 import { useAction } from "../../hooks/useAction";
 import { useCanvasState } from "../../hooks/useCanvasState";
@@ -23,8 +25,8 @@ export function LivePage() {
         state={state}
         loadError={error}
         busy={action.busy}
-        follow={(runId) => void action.run("/follow", { runId })}
-        cancel={() => void action.run("/cancel")}
+        follow={(runId) => void navigate(routeFor("run", { runId }))}
+        cancel={() => void action.run("/api/cancel", { runId: state?.run?.runId })}
       />
       <main id="main" className="page-main">
         <Notices>

@@ -1,5 +1,7 @@
 // Coverage: which IPC commands and events a drill run's tests exercised, and which they missed.
 // Follows the newest run unless one is picked; the tab and "unexercised only" are the server's view.
+import { routeFor } from "../../app/route";
+import { navigate } from "../../app/routeStore";
 import { Notice, Notices } from "../../components/Notice";
 import { useAction } from "../../hooks/useAction";
 import { useCanvasState } from "../../hooks/useCanvasState";
@@ -20,7 +22,7 @@ export function CoveragePage() {
         state={state}
         loadError={error}
         busy={action.busy}
-        select={(runId) => void action.run("/select", { runId })}
+        select={(runId) => void navigate(routeFor("coverage", { runId }))}
         reload={() => {
           action.clearError();
           void reload("?refresh");

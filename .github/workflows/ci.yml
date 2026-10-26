@@ -59,7 +59,7 @@ jobs:
         continue-on-error: true
 
   drills-ui:
-    name: Drill canvases UI
+    name: Drills canvas
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -72,6 +72,9 @@ jobs:
       - run: npm ci
         working-directory: packages/drills-ui
       - run: npm run typecheck
+        working-directory: packages/drills-ui
+      # Extension server tests (route, panel store, actions, HTTP API).
+      - run: npm test
         working-directory: packages/drills-ui
       - run: npm run build
         working-directory: packages/drills-ui
