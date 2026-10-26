@@ -1,12 +1,10 @@
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { RUNS_DIR } from "./paths.mjs";
 import { exists } from "./files.mjs";
 import { pickRun } from "./runs.mjs";
 import { readEvents } from "./events.mjs";
 import { DrillError } from "./errors.mjs";
-
-export const GATE_REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
+import { GATE_REQUEST_ID, publishAnswer, queuePaths } from "./gate-queue.mjs";
 
 // Pending gates whose request file is still published, with what the panel needs to answer them.
 export async function pendingGates(run, events) {
@@ -36,8 +34,8 @@ export async function pendingGates(run, events) {
     return gates;
 }
 
-// Answers a gate the shown run is waiting on, with the same response file the gate canvas and
-// `respond_human_gate` write. Only gates announced in the run's own event log can be answered.
+// Answers a gate the shown run is waiting on. Only gates announced in the run's own event log can
+// be answered, with the choices and inputs that log offered.
 export async function respondGate(state, body) {
     const { run } = await pickRun(state);
     if (!run || run.status !== "running") {
@@ -50,69 +48,17 @@ export async function respondGate(state, body) {
     const events = await readEvents(join(state.workspace, RUNS_DIR, run.runId, "events.jsonl"));
     const waiting = events.gates.find((candidate) => candidate.gate?.request?.requestId === requestId);
     const request = waiting?.gate?.request;
-    if (!request || !(await exists(request.requestPath))) {
+    if (!request) {
         throw new DrillError("gate_not_pending", `gate \`${requestId}\` is not waiting for an answer`);
     }
-    const requestPath = resolve(request.requestPath);
-    const responsePath = resolve(request.responsePath);
-    const queue = dirname(dirname(requestPath));
-    if (
-        basename(requestPath) !== `${requestId}.json` ||
-        basename(dirname(requestPath)) !== "requests" ||
-        basename(queue) !== "human-gates" ||
-        responsePath !== join(queue, "responses", `${requestId}.json`)
-    ) {
+    if (resolve(String(request.responsePath ?? "")) !== queuePaths(request.requestPath).responsePath) {
         throw new DrillError("invalid_gate", "the gate's request is outside a human-gates queue");
     }
-    // The published request, not just the event log, must name this gate.
-    const published = await readFile(requestPath, "utf8")
-        .then((text) => JSON.parse(text))
-        .catch(() => null);
-    if (published?.requestId !== requestId || published?.nonce !== request.nonce) {
-        throw new DrillError("gate_not_pending", `gate \`${requestId}\` is not waiting for an answer`);
-    }
-    const gate = waiting.gate;
-    const choices = gate.choices ?? [];
-    let choiceId = body?.choiceId ?? null;
-    if (choices.length) {
-        if (!choices.some((choice) => choice.id === choiceId)) {
-            throw new DrillError("invalid_choice", `choose one of: ${choices.map((choice) => choice.id).join(", ")}`);
-        }
-    } else if (choiceId != null) {
-        throw new DrillError("invalid_choice", "this gate has no choices; omit choiceId to continue");
-    }
-    const given = Array.isArray(body?.inputs) ? body.inputs : [];
-    const inputs = (gate.inputs ?? []).map((input) => ({
-        id: input.id,
-        value: String(given.find((candidate) => candidate?.id === input.id)?.value ?? ""),
-    }));
-    const chosen = choices.find((choice) => choice.id === choiceId);
-    // The runner checks required inputs for every answer except retry.
-    if (chosen?.outcome !== "retry") {
-        const missing = (gate.inputs ?? []).filter((input, index) => input.required && !inputs[index].value.trim());
-        if (missing.length) {
-            throw new DrillError("missing_input", `fill in: ${missing.map((input) => input.label ?? input.id).join(", ")}`);
-        }
-    }
-    const response = {
-        schemaVersion: 1,
-        requestId,
-        runId: request.runId,
-        gateId: request.gateId,
-        attempt: request.attempt,
-        nonce: request.nonce,
+    return publishAnswer({
+        requestPath: request.requestPath,
+        expected: { requestId, nonce: request.nonce },
+        gate: waiting.gate,
+        body,
         responder: "human-confirmed-via-drill-run-canvas",
-        choiceId,
-        inputs,
-    };
-    const temp = `${responsePath}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(temp, JSON.stringify(response, null, 2), "utf8");
-    await rename(temp, responsePath);
-    // The gate may have timed out or been cancelled while we wrote: its cleanup already ran, so the
-    // request is gone but our answer is not. Drop it (it can hold sensitive inputs). If both are
-    // gone, the runner consumed the answer.
-    if (!(await exists(requestPath)) && (await unlink(responsePath).then(() => true, () => false))) {
-        throw new DrillError("gate_not_pending", `gate \`${requestId}\` stopped waiting before the answer arrived`);
-    }
-    return { requestId, choiceId, answered: true };
+    });
 }

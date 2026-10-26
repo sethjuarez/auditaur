@@ -14,6 +14,7 @@ export const PAGES = {
     trace: ["run", "test", "attempt"],
     snapshots: ["run"],
     coverage: ["run"],
+    gate: [],
 };
 
 export const DEFAULT_ROUTE = "/tests";

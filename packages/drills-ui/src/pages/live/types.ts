@@ -1,4 +1,5 @@
-// The run canvas's `/state`, as canvases/live/view.mjs builds it.
+// The run page's `/state`, as features/run/view.mjs builds it.
+import type { Gate } from "../../components/gate";
 
 export interface LiveStep {
   phase?: string;
@@ -45,25 +46,6 @@ export interface LiveRun {
   startedAt?: string;
   durationMs?: number;
   suites: LiveSuite[];
-}
-
-export interface GateChoice { id: string; label: string; outcome: string }
-export interface GateInput { id: string; label?: string; kind?: string; required?: boolean; sensitive?: boolean }
-
-export interface Gate {
-  requestId: string | null;
-  test: string;
-  attempt?: number;
-  since: string;
-  name: string;
-  instructions: string;
-  selector: string | null;
-  expectText: string | null;
-  timeoutMs: number | null;
-  manualContinue: boolean;
-  choices: GateChoice[];
-  inputs: GateInput[];
-  clipboard: { label: string; value?: string; sensitive?: boolean; redacted?: boolean; status: string } | null;
 }
 
 export interface LiveState {

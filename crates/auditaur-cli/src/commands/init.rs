@@ -9,13 +9,10 @@ use serde::Serialize;
 use crate::commands::read;
 
 pub(crate) const AUDITAUR_DEBUG_SKILL: &str = include_str!("../../assets/auditaur-debug-skill.md");
-pub(crate) const AUDITAUR_GATE_EXTENSION: &str =
-    include_str!("../../assets/auditaur-gate-extension.mjs");
+
 const GITHUB_SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-debug", "SKILL.md"];
 const AGENTS_SKILL_RELATIVE_PATH: [&str; 4] = [".agents", "skills", "auditaur-debug", "SKILL.md"];
-const GITHUB_EXTENSION_RELATIVE_DIR: [&str; 3] = [".github", "extensions", "auditaur-gate"];
-const AUDITAUR_GATE_EXTENSION_FILES: &[(&str, &str)] =
-    &[("extension.mjs", AUDITAUR_GATE_EXTENSION)];
+
 const GITHUB_DRILLS_EXTENSION_RELATIVE_DIR: [&str; 3] =
     [".github", "extensions", "auditaur-drills"];
 
@@ -31,6 +28,8 @@ pub(crate) const AUDITAUR_DRILLS_EXTENSION_FILES: &[(&str, &str)] = drills_exten
     "extension.mjs",
     "features/coverage/index.mjs",
     "features/coverage/view.mjs",
+    "features/gate/index.mjs",
+    "features/gate/view.mjs",
     "features/run/index.mjs",
     "features/run/view.mjs",
     "features/snapshots/index.mjs",
@@ -53,6 +52,7 @@ pub(crate) const AUDITAUR_DRILLS_EXTENSION_FILES: &[(&str, &str)] = drills_exten
     "lib/events.mjs",
     "lib/features.mjs",
     "lib/files.mjs",
+    "lib/gate-queue.mjs",
     "lib/gates.mjs",
     "lib/launcher.mjs",
     "lib/panel-store.mjs",
@@ -131,7 +131,7 @@ struct InitSkillResult {
 #[serde(rename_all = "camelCase")]
 struct InitExtensionResult {
     ok: bool,
-    /// The gate extension's path, kept for callers written before multiple extensions.
+    /// The first extension's path, kept for callers written before `extensions`.
     path: String,
     overwritten: bool,
     extensions: Vec<InitExtension>,
@@ -209,18 +209,11 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
     let root = path
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir().context("failed to resolve current directory")?);
-    let targets = [
-        (
-            "auditaur-gate",
-            GITHUB_EXTENSION_RELATIVE_DIR,
-            AUDITAUR_GATE_EXTENSION_FILES,
-        ),
-        (
-            "auditaur-drills",
-            GITHUB_DRILLS_EXTENSION_RELATIVE_DIR,
-            AUDITAUR_DRILLS_EXTENSION_FILES,
-        ),
-    ]
+    let targets = [(
+        "auditaur-drills",
+        GITHUB_DRILLS_EXTENSION_RELATIVE_DIR,
+        AUDITAUR_DRILLS_EXTENSION_FILES,
+    )]
     .map(|(name, relative, files)| {
         let dir = relative
             .iter()
@@ -482,7 +475,7 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  skill  Install the Auditaur debug agent skill into a repository");
-    println!("  extension  Install the Auditaur canvas extensions (manual gate, drill explorer) into a repository");
+    println!("  extension  Install the Auditaur drills canvas extension into a repository");
     println!("  diagnostics  Install optional generic diagnostics config and guidance");
 }
 
@@ -493,7 +486,7 @@ fn print_skill_help() {
 fn print_extension_help() {
     println!("Usage: auditaur init extension [--path <repo-root>] [--force] [--json]");
     println!();
-    println!("Installs .github/extensions/auditaur-gate and .github/extensions/auditaur-drills.");
+    println!("Installs .github/extensions/auditaur-drills (drill tests, runs, traces, and manual gates).");
     println!("Existing extensions are kept unless --force is passed.");
 }
 

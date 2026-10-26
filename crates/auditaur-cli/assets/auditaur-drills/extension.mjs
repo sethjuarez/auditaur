@@ -45,7 +45,7 @@ const canvas = createCanvas({
     id: CANVAS_ID,
     displayName: "Auditaur Drills",
     description:
-        "Auditaur drill tests as one app: browse suites and results, run drills and watch them live (answering human gates), step through a test's trace, review snapshot mismatches, and see IPC/event coverage. Use the navigate action to change pages.",
+        "Auditaur drill tests as one app: browse suites and results, run drills and watch them live (answering human gates), step through a test's trace, review snapshot mismatches, and see IPC/event coverage. Also answers a pending `auditaur drill` human gate (open with input.gate). Use the navigate action to change pages.",
     inputSchema: openSchema,
     actions: canvasActions(features, (from, route) => panels.openNew(from, route)).map(toSdkAction),
     open: surfaced(async (ctx) => {

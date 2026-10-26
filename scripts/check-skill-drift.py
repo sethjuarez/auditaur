@@ -5,8 +5,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 REPO_SKILL = ROOT / ".github" / "skills" / "auditaur-debug" / "SKILL.md"
 CLI_SKILL_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-debug-skill.md"
-REPO_EXTENSION = ROOT / ".github" / "extensions" / "auditaur-gate" / "extension.mjs"
-CLI_EXTENSION_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-gate-extension.mjs"
+
 REPO_DRILLS_EXTENSION = ROOT / ".github" / "extensions" / "auditaur-drills"
 CLI_DRILLS_EXTENSION_ASSET = ROOT / "crates" / "auditaur-cli" / "assets" / "auditaur-drills"
 
@@ -41,11 +40,7 @@ def main() -> int:
             REPO_SKILL,
             CLI_SKILL_ASSET,
         ),
-        (
-            "Auditaur gate canvas extension",
-            REPO_EXTENSION,
-            CLI_EXTENSION_ASSET,
-        ),
+
         (
             "Auditaur drills canvas extension",
             REPO_DRILLS_EXTENSION,

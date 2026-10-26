@@ -2,16 +2,18 @@
 // opens the current page in a new panel.
 import { LinkExternalIcon } from "@primer/octicons-react";
 import { IconButton, UnderlineNav } from "@primer/react";
-import { PAGE_META } from "./pageMeta";
-import { routeFor } from "./route";
+import { PAGE_META, type PageMeta } from "./pageMeta";
+import { routeFor, type Route } from "./route";
 import { navigate, openInNewPanel, useRoute } from "./routeStore";
+
+const hasTab = (page: PageMeta, route: Route) => !page.optional || route.page === page.id || route.recent[page.id] != null;
 
 export function AppNav({ build }: { build: string | null }) {
   const route = useRoute();
   return (
     <div className="app-nav">
       <UnderlineNav aria-label="Drills" className="app-nav-tabs">
-        {PAGE_META.map((page) => {
+        {PAGE_META.filter((page) => hasTab(page, route)).map((page) => {
           const href = route.recent[page.id] ?? routeFor(page.id);
           return (
             <UnderlineNav.Item

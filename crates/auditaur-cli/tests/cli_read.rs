@@ -1252,94 +1252,41 @@ fn packaged_init_skill_matches_repo_skill() {
 }
 
 #[test]
-fn init_extension_installs_auditaur_gate_canvas() {
+fn init_extension_installs_drills_canvas() {
     let repo = TempDir::new().unwrap();
     let extensions = repo.path().join(".github").join("extensions");
-    let extension_path = extensions.join("auditaur-gate").join("extension.mjs");
     let drills_path = extensions.join("auditaur-drills").join("extension.mjs");
+    let root = repo.path().to_str().unwrap();
 
-    let installed = run_json([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--json",
-    ]);
+    let installed = run_json(["init", "extension", "--path", root, "--json"]);
     assert_eq!(installed["ok"], true);
     assert_eq!(installed["overwritten"], false);
-    assert_eq!(installed["extensions"][0]["name"], "auditaur-gate");
+    assert_eq!(installed["extensions"].as_array().unwrap().len(), 1);
+    assert_eq!(installed["extensions"][0]["name"], "auditaur-drills");
     assert_eq!(installed["extensions"][0]["status"], "installed");
-    assert_eq!(installed["extensions"][1]["name"], "auditaur-drills");
-    assert_eq!(installed["extensions"][1]["status"], "installed");
-    let extension = fs::read_to_string(&extension_path).unwrap();
-    assert!(extension.contains("id: \"auditaur-human-gate\""));
-    assert!(extension.contains("respond"));
     assert!(fs::read_to_string(&drills_path)
         .unwrap()
         .contains("id: CANVAS_ID"));
+    // Manual gates are a page of the drills canvas; there is no separate gate extension.
     assert!(extensions
         .join("auditaur-drills")
         .join("features")
-        .join("tests")
+        .join("gate")
         .join("index.mjs")
         .is_file());
+    assert!(!extensions.join("auditaur-gate").exists());
 
-    let failure = run_failure([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--json",
-    ]);
+    let failure = run_failure(["init", "extension", "--path", root, "--json"]);
     assert!(failure.contains("already exist"));
 
-    // A repo that installed only the gate earlier picks up the new canvas without --force.
-    fs::remove_file(&drills_path).unwrap();
-    fs::write(&extension_path, "customized").unwrap();
-    let upgraded = run_json([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--json",
-    ]);
-    assert_eq!(upgraded["extensions"][0]["status"], "skipped");
-    // The drills entry point is gone but its other files remain, so it is repaired.
-    assert_eq!(upgraded["extensions"][1]["status"], "repaired");
-    assert_eq!(upgraded["overwritten"], false);
-    assert_eq!(fs::read_to_string(&extension_path).unwrap(), "customized");
-    assert!(drills_path.exists());
-
-    // `overwritten` keeps describing the gate at `path`; `extensions` carries the rest.
-    fs::remove_file(&extension_path).unwrap();
-    let forced = run_json([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--force",
-        "--json",
-    ]);
-    assert_eq!(forced["overwritten"], false);
-    assert_eq!(forced["extensions"][0]["status"], "installed");
-    assert_eq!(forced["extensions"][1]["status"], "overwritten");
-
-    let overwritten = run_json([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--force",
-        "--json",
-    ]);
+    fs::write(&drills_path, "customized").unwrap();
+    let overwritten = run_json(["init", "extension", "--path", root, "--force", "--json"]);
     assert_eq!(overwritten["overwritten"], true);
     assert_eq!(overwritten["extensions"][0]["status"], "overwritten");
-    assert_eq!(overwritten["extensions"][1]["status"], "overwritten");
-    assert!(fs::read_to_string(extension_path)
+    assert!(fs::read_to_string(&drills_path)
         .unwrap()
-        .contains("Auditaur Manual Gate"));
+        .contains("id: CANVAS_ID"));
 }
-
 #[test]
 fn init_diagnostics_installs_versioned_config_and_guidance() {
     let repo = TempDir::new().unwrap();
@@ -1440,15 +1387,6 @@ fn init_diagnostics_installs_versioned_config_and_guidance() {
 }
 
 #[test]
-fn packaged_init_extension_matches_repo_extension() {
-    let repo_extension = include_str!("../../../.github/extensions/auditaur-gate/extension.mjs")
-        .replace("\r\n", "\n");
-    let packaged_extension =
-        include_str!("../assets/auditaur-gate-extension.mjs").replace("\r\n", "\n");
-    assert_eq!(packaged_extension, repo_extension);
-}
-
-#[test]
 fn init_extension_restores_missing_files_without_touching_edits() {
     let repo = TempDir::new().unwrap();
     let args = [
@@ -1464,8 +1402,8 @@ fn init_extension_restores_missing_files_without_touching_edits() {
     fs::write(drills.join("extension.mjs"), "customized").unwrap();
 
     let repaired = run_json(args);
-    assert_eq!(repaired["extensions"][0]["status"], "skipped");
-    assert_eq!(repaired["extensions"][1]["status"], "repaired");
+    assert_eq!(repaired["extensions"].as_array().unwrap().len(), 1);
+    assert_eq!(repaired["extensions"][0]["status"], "repaired");
     assert!(drills.join("ui").join("app.js").exists());
     assert_eq!(
         fs::read_to_string(drills.join("extension.mjs")).unwrap(),
@@ -1476,7 +1414,7 @@ fn init_extension_restores_missing_files_without_touching_edits() {
     fs::remove_file(drills.join("extension.mjs")).unwrap();
     let [a, b, c, d, e] = args;
     let overwritten = run_json([a, b, c, d, e, "--force"]);
-    assert_eq!(overwritten["extensions"][1]["status"], "overwritten");
+    assert_eq!(overwritten["extensions"][0]["status"], "overwritten");
 }
 
 fn read_tree(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, String>) {

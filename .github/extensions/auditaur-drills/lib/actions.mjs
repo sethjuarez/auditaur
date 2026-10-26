@@ -26,7 +26,7 @@ function appActions(features, openPanel) {
     return [
         {
             name: "navigate",
-            description: "Show a page of this panel: tests, run (live progress and gates), trace (one test attempt), snapshots, or coverage. Omit runId to follow the newest run. Set newPanel to open it in another panel instead.",
+            description: "Show a page of this panel: tests, run (live progress and gates), trace (one test attempt), snapshots, coverage, or gate (one `auditaur drill` gate; see show_gate). Omit runId to follow the newest run. Set newPanel to open it in another panel instead.",
             inputSchema: {
                 type: "object",
                 additionalProperties: false,
@@ -108,7 +108,7 @@ function appActions(features, openPanel) {
 // Page actions run against that page's state.
 const pageAction = (feature) => (action) => ({
     ...action,
-    handler: (panel, input) => action.handler(panel.page(feature.page).state, input),
+    handler: (panel, input) => action.handler(panel.page(feature.page).state, input, { navigate: (path) => panel.navigate(path) }),
 });
 
 // All actions, refusing duplicate names: one would silently shadow the other.

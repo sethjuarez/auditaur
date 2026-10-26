@@ -2,6 +2,7 @@
 // runs launch, the telemetry stores coverage compares against, and the selection from the route.
 
 import { DrillError } from "./errors.mjs";
+import { queuePaths } from "./gate-queue.mjs";
 import { cliFor, workspaceFor } from "./paths.mjs";
 import { cwdProperty } from "./schemas.mjs";
 
@@ -44,7 +45,14 @@ export const openSchema = {
         route: {
             type: "string",
             maxLength: 600,
-            description: "Page to show first, e.g. `/trace?run=<runId>&test=<testId>`. Pages: /tests, /run, /trace, /snapshots, /coverage. Only used by a new panel; use the `navigate` action on an open one.",
+            description: "Page to show first, e.g. `/trace?run=<runId>&test=<testId>`. Pages: /tests, /run, /trace, /snapshots, /coverage, /gate. Only used by a new panel; use the `navigate` action on an open one.",
+        },
+        gate: {
+            type: "object",
+            additionalProperties: true,
+            required: ["requestPath"],
+            description: "A pending human gate of an `auditaur drill` run to show on the gate page: an entry from the list_pending_human_gates MCP tool (only requestPath is read). The panel opens on /gate.",
+            properties: { requestPath: { type: "string", description: "The request's absolute path." } },
         },
     },
 };
@@ -65,6 +73,8 @@ export function sharedState(input) {
         run: input?.run ?? {},
         dbs,
         trusted: new Set(dbs),
+        // The gate request the gate page shows.
+        gate: input?.gate ? queuePaths(input.gate.requestPath).requestPath : null,
         // Selection, from the route.
         runId: null,
         testId: null,
@@ -79,8 +89,8 @@ export function sharedState(input) {
     };
 }
 
-// What a new panel opened from this one inherits: everything but the route.
+// What a new panel opened from this one inherits: everything but the route and gate.
 export const inheritedInput = (input) => {
-    const { route: _route, ...rest } = input ?? {};
+    const { route: _route, gate: _gate, ...rest } = input ?? {};
     return rest;
 };

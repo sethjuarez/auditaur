@@ -12,7 +12,7 @@ use std::path::PathBuf;
     name = "auditaur",
     version,
     about = "Runtime observability for Tauri apps and AI agents.",
-    after_help = "Agent commands:\n  agent guide [--json]  Print the recommended Auditaur workflow for coding agents\n  observe --app <name> -- <dev command>  Start a dev app under no-config observation\n\nBootstrap commands:\n  init skill [--path <repo-root>] [--agents-path] [--force] [--json]  Install the Auditaur debug agent skill\n  init extension [--path <repo-root>] [--force] [--json]  Install the Auditaur gate canvas extension"
+    after_help = "Agent commands:\n  agent guide [--json]  Print the recommended Auditaur workflow for coding agents\n  observe --app <name> -- <dev command>  Start a dev app under no-config observation\n\nBootstrap commands:\n  init skill [--path <repo-root>] [--agents-path] [--force] [--json]  Install the Auditaur debug agent skill\n  init extension [--path <repo-root>] [--force] [--json]  Install the Auditaur drills canvas extension"
 )]
 struct Cli {
     #[command(subcommand)]

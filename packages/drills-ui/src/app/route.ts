@@ -1,5 +1,5 @@
 // The panel's route, owned by the server (lib/route.mjs): which page shows, for which run and test.
-export type PageId = "tests" | "run" | "trace" | "snapshots" | "coverage";
+export type PageId = "tests" | "run" | "trace" | "snapshots" | "coverage" | "gate";
 
 export interface Route {
   path: string;
@@ -23,6 +23,7 @@ const PARAMS: Record<PageId, (keyof typeof NAMES)[]> = {
   trace: ["runId", "testId", "attempt"],
   snapshots: ["runId"],
   coverage: ["runId"],
+  gate: [],
 };
 const NAMES = { runId: "run", testId: "test", attempt: "attempt" } as const;
 

@@ -26,25 +26,3 @@
 
 .gates { display: flex; flex-direction: column; gap: var(--base-size-12); }
 .gates:empty { display: none; }
-.gate {
-  border: var(--borderWidth-thin) solid var(--borderColor-attention-emphasis);
-  border-radius: var(--borderRadius-medium);
-  background: var(--bgColor-default);
-  overflow: hidden;
-}
-.gate-head {
-  display: flex;
-  align-items: center;
-  gap: var(--base-size-8);
-  padding: var(--base-size-8) var(--base-size-12);
-  background: var(--bgColor-attention-muted);
-  border-bottom: var(--borderWidth-thin) solid var(--borderColor-attention-emphasis);
-}
-.gate-icon { color: var(--fgColor-attention); flex: none; }
-.gate h2 { margin: 0; flex: 1; min-width: 0; font-size: var(--text-body-size-medium); font-weight: var(--base-text-weight-semibold); }
-.gate-body { display: flex; flex-direction: column; gap: var(--base-size-8); padding: var(--base-size-12); }
-.gate-meta, .gate-note { font-size: var(--text-caption-size); }
-.gate p { margin: 0; }
-.gate-instructions { white-space: pre-wrap; }
-.gate-fields { display: flex; flex-direction: column; gap: var(--base-size-12); }
-.gate-choices { padding-top: var(--base-size-4); }

@@ -5,7 +5,7 @@ import { navigate } from "../../app/routeStore";
 import { Notice, Notices } from "../../components/Notice";
 import { useAction } from "../../hooks/useAction";
 import { useCanvasState } from "../../hooks/useCanvasState";
-import type { GateAnswer } from "./GateForm";
+import type { GateAnswer } from "../../components/gate";
 import { GateList } from "./GateList";
 import { LiveHeader } from "./LiveHeader";
 import { RunTree } from "./RunTree";

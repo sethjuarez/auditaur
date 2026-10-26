@@ -1,7 +1,6 @@
 // Every gate the run is waiting on. A new gate takes focus at its first field.
 import { useEffect, useRef } from "react";
-import { GateForm, type GateAnswer } from "./GateForm";
-import type { Gate } from "./types";
+import { GateForm, type Gate, type GateAnswer } from "../../components/gate";
 
 export function GateList({ gates, answer }: { gates: Gate[]; answer: (answer: GateAnswer) => Promise<boolean> }) {
   const list = useRef<HTMLDivElement>(null);

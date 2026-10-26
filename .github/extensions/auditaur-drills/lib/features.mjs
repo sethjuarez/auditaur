@@ -1,7 +1,7 @@
 // Loads each page's feature module on its own, so one that fails to import or doesn't have the
 // feature shape takes down only its page: the others keep working and `health` names what broke.
 
-const PAGE_MODULES = ["tests", "run", "trace", "snapshots", "coverage"];
+const PAGE_MODULES = ["tests", "run", "trace", "snapshots", "coverage", "gate"];
 
 // A feature: `{ page, view, routes(state), actions[], describe?(state), sync?(state) }`.
 function checkFeature(feature, page) {

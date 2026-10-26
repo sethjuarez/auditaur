@@ -4,6 +4,7 @@
 
 import { checkDbs, sharedState } from "./config.mjs";
 import { DrillError } from "./errors.mjs";
+import { queuePaths } from "./gate-queue.mjs";
 import { DEFAULT_ROUTE, PAGES, canonicalRoute, formatRoute, parseRoute } from "./route.mjs";
 import { ViewState } from "./view-state.mjs";
 
@@ -48,8 +49,9 @@ export class AppPanel {
     rev = 0;
     version = 0;
 
-    // `saved` is what an earlier provider stored for this panel. It wins over `input.route`, because
-    // a rehydrate replays the original input and must not undo the user's navigation.
+    // `saved` is what an earlier provider stored for this panel. It wins over `input.route` (and its
+    // gate over `input.gate`), because a rehydrate replays the original input and must not undo the
+    // user's navigation.
     constructor({ features, input, saved, save }) {
         this.input = input ?? {};
         this.shared = sharedState(this.input);
@@ -66,11 +68,18 @@ export class AppPanel {
                 // Keep the input's stores.
             }
         }
+        if (saved?.gate) {
+            try {
+                this.shared.gate = queuePaths(saved.gate).requestPath;
+            } catch {
+                // Keep the input's gate.
+            }
+        }
         for (const [page, path] of Object.entries(saved?.recent ?? {})) {
             const route = tryRoute(path);
             if (route && parseRoute(route).page === page) this.#recent[page] = route;
         }
-        this.#apply(tryRoute(saved?.route) ?? tryRoute(this.input.route) ?? DEFAULT_ROUTE);
+        this.#apply(tryRoute(saved?.route) ?? tryRoute(this.input.route) ?? (this.shared.gate ? "/gate" : DEFAULT_ROUTE));
         // After the route, so restored views are not reset by the selection they belong to.
         for (const [page, entry] of this.#pages) entry.view.restore(saved?.views?.[page]);
         for (const entry of this.#pages.values()) entry.view.subscribe(() => this.changed());
@@ -135,6 +144,7 @@ export class AppPanel {
             recent: { ...this.#recent },
             views: Object.fromEntries([...this.#pages].map(([page, entry]) => [page, entry.view.get()])),
             dbs: this.shared.dbs,
+            gate: this.shared.gate,
         };
     }
 

@@ -7,7 +7,7 @@ const { loadFeatures } = await lib("features.mjs");
 test("all pages load", async () => {
     const { features, failed } = await loadFeatures();
     assert.deepEqual(failed, []);
-    assert.deepEqual(features.map((feature) => feature.page), ["tests", "run", "trace", "snapshots", "coverage"]);
+    assert.deepEqual(features.map((feature) => feature.page), ["tests", "run", "trace", "snapshots", "coverage", "gate"]);
 });
 
 test("a broken page is isolated", async () => {

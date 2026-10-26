@@ -1,43 +1,17 @@
-// A gate the run is waiting on: what to do, what it continues on by itself, the fields it asks
-// for, and its answers. A retry answer skips the required-field check, as the runner does.
+// A gate waiting for an answer: what it asks, the fields it needs, and its answers. A retry answer
+// skips the required-field check, as the runner does.
 import { ClockIcon } from "@primer/octicons-react";
 import { Label } from "@primer/react";
 import { useState, type FormEvent } from "react";
-import { ms } from "../../lib/format";
 import { GateChoices } from "./GateChoices";
 import { GateField } from "./GateField";
-import type { Gate } from "./types";
-
-export interface GateAnswer { requestId: string; choiceId: string | null; inputs: { id: string; value: string }[] }
+import { GateMeta } from "./GateMeta";
+import type { Gate, GateAnswer } from "./types";
+import "./Gate.css";
 
 interface Props {
   gate: Gate;
   answer: (answer: GateAnswer) => Promise<boolean>;
-}
-
-function GateMeta({ gate }: { gate: Gate }) {
-  const clip = gate.clipboard;
-  return (
-    <>
-      <div className="gate-meta muted">
-        {gate.test} · waiting since {new Date(gate.since).toLocaleTimeString()}
-        {gate.timeoutMs ? ` · times out after ${ms(gate.timeoutMs)}` : ""}
-      </div>
-      <p className="gate-instructions">{gate.instructions}</p>
-      {gate.selector && (
-        <p className="muted gate-note">
-          Continues on its own when <span className="path">{gate.selector}</span>
-          {gate.expectText ? <> shows “{gate.expectText}”</> : " appears"}.
-        </p>
-      )}
-      {clip && (
-        <p className="muted gate-note">
-          {clip.label}: {clip.value && !clip.sensitive && !clip.redacted ? <span className="path">{clip.value}</span> : "(hidden)"}
-          {` · clipboard ${clip.status}`}
-        </p>
-      )}
-    </>
-  );
 }
 
 export function GateForm({ gate, answer }: Props) {

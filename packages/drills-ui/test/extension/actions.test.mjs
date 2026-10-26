@@ -11,9 +11,9 @@ const byName = (actions) => Object.fromEntries(actions.map((action) => [action.n
 
 test("the action set is pinned", () => {
     assert.deepEqual(canvasActions(features, async () => {}).map((action) => action.name).sort(), [
-        "accept_snapshots", "cancel", "get_coverage", "get_snapshots", "get_status", "get_summary", "get_trace",
-        "get_view", "health", "list_app_stores", "navigate", "refresh", "respond_gate", "run", "screenshot",
-        "set_sources", "set_view",
+        "accept_snapshots", "answer_gate", "cancel", "get_coverage", "get_gate", "get_snapshots", "get_status",
+        "get_summary", "get_trace", "get_view", "health", "list_app_stores", "navigate", "refresh", "respond_gate",
+        "run", "screenshot", "set_sources", "set_view", "show_gate",
     ]);
 });
 
