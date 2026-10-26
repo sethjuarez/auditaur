@@ -1,14 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { lib } from "./lib.mjs";
+import { lib, tempDir } from "./lib.mjs";
 
 const { PanelStore } = await lib("panel-store.mjs");
 
 async function boundStore() {
-    const workspace = await mkdtemp(join(tmpdir(), "drills-store-"));
+    const workspace = await tempDir("drills-store-");
     const store = new PanelStore();
     store.bind(workspace);
     return { store, dir: join(workspace, "auditaur-drills", "panels") };

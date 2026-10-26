@@ -1,9 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { RUN, lib } from "./lib.mjs";
+import { RUN, lib, tempDir } from "./lib.mjs";
 
 const { Panels, CANVAS_ID } = await lib("panels.mjs");
 const { PanelStore } = await lib("panel-store.mjs");
@@ -19,7 +16,7 @@ const api = (url, path) => {
 const post = (url, path, body) => fetch(api(url, path), { method: "POST", body: JSON.stringify(body) });
 
 async function setup() {
-    const workspacePath = await mkdtemp(join(tmpdir(), "drills-panels-"));
+    const workspacePath = await tempDir("drills-panels-");
     const store = new PanelStore();
     const calls = [];
     const panels = new Panels({ features, store });

@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LIB, lib } from "./lib.mjs";
+import { LIB, lib, tempDir } from "./lib.mjs";
 
 const { queuePaths, publishAnswer, checkAnswer } = await lib("gate-queue.mjs");
 const { gateView } = await import(new URL("../features/gate/view.mjs", LIB));
@@ -17,7 +17,7 @@ const nanos = (ms) => String(BigInt(Math.round(ms)) * 1_000_000n);
 
 // A human-gates queue with one published request; returns its paths.
 async function publish(request = {}) {
-    const queue = join(await mkdtemp(join(tmpdir(), "drills-gate-")), "human-gates");
+    const queue = join(await tempDir("drills-gate-"), "human-gates");
     await mkdir(join(queue, "requests"), { recursive: true });
     await mkdir(join(queue, "responses"), { recursive: true });
     const requestId = request.requestId ?? "gate-1";
@@ -105,7 +105,7 @@ test("the first answer wins; a second never replaces it", async () => {
 
 test("publishAnswer refuses a responses directory that links elsewhere", async () => {
     const { requestPath, responsePath } = await publish();
-    const elsewhere = await mkdtemp(join(tmpdir(), "drills-elsewhere-"));
+    const elsewhere = await tempDir("drills-elsewhere-");
     await rm(join(responsePath, ".."), { recursive: true });
     await symlink(elsewhere, join(responsePath, ".."), "junction");
     await assert.rejects(publishAnswer({ requestPath, body: answer, responder: "test" }), { code: "invalid_gate" });
