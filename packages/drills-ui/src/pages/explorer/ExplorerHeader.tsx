@@ -11,7 +11,7 @@ import { isRunning, type ExplorerRun, type ExplorerState } from "./types";
 interface Props {
   state: ExplorerState | null;
   busy: boolean;
-  run: (path: string, body?: unknown) => Promise<void>;
+  run: (path: string, body?: unknown) => Promise<unknown>;
   refresh: () => void;
   change: (patch: ViewPatch) => void;
 }

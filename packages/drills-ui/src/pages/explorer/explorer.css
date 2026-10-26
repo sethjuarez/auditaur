@@ -10,62 +10,11 @@
 .suite-name { font-size: var(--text-body-size-medium); }
 .suite-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
-.test {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
-  align-items: center;
-  gap: var(--base-size-8);
-  min-height: 40px;
-  padding: var(--base-size-4) var(--base-size-8) var(--base-size-4) var(--base-size-12);
-  cursor: pointer;
-}
-.test:hover { background: var(--control-transparent-bgColor-hover); }
-.test-toggle {
-  display: grid;
-  grid-template-columns: 16px 16px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--base-size-8);
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.test-toggle:focus-visible { outline: 2px solid var(--focus-outlineColor); outline-offset: 2px; border-radius: var(--borderRadius-small); }
-.test .chevron { color: var(--fgColor-muted); }
-.test-name { display: flex; align-items: center; gap: var(--base-size-4); flex-wrap: wrap; min-width: 0; }
-.test-title { overflow-wrap: anywhere; }
-.test .duration { font-size: var(--text-caption-size); min-width: 48px; text-align: right; }
-
-.detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--base-size-8);
-  padding: var(--base-size-8) var(--base-size-16) var(--base-size-12) 52px;
-  background: var(--bgColor-muted);
-  border-top: var(--borderWidth-thin) solid var(--borderColor-muted);
-}
-.detail-error {
-  margin: 0;
-  padding: var(--base-size-8) var(--base-size-12);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--fontStack-monospace);
-  font-size: var(--text-caption-size);
-  color: var(--fgColor-danger);
-  background: var(--bgColor-danger-muted);
-  border: var(--borderWidth-thin) solid var(--borderColor-danger-muted);
-  border-radius: var(--borderRadius-medium);
-}
 .detail-steps { margin: 0; padding-left: var(--base-size-20); font-size: var(--text-body-size-small); }
 .detail-steps li + li { margin-top: 2px; }
 
 .run-progress { margin-top: var(--base-size-8); }
 
 @media (max-width: 480px) {
-  .test { grid-template-columns: minmax(0, 1fr) auto; }
-  .test .history, .test .duration { display: none; }
+  .test .history { display: none; }
 }

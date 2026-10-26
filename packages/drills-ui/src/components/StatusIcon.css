@@ -1,12 +1,13 @@
 .status-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
 .status-icon.passed { color: var(--fgColor-success); }
-.status-icon.failed, .status-icon.timedOut { color: var(--fgColor-danger); }
-.status-icon.flaky, .status-icon.interrupted { color: var(--fgColor-attention); }
+.status-icon.failed, .status-icon.timedOut, .status-icon.error { color: var(--fgColor-danger); }
+.status-icon.flaky, .status-icon.waiting { color: var(--fgColor-attention); }
 .status-icon.running { color: var(--fgColor-accent); }
-.status-icon.skipped, .status-icon.notRun, .status-icon.pending { color: var(--fgColor-muted); }
+.status-icon.interrupted, .status-icon.cancelled, .status-icon.skipped, .status-icon.notRun, .status-icon.pending { color: var(--fgColor-muted); }
 
 /* Status as text color, e.g. "Last run passed". */
 .status-text.passed { color: var(--fgColor-success); }
-.status-text.failed, .status-text.timedOut { color: var(--fgColor-danger); }
-.status-text.flaky, .status-text.interrupted { color: var(--fgColor-attention); }
+.status-text.failed, .status-text.timedOut, .status-text.error { color: var(--fgColor-danger); }
+.status-text.flaky, .status-text.waiting { color: var(--fgColor-attention); }
+.status-text.interrupted, .status-text.cancelled { color: var(--fgColor-muted); }
 .status-text.running { color: var(--fgColor-accent); }

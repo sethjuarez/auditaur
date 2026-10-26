@@ -10,7 +10,7 @@ interface Props {
   suite: ExplorerSuite;
   expanded: string[];
   disabled: boolean;
-  run: (path: string, body?: unknown) => Promise<void>;
+  run: (path: string, body?: unknown) => Promise<unknown>;
   toggle: (id: string) => void;
 }
 

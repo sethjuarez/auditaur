@@ -1,4 +1,6 @@
-// One status as an octicon in its role color, with the status as its accessible name.
+// One status as an octicon in its role color, with the status as its accessible name. Follows the
+// GitHub check icons: done states in their role color, stopped or skipped ones muted, a spinner
+// while running, and a clock when a person has to act.
 import { AlertIcon, CheckCircleFillIcon, CircleIcon, ClockIcon, SkipIcon, StopIcon, XCircleFillIcon, type Icon } from "@primer/octicons-react";
 import { Spinner } from "@primer/react";
 import { STATUS_LABELS, statusOf } from "../lib/status";
@@ -10,6 +12,8 @@ const ICONS: Record<string, Icon> = {
   timedOut: ClockIcon,
   flaky: AlertIcon,
   interrupted: StopIcon,
+  cancelled: StopIcon,
+  waiting: ClockIcon,
   skipped: SkipIcon,
   notRun: CircleIcon,
   pending: CircleIcon,
