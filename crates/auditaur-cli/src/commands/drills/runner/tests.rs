@@ -75,9 +75,9 @@ impl AppDriver for FakeDriver {
                 thread::sleep(ctx.remaining());
                 StepResult::TimedOut(ErrorInfo::new("slow"))
             }
-            "#wait80" => {
+            "#wait200" => {
                 drop(state);
-                thread::sleep(std::time::Duration::from_millis(80).min(ctx.remaining()));
+                thread::sleep(std::time::Duration::from_millis(200).min(ctx.remaining()));
                 if ctx.expired() {
                     StepResult::TimedOut(ErrorInfo::new("too slow"))
                 } else {
@@ -605,9 +605,9 @@ fn test_timeout_times_out_but_step_timeout_fails() {
 
 #[test]
 fn slow_tests_get_triple_the_timeout() {
-    let ran = run(r##"{ "timeoutMs": 50, "tests": [
-        { "name": "slow", "slow": true, "steps": [{ "click": "#wait80" }] },
-        { "name": "normal", "steps": [{ "click": "#wait80" }] }
+    let ran = run(r##"{ "timeoutMs": 100, "tests": [
+        { "name": "slow", "slow": true, "steps": [{ "click": "#wait200" }] },
+        { "name": "normal", "steps": [{ "click": "#wait200" }] }
     ] }"##);
     assert_eq!(test(&ran, "slow").status, Status::Passed);
     assert_eq!(test(&ran, "normal").status, Status::TimedOut);
