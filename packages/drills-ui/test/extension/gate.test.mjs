@@ -74,17 +74,17 @@ test("publishAnswer writes the response the runner expects", async () => {
 
 test("publishAnswer refuses a gate that is not the one shown or no longer waiting", async () => {
     const { requestPath, responsePath } = await publish();
-    await assert.rejects(publishAnswer({ requestPath, expected: { nonce: "other" }, body: answer }), { code: "gate_not_pending" });
-    await assert.rejects(publishAnswer({ requestPath, expected: { requestId: "gate-2" }, body: answer }), { code: "gate_not_pending" });
+    await assert.rejects(publishAnswer({ requestPath, expected: { nonce: "other" }, body: answer, responder: "test" }), { code: "gate_not_pending" });
+    await assert.rejects(publishAnswer({ requestPath, expected: { requestId: "gate-2" }, body: answer, responder: "test" }), { code: "gate_not_pending" });
     await unlink(requestPath);
-    await assert.rejects(publishAnswer({ requestPath, body: answer }), { code: "gate_not_pending" });
+    await assert.rejects(publishAnswer({ requestPath, body: answer, responder: "test" }), { code: "gate_not_pending" });
 
     const expired = await publish({ expiresAtUnixNanos: nanos(Date.now() - 1000) });
-    await assert.rejects(publishAnswer({ requestPath: expired.requestPath, body: answer }), /timed out/);
+    await assert.rejects(publishAnswer({ requestPath: expired.requestPath, body: answer, responder: "test" }), /timed out/);
 
     const renamed = await publish({ requestId: "gate-1" });
     await writeFile(renamed.requestPath, JSON.stringify({ requestId: "other", nonce: "n" }));
-    await assert.rejects(publishAnswer({ requestPath: renamed.requestPath, body: answer }), { code: "gate_not_pending" });
+    await assert.rejects(publishAnswer({ requestPath: renamed.requestPath, body: answer, responder: "test" }), { code: "gate_not_pending" });
     await assert.rejects(readFile(responsePath), { code: "ENOENT" });
 });
 

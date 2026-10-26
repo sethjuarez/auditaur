@@ -35,8 +35,8 @@ export async function pendingGates(run, events) {
 }
 
 // Answers a gate the shown run is waiting on. Only gates announced in the run's own event log can
-// be answered, with the choices and inputs that log offered.
-export async function respondGate(state, body) {
+// be answered, with the choices and inputs that log offered. `responder` records who answered.
+export async function respondGate(state, body, responder) {
     const { run } = await pickRun(state);
     if (!run || run.status !== "running") {
         throw new DrillError("no_active_run", "the shown run is not waiting on a gate");
@@ -59,6 +59,6 @@ export async function respondGate(state, body) {
         expected: { requestId, nonce: request.nonce },
         gate: waiting.gate,
         body,
-        responder: "human-confirmed-via-drill-run-canvas",
+        responder,
     });
 }

@@ -37,7 +37,7 @@ export default {
     },
     routes: (state) => ({
         "GET /state": () => liveView(state),
-        "POST /gate": async (_url, req) => respondGate(state, await readBody(req)),
+        "POST /gate": async (_url, req) => respondGate(state, await readBody(req), "human-confirmed-via-drill-run-canvas"),
     }),
     actions: [
         {
@@ -50,7 +50,7 @@ export default {
             name: "respond_gate",
             description: "Answer a gate the routed run is waiting on. Omit choiceId for gates without choices.",
             inputSchema: respondSchema,
-            handler: (state, input) => respondGate(state, input),
+            handler: (state, input) => respondGate(state, input, "agent-via-drill-run-canvas"),
         },
     ],
 };

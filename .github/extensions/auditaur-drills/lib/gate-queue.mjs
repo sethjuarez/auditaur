@@ -94,6 +94,8 @@ const notPending = (requestId, why = "is not waiting for an answer") => new Dril
 // the run's event log), and `gate` the choices and inputs it offered; both default to the published
 // request's own.
 export async function publishAnswer({ requestPath, expected = {}, gate, body, responder }) {
+    // Every answer says who gave it; the drill report keeps it as the audit trail.
+    if (typeof responder !== "string" || !responder.trim()) throw new TypeError("publishAnswer needs a responder");
     const paths = queuePaths(requestPath);
     const { requestId, requestPath: path } = paths;
     if (expected.requestId != null && expected.requestId !== requestId) throw notPending(expected.requestId);
