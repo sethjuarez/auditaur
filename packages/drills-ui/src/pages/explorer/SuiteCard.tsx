@@ -24,7 +24,7 @@ export function SuiteCard({ suite, expanded, disabled, run, toggle }: Props) {
         <span className="path muted suite-path">{suite.path}</span>
         <span className="spacer" />
         {failing > 0 && <CounterLabel scheme="primary" className="failing">{`${failing} failing`}</CounterLabel>}
-        <Button size="small" leadingVisual={PlayIcon} data-run-suite={suite.suite} disabled={disabled} onClick={() => void run("/run", { suite: suite.suite })}>
+        <Button size="small" leadingVisual={PlayIcon} data-run-suite={suite.suite} title={`Run the ${suite.tests.length} tests in ${suite.suite}`} disabled={disabled} onClick={() => void run("/run", { suite: suite.suite })}>
           Run suite
         </Button>
       </div>

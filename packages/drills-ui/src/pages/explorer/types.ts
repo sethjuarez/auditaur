@@ -27,7 +27,7 @@ export interface ExplorerSuite {
 export interface ExplorerRun {
   runId: string;
   status: string;
-  totals?: { passed?: number; tests?: number; flaky?: number };
+  totals?: { passed?: number; failed?: number; notRun?: number; tests?: number; flaky?: number };
   durationMs?: number;
   startedAt?: string;
 }

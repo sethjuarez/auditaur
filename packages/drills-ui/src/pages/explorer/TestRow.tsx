@@ -1,7 +1,7 @@
-// One test: status, name and labels, recent history, duration, and Run. The row toggles its detail
+// One test: status, name and labels, recent history, duration, and a run button. The row toggles its detail
 // (last error, steps, id, and a link to its last trace).
 import { ChevronDownIcon, ChevronRightIcon, PlayIcon } from "@primer/octicons-react";
-import { Button, Label } from "@primer/react";
+import { IconButton, Label } from "@primer/react";
 import { useId, type MouseEvent } from "react";
 import { HistoryDots } from "../../components/HistoryDots";
 import { OpenInLinks } from "../../components/OpenIn";
@@ -29,7 +29,7 @@ function TestDetail({ id, test }: { id: string; test: ExplorerTest }) {
         <span className="muted path">{test.title} · {test.id}</span>
         {test.last?.runId && (
           <span className="row detail-links">
-            <OpenInLinks links={[{ to: "trace", runId: test.last.runId, testId: test.id, label: "Last trace" }]} />
+            <OpenInLinks caption="Open this test's last run in" links={[{ to: "trace", runId: test.last.runId, testId: test.id }]} />
           </span>
         )}
       </div>
@@ -44,11 +44,15 @@ export function TestRow({ test, open, disabled, run, toggle }: Props) {
     event.stopPropagation();
     run();
   };
+  // Primer renders the run button's tooltip inside the row; clicking it must not toggle.
+  const onRowClick = (event: MouseEvent) => {
+    if (!(event.target as Element).closest('[role="tooltip"]')) toggle();
+  };
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   const detailId = useId();
   return (
     <div className={`box-row test-item${open ? " open" : ""}`}>
-      <div className="test clickable" data-id={test.id} onClick={toggle}>
+      <div className="test clickable" data-id={test.id} onClick={onRowClick}>
         <button type="button" className="test-toggle" aria-expanded={open} aria-controls={open ? detailId : undefined}>
           <Chevron size={16} className="chevron" />
           <StatusIcon status={test.last?.result ?? "notRun"} />
@@ -62,9 +66,7 @@ export function TestRow({ test, open, disabled, run, toggle }: Props) {
         </button>
         <HistoryDots history={test.history} />
         <span className="duration muted nums">{ms(test.last?.durationMs)}</span>
-        <Button size="small" variant="invisible" leadingVisual={PlayIcon} data-run-test={test.id} disabled={disabled} aria-label={`Run ${test.title}`} onClick={onRun}>
-          Run
-        </Button>
+        <IconButton size="small" variant="invisible" icon={PlayIcon} className="test-run" data-run-test={test.id} disabled={disabled} aria-label={`Run ${test.title}`} description="Run this test" onClick={onRun} />
       </div>
       {open && <TestDetail id={detailId} test={test} />}
     </div>

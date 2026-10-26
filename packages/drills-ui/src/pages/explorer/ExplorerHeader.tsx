@@ -1,5 +1,5 @@
 // The explorer's header: counts and open-in links, run actions, then the filter and the last run.
-import { PlayIcon, SearchIcon, StopIcon, SyncIcon } from "@primer/octicons-react";
+import { IssueReopenedIcon, PlayIcon, SearchIcon, StopIcon, SyncIcon } from "@primer/octicons-react";
 import { Button, IconButton, TextInput } from "@primer/react";
 import { OpenInLinks, runLinks } from "../../components/OpenIn";
 import { PageHeader } from "../../components/PageHeader";
@@ -51,16 +51,38 @@ export function ExplorerHeader({ state, busy, run, refresh, change }: Props) {
   const tests = state?.suites.flatMap((suite) => suite.tests) ?? [];
   const last = state?.runs.find((each) => each.status !== "running");
   const disabled = !state || isRunning(state) || busy;
+  const rerun = last ? Number(last.totals?.failed ?? 0) + Number(last.totals?.notRun ?? 0) : 0;
   const actions = (
     <>
       {state?.active && (
         <Button id="cancel" variant="danger" size="small" leadingVisual={StopIcon} onClick={() => void run("/cancel")}>Cancel run</Button>
       )}
-      <Button id="run-failed" size="small" disabled={disabled || !last} onClick={() => void run("/run", { lastFailed: true })}>Rerun failed</Button>
-      <Button id="run-all" variant="primary" size="small" leadingVisual={PlayIcon} disabled={disabled || !tests.length} onClick={() => void run("/run", {})}>
+      {rerun > 0 && (
+        <Button
+          id="run-failed"
+          size="small"
+          leadingVisual={IssueReopenedIcon}
+          count={rerun}
+          title={`Rerun the ${plural(rerun, "test")} that failed or did not run last time`}
+          disabled={disabled}
+          onClick={() => void run("/run", { lastFailed: true })}
+        >
+          Rerun failed
+        </Button>
+      )}
+      <Button
+        id="run-all"
+        variant="primary"
+        size="small"
+        leadingVisual={PlayIcon}
+        count={tests.length || undefined}
+        title={`Run all ${plural(tests.length, "test")}`}
+        disabled={disabled || !tests.length}
+        onClick={() => void run("/run", {})}
+      >
         Run all
       </Button>
-      <IconButton id="refresh" size="small" icon={SyncIcon} aria-label="Reload drill files" onClick={refresh} />
+      <IconButton id="refresh" size="small" icon={SyncIcon} aria-label="Reload drill files and results" onClick={refresh} />
     </>
   );
   const meta = state && (
@@ -72,9 +94,14 @@ export function ExplorerHeader({ state, busy, run, refresh, change }: Props) {
     <PageHeader title="Drill tests" meta={meta} actions={actions}>
       <div className="row explorer-toolbar">
         <Filter value={state?.ui.filter ?? ""} change={change} />
-        {state && <LastRun run={last} />}
-        <span id="open-in"><OpenInLinks links={runLinks(last?.runId, null)} /></span>
       </div>
+      {state && (
+        <div className="row last-run-bar">
+          <LastRun run={last} />
+          <span className="spacer" />
+          <span id="open-in"><OpenInLinks caption="Open last run in" links={runLinks(last?.runId, null)} /></span>
+        </div>
+      )}
     </PageHeader>
   );
 }
