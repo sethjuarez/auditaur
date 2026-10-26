@@ -15,7 +15,7 @@ In a consuming repo, install the project extension if testers will respond throu
 auditaur init extension
 ```
 
-This writes `.github/extensions/auditaur-gate/extension.mjs`. When a gate is pending, agents can open the `auditaur-human-gate` canvas to show the instructions, choices, required inputs, and evidence context. Terminal and MCP responses remain available when a canvas is not.
+This writes `.github/extensions/auditaur-drills/`. When a gate is pending, agents can show it on the Gate page of the `auditaur-drills` canvas, with its instructions, choices, and required inputs. Terminal and MCP responses remain available when a canvas is not.
 
 ## Write a gate script
 
@@ -67,7 +67,7 @@ Human gate scripts use the explicit `drill run --script` form:
 auditaur drill run --app my-tauri-app --require-frontend --require-drive-bridge --script .auditaur\drills\github-login.json -- npm run tauri dev
 ```
 
-Gates also work as `gate` steps inside [drill tests](/getting-started/drill-tests/#human-gates), answered from the `auditaur-drill-run` canvas or MCP.
+Gates also work as `gate` steps inside [drill tests](/getting-started/drill-tests/#human-gates), answered from the Progress page of the `auditaur-drills` canvas or MCP.
 
 During the gate, complete the manual action in the real app, browser, OS dialog, installer, or hardware device. Do not restart the app or switch sessions; the gate is deliberately tied to the pinned session.
 
@@ -89,7 +89,7 @@ An agent can call `list_pending_human_gates` to find the request, then `respond_
 
 ### Copilot canvas
 
-When `auditaur init extension` has installed the project extension, an agent can open the `auditaur-human-gate` canvas for the pending request. The canvas writes the same local response file as MCP, and the drill records the selected choice, non-sensitive inputs, responder, and gate outcome.
+When `auditaur init extension` has installed the project extension, an agent opens the `auditaur-drills` canvas with `{ "gate": <a list_pending_human_gates entry> }`, or calls `show_gate` on an open one. The tester answers on the Gate page; it writes the same local response file as MCP, and the drill records the selected choice, non-sensitive inputs, responder, and gate outcome.
 
 ## Gate shapes
 

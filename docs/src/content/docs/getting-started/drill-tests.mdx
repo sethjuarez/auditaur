@@ -107,7 +107,7 @@ A `gate` step pauses the test until a person acts. It takes the same object as a
     ] } }
 ```
 
-Answer it from the `auditaur-drill-run` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait also counts against the test timeout, so raise `timeoutMs` on tests with gates.
+Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait also counts against the test timeout, so raise `timeoutMs` on tests with gates.
 
 ### Locators
 
@@ -185,7 +185,18 @@ Poll `drill_show` until `status` is no longer `running`. See [MCP Tools](/refere
 
 ## In the Copilot app
 
-`auditaur init extension` installs the `auditaur-drill-explorer` canvas. It lists every suite and test with its latest result, a strip of recent results, flaky and slow badges, and the last error. Run everything, a suite, one test, or the last failures from the canvas; a progress bar tracks the run, and **Cancel run** stops it.
+`auditaur init extension` installs the `auditaur-drills` canvas: one panel with a tab per page. Links between pages (**Open in Trace**, for example) switch tabs in the same panel, and the panel remembers its page across reloads.
+
+| Page | Shows | Agent actions |
+| --- | --- | --- |
+| Tests | Every suite and test with its latest result, recent results, flaky and slow badges, and the last error. Run everything, a suite, one test, or the last failures; **Cancel run** stops it. | `get_summary`, `refresh`, `run`, `cancel` |
+| Progress | One run live: suites, tests, and steps ticking, with waiting gates at the top. | `get_status`, `respond_gate`, `cancel` |
+| Trace | One test attempt: a step timeline with IPC, event, log, and frontend-error ticks, plus each step's screenshots, DOM snapshot, and telemetry. Defaults to the newest run's first failed test. | `get_trace` |
+| Snapshots | ARIA line diffs and screenshot diffs (side by side, slider, or pixel diff). **Accept as new baseline** overwrites the baseline once the run has finished; output that never stabilized cannot be accepted. | `get_snapshots`, `accept_snapshots` |
+| Coverage | Which IPC commands and events the tests exercised. **Compare with app telemetry** adds sessions from `auditaur apps`, so what they recorded but no test touched shows as unexercised. Same data as `auditaur drill coverage [run] --db <telemetry.sqlite>`. | `get_coverage`, `list_app_stores`, `set_sources` |
+| Gate | One pending `auditaur drill` [human gate](/getting-started/human-in-the-loop-drills/#copilot-canvas). The tab shows only while in use. | `show_gate`, `get_gate`, `answer_gate` |
+
+Every page also takes `navigate`, `get_view`, `set_view`, `screenshot`, and `health`.
 
 Open input, all optional:
 
@@ -194,18 +205,11 @@ Open input, all optional:
 | `cwd` | Folder holding `.auditaur/drills`, relative to the repo root. |
 | `cli` | Path to `auditaur`; defaults to `$AUDITAUR_BIN`, then `PATH`. |
 | `run` | `{ app, command, args }` for the run buttons: `--app`, the launch command after `--`, and extra `drill test` arguments. |
+| `dbs` | Telemetry stores Coverage compares against. |
+| `route` | First page, e.g. `/trace?run=<runId>&test=<testId>`. |
+| `gate` | A `list_pending_human_gates` entry; opens on the Gate page. |
 
-Agents can call its `get_summary`, `refresh`, `run`, and `cancel` actions.
-
-The `auditaur-drill-run` canvas watches one run live: suites, tests, and each step ticking with its status and duration. Gates waiting for an answer appear at the top with their instructions, inputs, and choice buttons. It follows the newest run unless opened with `{ "runId": "..." }` or switched with its run picker. Agents can call its `get_status`, `respond_gate`, and `cancel` actions.
-
-The `auditaur-drill-trace` canvas replays one test attempt: a timeline of steps with IPC, event, log, and frontend-error ticks, each step's screenshots and DOM snapshot, and the telemetry recorded during it. Open it with `{ "runId", "testId", "attempt" }`, all optional; it defaults to the newest run's first failed test. Agents can call its `get_trace` and `select` actions.
-
-The `auditaur-drill-snapshots` canvas reviews a run's snapshot mismatches. The ARIA results show a line diff. Screenshot results show expected and actual side by side, with a slider, or as the pixel diff. **Accept as new baseline** copies the run's actual output over the baseline once the run has finished; **Accept all as new baselines (N)** asks for confirmation first, listing the files it overwrites. Output that never stabilized cannot be accepted. Open it with `{ "runId" }`, optional. Agents can call its `get_snapshots`, `select`, and `accept` actions.
-
-The `auditaur-drill-coverage` canvas shows which Tauri IPC commands and events a run's tests exercised: meters for the totals, then Commands, Events, Tests, and a test-by-item Map. A run only knows what it touched, so **Compare with app telemetry** picks sessions from `auditaur apps`; anything those sessions recorded that no test touched shows as unexercised. The same data comes from `auditaur drill coverage [run] --db <telemetry.sqlite>`. Agents can call its `get_coverage`, `select`, `list_app_stores`, and `set_sources` actions.
-
-The canvases share one React + [Primer](https://primer.style/react) bundle, so they match the Copilot app's look and theme. Its source is `packages/drills-ui`. After editing it, run `npm run build` to rebuild the committed `ui/app.js` and `ui/app.css`. CI fails if the bundle is out of date.
+The canvas is one React + [Primer](https://primer.style/react) bundle, so they match the Copilot app's look and theme. Its source is `packages/drills-ui`. After editing it, run `npm run build` to rebuild the committed `ui/app.js` and `ui/app.css`. CI fails if the bundle is out of date.
 
 ## CI
 

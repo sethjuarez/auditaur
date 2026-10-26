@@ -120,7 +120,7 @@ Use drill mode when Auditaur should start the app, wait for a fresh session, che
 auditaur drill run --app my-tauri-app --require-drive-bridge --script .auditaur\drills\github-login.json -- npm run tauri dev
 ```
 
-Use a human gate when the flow requires OAuth consent, OS permissions, elevation, browser handoff, or hardware-key approval. The gate runs after Auditaur pins the spawned app session and before final evidence collection, so the report stays tied to one session. A tester can answer in the terminal, through `list_pending_human_gates`/`respond_human_gate` over MCP, or through the `auditaur-human-gate` canvas installed by `auditaur init extension`.
+Use a human gate when the flow requires OAuth consent, OS permissions, elevation, browser handoff, or hardware-key approval. The gate runs after Auditaur pins the spawned app session and before final evidence collection, so the report stays tied to one session. A tester can answer in the terminal, through `list_pending_human_gates`/`respond_human_gate` over MCP, or on the Gate page of the `auditaur-drills` canvas installed by `auditaur init extension`.
 
 ## Verify the Tauri-native drive bridge
 

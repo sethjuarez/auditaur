@@ -70,7 +70,7 @@ If the repo uses Copilot app canvases, install the Auditaur canvas extensions al
 auditaur init extension
 ```
 
-This writes `.github/extensions/auditaur-gate/extension.mjs` and the `.github/extensions/auditaur-drills/` folder in the consuming repo; existing ones are kept unless you pass `--force`. During a drill human gate, agents can open the `auditaur-human-gate` canvas so the tester sees the instructions, evidence context, choices, and inputs in a first-class action card. The terminal and MCP response paths still work when no canvas client is available. The `auditaur-drill-explorer` canvas shows drill tests and their results; see [Drill tests](/getting-started/drill-tests/#in-the-copilot-app).
+This writes the `.github/extensions/auditaur-drills/` folder in the consuming repo; an existing one is kept unless you pass `--force`. The `auditaur-drills` canvas shows drill tests, runs, traces, snapshots, and coverage; see [Drill tests](/getting-started/drill-tests/#in-the-copilot-app). During a drill human gate, agents can show the gate on its Gate page so the tester answers from an action card. The terminal and MCP response paths still work when no canvas client is available.
 
 ## Simplest agent workflow
 
