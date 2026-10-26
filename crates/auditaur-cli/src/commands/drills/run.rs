@@ -1374,16 +1374,10 @@ pub fn resolve_run(root: &Path, selector: Option<&str>) -> Result<PathBuf> {
 /// interrupted, along with its running suites, tests and attempts.
 pub fn read_run(dir: &Path) -> Result<RunReport> {
     let path = dir.join("run.json");
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read `{}`", path.display()))?;
-    let mut report: RunReport = serde_json::from_str(&text)
-        .with_context(|| format!("`{}` is not a drill run report", path.display()))?;
-    if report.schema_version > RUN_SCHEMA_VERSION {
-        return Err(anyhow!(
-            "`{}` uses run schema {}; this auditaur reads up to {RUN_SCHEMA_VERSION}",
-            path.display(),
-            report.schema_version
-        ));
+    let mut report = parse_run(&path)?;
+    if report.status == Status::Running && !process_alive(report.pid) {
+        // The run may have written its final report and exited after the first read.
+        report = parse_run(&path)?;
     }
     if report.status == Status::Running && !process_alive(report.pid) {
         report.status = Status::Interrupted;
@@ -1419,6 +1413,21 @@ pub fn read_attempt(run_dir: &Path, summary: &AttemptSummary) -> Result<AttemptR
     let text = fs::read_to_string(&path)
         .with_context(|| format!("failed to read `{}`", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("invalid `{}`", path.display()))
+}
+
+fn parse_run(path: &Path) -> Result<RunReport> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read `{}`", path.display()))?;
+    let report: RunReport = serde_json::from_str(&text)
+        .with_context(|| format!("`{}` is not a drill run report", path.display()))?;
+    if report.schema_version > RUN_SCHEMA_VERSION {
+        return Err(anyhow!(
+            "`{}` uses run schema {}; this auditaur reads up to {RUN_SCHEMA_VERSION}",
+            path.display(),
+            report.schema_version
+        ));
+    }
+    Ok(report)
 }
 
 fn process_alive(pid: u32) -> bool {
