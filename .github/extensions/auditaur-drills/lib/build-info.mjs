@@ -9,23 +9,30 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODE = /\.(mjs|js|css)$/;
+// The page bundle is read from disk on every request, so a new one is live without a reload.
+const SERVED_FRESH = join(ROOT, "ui");
 
 async function files(dir) {
     const entries = await readdir(dir, { withFileTypes: true });
     const nested = await Promise.all(entries.map((entry) => {
         const path = join(dir, entry.name);
-        if (entry.isDirectory()) return files(path);
+        if (entry.isDirectory()) return path === SERVED_FRESH ? [] : files(path);
         return CODE.test(entry.name) ? [path] : [];
     }));
     return nested.flat();
 }
 
-// A short hash of every code file, in a stable order.
+// The provider's code files (relative, `/`-separated): what only an extension reload picks up.
+export async function codeFiles() {
+    return (await files(ROOT)).map((path) => relative(ROOT, path).replaceAll("\\", "/")).sort();
+}
+
+// A short hash of the provider's code files, in a stable order.
 export async function fingerprint() {
     const hash = createHash("sha256");
-    for (const path of (await files(ROOT)).sort()) {
-        hash.update(relative(ROOT, path).replaceAll("\\", "/"));
-        hash.update(await readFile(path));
+    for (const name of await codeFiles()) {
+        hash.update(name);
+        hash.update(await readFile(join(ROOT, name)));
     }
     return hash.digest("hex").slice(0, 12);
 }
