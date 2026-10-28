@@ -20,7 +20,7 @@ const indexOf = (target: EventTarget | null) => {
 export function StepList({ selected, step, pick }: Props) {
   const rows = useRef<(HTMLDivElement | null)[]>([]);
   const count = selected.steps.length;
-  if (!count) return <div className="steps-empty muted">No steps recorded.</div>;
+  if (!count) return <div className="trace-steps-empty muted">No steps recorded.</div>;
   const toggle = (index: number) => pick(index === step ? "all" : index);
   const move = (index: number) => {
     const next = Math.max(0, Math.min(count - 1, index));
@@ -49,7 +49,7 @@ export function StepList({ selected, step, pick }: Props) {
   const focusable = step ?? 0;
   return (
     <div
-      className="steps"
+      className="trace-steps"
       role="listbox"
       aria-label="Steps: select one to see its screenshots and telemetry"
       onKeyDown={onKeyDown}

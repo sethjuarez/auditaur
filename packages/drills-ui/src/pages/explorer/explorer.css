@@ -7,9 +7,6 @@
 .test:hover .test-run, .test:focus-within .test-run, .test .test-run:focus-visible { opacity: 1; }
 @media (hover: none) { .test .test-run { opacity: 1; } }
 
-.suite-name { font-size: var(--text-body-size-medium); }
-.suite-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-
 .detail-steps { margin: 0; padding-left: var(--base-size-20); font-size: var(--text-body-size-small); }
 .detail-steps li + li { margin-top: 2px; }
 

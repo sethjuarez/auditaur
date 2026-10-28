@@ -17,7 +17,7 @@ interface Props {
 
 function KindCounts({ events }: { events: TraceEvent[] }) {
   return (
-    <span className="step-kinds">
+    <span className="trace-step-kinds">
       {KINDS.map((kind) => {
         const count = events.filter((event) => kindOf(event) === kind).length;
         return count ? (
@@ -38,20 +38,20 @@ export function StepRow({ step, events, selected, focusable, ref }: Props) {
     <div
       ref={ref}
       id={`step-${step.index}`}
-      className={`step${selected ? " sel" : ""}`}
+      className={`trace-step${selected ? " sel" : ""}`}
       role="option"
       aria-selected={selected}
       tabIndex={focusable ? 0 : -1}
       data-step={step.index}
     >
       <StatusIcon status={step.status} />
-      <span className="step-at muted mono nums">{step.offsetMs != null && `+${ms(step.offsetMs, 2)}`}</span>
-      <span className="step-title">
-        {step.phase && step.phase !== "test" && <span className="step-phase muted">{step.phase}</span>}
-        <span className="step-name">{step.title}</span>
+      <span className="trace-step-at muted mono nums">{step.offsetMs != null && `+${ms(step.offsetMs, 2)}`}</span>
+      <span className="trace-step-title">
+        {step.phase && step.phase !== "test" && <span className="trace-step-phase muted">{step.phase}</span>}
+        <span className="trace-step-name">{step.title}</span>
         {step.soft && <Label size="small" variant="secondary">soft</Label>}
         {files > 0 && (
-          <span className="step-files muted" title={plural(files, "attachment")}>
+          <span className="trace-step-files muted" title={plural(files, "attachment")}>
             <PaperclipIcon size={12} aria-hidden="true" />
             {files}
             <span className="visually-hidden">{files === 1 ? " attachment" : " attachments"}</span>
