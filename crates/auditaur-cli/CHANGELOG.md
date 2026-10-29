@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.9](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.8...auditaur-cli-v0.4.9) - 2026-10-29
+
+### Added
+
+- *(drills)* unit-test-style drills, a routed drills canvas, and the Auditaur Copilot plugin ([#82](https://github.com/sethjuarez/auditaur/pull/82))
+
 ## [0.4.5](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.4...auditaur-cli-v0.4.5) - 2026-08-12
 
 ### Fixed
