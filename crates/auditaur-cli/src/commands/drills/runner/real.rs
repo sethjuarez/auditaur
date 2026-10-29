@@ -124,6 +124,7 @@ impl RealHost {
                 "{error:#}\nStart the app first, or pass `-- <command>` (or a config `start` command) so the drill launches it."
             )
         })?;
+        check_drill_support(&session)?;
         Ok(Box::new(BridgeDriver::new(session, None)))
     }
 
@@ -141,7 +142,12 @@ impl RealHost {
         let mut child = drill::spawn_command(command, environment)?;
         let deadline = Instant::now() + self.ready_timeout;
         let ready = self.wait_until_ready(&mut child, started_at, &preexisting_ids, deadline);
-        match ready.and_then(|app| BridgeSession::connect(&drill::drive_selector(&app))) {
+        let session = ready.and_then(|app| {
+            let session = BridgeSession::connect(&drill::drive_selector(&app))?;
+            check_drill_support(&session)?;
+            Ok(session)
+        });
+        match session {
             Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child)))),
             Err(error) => {
                 let _ = drill::cleanup_child_tree(&mut child);
@@ -356,11 +362,38 @@ fn about(target: &Locator, error: String) -> String {
 /// drill actions (`dblclick`, `inspect`).
 const MIN_DRILL_API_VERSION: &str = "0.7.0";
 
+/// Fail the launch, not step 1, when the app's bridge predates drill locators. Only a known
+/// stale-bridge reply fails; anything else is left for the steps to report.
+fn check_drill_support(session: &BridgeSession) -> Result<()> {
+    let probe = bridge_selector(&Locator::Css("html".to_string()));
+    let reply = session.request(
+        "exists",
+        Some(probe),
+        None,
+        Vec::new(),
+        false,
+        None,
+        None,
+        CAPTURE_TIMEOUT,
+    );
+    let error = match reply {
+        Ok(reply) => reply.error,
+        Err(error) => Some(format!("{error:#}")),
+    };
+    match error {
+        Some(error) if is_stale_bridge(&error) => Err(anyhow!(explain(error))),
+        _ => Ok(()),
+    }
+}
+
 /// Old bridges reject `locator:` selectors and newer actions (`dblclick`, `inspect`).
+fn is_stale_bridge(error: &str) -> bool {
+    (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
+        || error.contains("unsupported drive bridge action")
+}
+
 fn explain(error: String) -> String {
-    let stale = (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
-        || error.contains("unsupported drive bridge action");
-    if stale {
+    if is_stale_bridge(&error) {
         format!(
             "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to {MIN_DRILL_API_VERSION} or newer to drive this app with drills."
         )

@@ -39,6 +39,8 @@ auditaur drill test --app my-app -- npm run tauri dev
 
 The app name and launch command can come from `.auditaur/config.json` (`app`, `start`) instead. Each suite launches the app once, and its tests share it. Use `--attach` to drive an app that is already running.
 
+A launched app counts as ready once its drive bridge responds, so `drill test` needs no `--require-drive-bridge`. The app needs `@auditaur/api` 0.7.0 or newer; an older bridge fails the suite at launch.
+
 | Command | Purpose |
 | --- | --- |
 | `drill list` | List suites and tests (accepts the same filters as `test`). |
