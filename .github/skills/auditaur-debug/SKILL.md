@@ -213,7 +213,7 @@ auditaur drill locate 'li button' --app <app>  # suggest role/label/test-id loca
 - Snapshot baselines go in `__snapshots__/` beside the suite. A missing baseline is written and fails; review it before committing. Use `--update-snapshots=changed` (the `=` is required) only for intended UI changes.
 - Read failures from `.auditaur/drill-runs/<runId>/` (`run.json`, `tests/<id>/attempt-<n>/attempt.json`), not by rerunning blindly.
 - When the user wants to see drills, open the `auditaur-drills` canvas (installed by `auditaur init extension`) instead of pasting result tables, and use its `navigate` action to switch pages: `tests`, `run` (watch a run and answer its `gate` steps), `trace`, `snapshots`, `coverage`. To debug a failed test step by step, rerun with `--trace on` (or MCP `trace: "on"`) and navigate to `trace`.
-- A `gate` step in a drill test pauses for a human. `drill test` never reads the terminal: surface the gate on the `run` page of `auditaur-drills` (or answer with `respond_human_gate` when the user tells you to). Gate waits count against the test `timeoutMs`.
+- A `gate` step in a drill test pauses for a human. `drill test` never reads the terminal: surface the gate on the `run` page of `auditaur-drills` (or answer with `respond_human_gate` when the user tells you to). Gate waits are off the test clock; the gate's own `timeoutMs` (default 5 minutes) bounds them.
 
 ## Human gates in drills
 

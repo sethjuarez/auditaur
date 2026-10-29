@@ -57,6 +57,15 @@ impl AppDriver for FakeDriver {
             state.log.push(format!("snapshot {} {file}", snapshot.name));
         }
         state.since.push(ctx.since_unix_nanos);
+        if matches!(step.kind, StepKind::Gate(_)) {
+            // A person taking longer than the test's whole timeout to answer.
+            drop(state);
+            thread::sleep(std::time::Duration::from_millis(150));
+            let mut state = self.state.borrow_mut();
+            let unbounded = ctx.remaining() > std::time::Duration::from_secs(3600);
+            state.log.push(format!("gate unbounded={unbounded}"));
+            return StepResult::Passed;
+        }
         let calls = {
             let count = state.calls.entry(target.clone()).or_default();
             *count += 1;
@@ -505,6 +514,42 @@ fn trace_capture_does_not_count_against_the_timeout() {
         },
     );
     assert_eq!(test(&ran, "t").status, Status::Passed);
+}
+
+#[test]
+fn gate_waits_do_not_count_against_the_timeout() {
+    let ran = run(r##"{ "tests": [
+        { "name": "t", "timeoutMs": 100, "steps": [
+            { "gate": { "name": "g", "instructions": "wait", "manualContinue": true } },
+            { "click": "#ok" }
+        ] },
+        { "name": "budget", "timeoutMs": 100, "steps": [
+            { "gate": { "name": "g", "instructions": "wait", "manualContinue": true } },
+            { "click": "#wait200" }
+        ] },
+        { "name": "capped", "timeoutMs": 100, "steps": [
+            { "gate": { "name": "g", "instructions": "wait", "manualContinue": true }, "timeoutMs": 5000 }
+        ] }
+    ] }"##);
+    // The gate outlasts the 100ms budget, yet the steps after it still get the whole budget
+    // (and no more).
+    assert_eq!(test(&ran, "t").status, Status::Passed);
+    assert_eq!(test(&ran, "budget").status, Status::TimedOut);
+    assert_eq!(test(&ran, "capped").status, Status::Passed);
+    let gates: Vec<_> = ran
+        .log
+        .iter()
+        .filter(|e| e.starts_with("gate unbounded"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        gates,
+        [
+            "gate unbounded=true",
+            "gate unbounded=true",
+            "gate unbounded=false"
+        ]
+    );
 }
 
 #[test]

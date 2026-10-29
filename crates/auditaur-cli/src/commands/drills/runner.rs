@@ -615,7 +615,16 @@ impl SuiteRun<'_, '_> {
             // On assertions `timeoutMs` is the retry window (Playwright's `expect(..., { timeout })`),
             // so running out is a failed assertion; on actions it bounds the step.
             let assertion = matches!(step.kind, StepKind::Expect(_) | StepKind::Telemetry(_));
+            // A person's wait is off the test clock, like Playwright's `page.pause()`; the
+            // gate's own `timeoutMs` (or the step's) bounds it instead.
+            let gate = matches!(step.kind, StepKind::Gate(_));
             let (deadline, expect_timeout) = match step.timeout_ms {
+                _ if gate => (
+                    step.timeout_ms.map_or(far_future(), |ms| {
+                        Instant::now() + Duration::from_millis(ms)
+                    }),
+                    expect_timeout,
+                ),
                 Some(ms) if assertion => (budget.deadline.get(), Duration::from_millis(ms)),
                 Some(ms) => (
                     (Instant::now() + Duration::from_millis(ms)).min(budget.deadline.get()),
@@ -636,7 +645,11 @@ impl SuiteRun<'_, '_> {
                 wrote_baseline: false,
                 cancel: self.options.cancel.clone(),
             };
-            let result = driver.run_step(step, &mut ctx);
+            let result = if gate {
+                budget.untimed(|| driver.run_step(step, &mut ctx))
+            } else {
+                driver.run_step(step, &mut ctx)
+            };
             // Evidence captured below is not part of the step's duration.
             ctx.writer.step_ended();
             if ctx.wrote_baseline {
@@ -832,16 +845,22 @@ impl Budget {
         self
     }
 
-    /// Run capture without charging its time to the budget.
-    fn untimed(&self, capture: impl FnOnce()) {
+    /// Run `work` (trace capture, a human gate) without charging its time to the budget.
+    fn untimed<T>(&self, work: impl FnOnce() -> T) -> T {
         let started = Instant::now();
-        capture();
+        let result = work();
         self.deadline.set(self.deadline.get() + started.elapsed());
+        result
     }
 
     fn timeout_error(&self) -> ErrorInfo {
         ErrorInfo::new(format!("timeout of {}ms exceeded", self.timeout_ms))
     }
+}
+
+/// A deadline that never arrives in practice, for waits bounded by something else.
+fn far_future() -> Instant {
+    Instant::now() + Duration::from_secs(365 * 24 * 60 * 60)
 }
 
 /// Wall-clock now, floored to the millisecond and backed off one more: the webview stamps

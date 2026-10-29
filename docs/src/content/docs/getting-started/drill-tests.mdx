@@ -107,7 +107,7 @@ A `gate` step pauses the test until a person acts. It takes the same object as a
     ] } }
 ```
 
-Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait also counts against the test timeout, so raise `timeoutMs` on tests with gates.
+Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait is off the test clock, as with Playwright's `page.pause()`: the gate's own `timeoutMs` (default 5 minutes) or a step `timeoutMs` bounds it, and the test's remaining budget is unchanged when it resumes.
 
 ### Locators
 

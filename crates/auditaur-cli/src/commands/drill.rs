@@ -1251,7 +1251,7 @@ pub(crate) fn run_test_gate(
         "selector": gate.selector,
         "expectText": gate.expect_text,
         "manualContinue": gate.manual_continue,
-        // The test timeout can cut a gate's own timeout short; report what actually applies.
+        // A step `timeoutMs` can cut the gate's own timeout short; report what actually applies.
         "timeoutMs": deadline.saturating_duration_since(started).as_millis() as u64,
         "choices": gate.choices,
         "inputs": gate.inputs,
