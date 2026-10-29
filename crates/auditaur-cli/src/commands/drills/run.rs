@@ -1398,13 +1398,19 @@ pub fn resolve_run(root: &Path, selector: Option<&str>) -> Result<PathBuf> {
 /// Read a run report. A `running` run whose owner process is gone reads as
 /// interrupted, along with its running suites, tests and attempts.
 pub fn read_run(dir: &Path) -> Result<RunReport> {
+    read_run_with(dir, process_alive)
+}
+
+fn read_run_with(dir: &Path, mut alive: impl FnMut(u32) -> bool) -> Result<RunReport> {
     let path = dir.join("run.json");
     let mut report = parse_run(&path)?;
-    if report.status == Status::Running && !process_alive(report.pid) {
-        // The run may have written its final report and exited after the first read.
-        report = parse_run(&path)?;
+    // Check liveness once, then re-read: a runner seen dead has made its last write,
+    // so only a report that is still running afterwards was really interrupted.
+    if report.status != Status::Running || alive(report.pid) {
+        return Ok(report);
     }
-    if report.status == Status::Running && !process_alive(report.pid) {
+    report = parse_run(&path)?;
+    if report.status == Status::Running {
         report.status = Status::Interrupted;
         for suite in &mut report.suites {
             if suite.status == Status::Running {
@@ -2075,6 +2081,49 @@ mod tests {
         write_json_atomic(&path, &serde_json::json!({ "ok": true })).unwrap();
         handle.join().unwrap();
         assert!(fs::read_to_string(&path).unwrap().contains("ok"));
+    }
+
+    #[test]
+    fn a_run_is_only_interrupted_if_still_running_after_its_runner_is_seen_dead() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.drill.json");
+        fs::write(
+            &file,
+            r##"{ "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }] }"##,
+        )
+        .unwrap();
+        let loaded = load(&[file]);
+        let plan = select(&loaded.suites, &Filters::default());
+        let writer = RunWriter::create(
+            RunOptions {
+                workspace: dir.path().to_path_buf(),
+                invocation: Invocation::default(),
+                keep: 5,
+            },
+            &plan,
+        )
+        .unwrap();
+        let run_dir = writer.dir().to_path_buf();
+
+        // Alive at the check, even if it exits right after: one check, no stale verdict.
+        let mut checks = 0;
+        let live = read_run_with(&run_dir, |_| {
+            checks += 1;
+            checks == 1
+        })
+        .unwrap();
+        assert_eq!(live.status, Status::Running);
+        assert_eq!(checks, 1);
+
+        // Finished between the first read and the liveness check: the re-read wins.
+        let mut writer = Some(writer);
+        let done = read_run_with(&run_dir, |_| {
+            writer.take().unwrap().finish(false).unwrap();
+            false
+        })
+        .unwrap();
+        assert!(done.ended_at.is_some(), "{done:?}");
+        assert!(done.seq > live.seq);
     }
 
     #[cfg(windows)]
