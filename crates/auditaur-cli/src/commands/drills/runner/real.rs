@@ -352,13 +352,17 @@ fn about(target: &Locator, error: String) -> String {
     }
 }
 
+/// First `@auditaur/api` release whose drive bridge understands `locator:` selectors and the
+/// drill actions (`dblclick`, `inspect`).
+const MIN_DRILL_API_VERSION: &str = "0.7.0";
+
 /// Old bridges reject `locator:` selectors and newer actions (`dblclick`, `inspect`).
 fn explain(error: String) -> String {
     let stale = (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
         || error.contains("unsupported drive bridge action");
     if stale {
         format!(
-            "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to drive this app with drills."
+            "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to {MIN_DRILL_API_VERSION} or newer to drive this app with drills."
         )
     } else {
         error
@@ -1456,7 +1460,7 @@ mod selector_tests {
     #[test]
     fn explains_old_bridges() {
         let error = "click failed: 'locator:{}' is not a valid selector".to_string();
-        assert!(explain(error).contains("upgrade it"));
+        assert!(explain(error).contains("upgrade it to 0.7.0 or newer"));
         assert!(explain("unsupported drive bridge action: inspect".into()).contains("upgrade it"));
         assert_eq!(explain("selector not found".into()), "selector not found");
     }
