@@ -395,12 +395,6 @@ fn about(target: &Locator, error: String) -> String {
     }
 }
 
-/// First `@auditaur/api` release whose drive bridge understands `locator:` selectors and the
-/// drill actions (`dblclick`, `inspect`).
-const MIN_DRILL_API_VERSION: &str = "0.7.0";
-
-/// Fail the launch, not step 1, when the app's bridge predates drill locators. Only a known
-/// stale-bridge reply fails; anything else is left for the steps to report.
 /// The redacted end of a launch log, for a launch failure message.
 fn output_tail(log: &Path) -> String {
     let text = match fs::read(log) {
@@ -422,8 +416,18 @@ fn output_tail(log: &Path) -> String {
     format!("app output (`{}`):\n{ellipsis}{shown}", log.display())
 }
 
+/// First `@auditaur/api` release whose drive bridge understands `locator:` selectors and the
+/// drill actions (`dblclick`, `inspect`), and reports a missing element without throwing once
+/// bundled (0.7.0 threw, so every auto-wait failed at once).
+const MIN_DRILL_API_VERSION: &str = "0.7.1";
+
+/// Matches nothing, so the probe exercises the bridge's not-found reply.
+const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
+
+/// Fail the launch, not step 1, when the app's bridge predates drill locators. Only a known
+/// stale-bridge reply fails; anything else is left for the steps to report.
 fn check_drill_support(session: &BridgeSession) -> Result<()> {
-    let probe = bridge_selector(&Locator::Css("html".to_string()));
+    let probe = bridge_selector(&Locator::Css(MISSING_PROBE.to_string()));
     let reply = session.request(
         "exists",
         Some(probe),
@@ -458,12 +462,13 @@ fn clip_value(value: &Value) -> String {
 fn is_stale_bridge(error: &str) -> bool {
     (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
         || error.contains("unsupported drive bridge action")
+        || error.contains("'selectorNotFoundMessage' before initialization")
 }
 
 fn explain(error: String) -> String {
     if is_stale_bridge(&error) {
         format!(
-            "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to {MIN_DRILL_API_VERSION} or newer to drive this app with drills."
+            "{error}\nThis app's @auditaur/api is too old for `auditaur drill test`; upgrade it to {MIN_DRILL_API_VERSION} or newer to drive this app with drills."
         )
     } else {
         error
@@ -1686,7 +1691,11 @@ mod selector_tests {
     #[test]
     fn explains_old_bridges() {
         let error = "click failed: 'locator:{}' is not a valid selector".to_string();
-        assert!(explain(error).contains("upgrade it to 0.7.0 or newer"));
+        assert!(explain(error).contains("upgrade it to 0.7.1 or newer"));
+        assert!(explain(
+            "ReferenceError: Cannot access 'selectorNotFoundMessage' before initialization".into()
+        )
+        .contains("upgrade it"));
         assert!(explain("unsupported drive bridge action: inspect".into()).contains("upgrade it"));
         assert_eq!(explain("selector not found".into()), "selector not found");
     }
