@@ -588,9 +588,10 @@ fn load_script(options: &DrillRunOptions) -> Result<Option<ResolvedDrillScript>>
         return Ok(None);
     };
     let workspace_root = std::env::current_dir()
-        .context("failed to resolve current workspace")?
-        .canonicalize()
-        .context("failed to canonicalize current workspace")?;
+        .context("failed to resolve current workspace")
+        .and_then(|dir| {
+            dunce::canonicalize(dir).context("failed to canonicalize current workspace")
+        })?;
     let script_path = resolve_existing_path(&workspace_root, path)
         .with_context(|| format!("invalid script path `{}`", path.display()))?;
     let contents = fs::read_to_string(&script_path)
@@ -829,11 +830,21 @@ fn resolve_hook(
     })
 }
 
+/// Resolve `path` against `workspace_root`, rejecting anything outside it. Containment is
+/// checked on `std` canonical (verbatim on Windows) forms of both sides so a plain root still
+/// matches; the result is then simplified so hooks get a normal cwd where possible (`cmd.exe`
+/// refuses `\\?\` cwds).
 fn resolve_existing_path(workspace_root: &Path, path: &Path) -> Result<PathBuf> {
+    let root = workspace_root.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize workspace `{}`",
+            workspace_root.display()
+        )
+    })?;
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        workspace_root.join(path)
+        root.join(path)
     };
     let resolved = joined.canonicalize().with_context(|| {
         format!(
@@ -842,14 +853,14 @@ fn resolve_existing_path(workspace_root: &Path, path: &Path) -> Result<PathBuf> 
             workspace_root.display()
         )
     })?;
-    if !resolved.starts_with(workspace_root) {
+    if !resolved.starts_with(&root) {
         return Err(anyhow!(
             "`{}` resolves outside workspace `{}`",
             path.display(),
             workspace_root.display()
         ));
     }
-    Ok(resolved)
+    Ok(dunce::simplified(&resolved).to_path_buf())
 }
 
 fn run_hooks(
@@ -3648,6 +3659,44 @@ mod tests {
         let error = resolve_hook(&workspace_root, hook, DrillHookLifecycle::Setup).unwrap_err();
 
         assert!(error.to_string().contains("invalid cwd"));
+    }
+
+    #[test]
+    fn resolves_dot_hook_cwd_against_a_plain_workspace_root() {
+        let workspace = TempDir::new().unwrap();
+        let hook = DrillHook {
+            name: "Here".to_string(),
+            run: "npm".to_string(),
+            args: Vec::new(),
+            timeout_ms: 1_000,
+            cwd: PathBuf::from("."),
+            always: false,
+        };
+
+        // `drill test` passes `current_dir()` as-is, which is never verbatim on Windows.
+        let resolved = resolve_hook(workspace.path(), hook, DrillHookLifecycle::Setup).unwrap();
+
+        assert_eq!(resolved.cwd, dunce::canonicalize(workspace.path()).unwrap());
+        assert!(!resolved.cwd.to_string_lossy().starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn rejects_hook_cwd_escaping_a_plain_workspace_root() {
+        let parent = TempDir::new().unwrap();
+        let workspace = parent.path().join("app");
+        fs::create_dir(&workspace).unwrap();
+        let hook = DrillHook {
+            name: "Up".to_string(),
+            run: "npm".to_string(),
+            args: Vec::new(),
+            timeout_ms: 1_000,
+            cwd: PathBuf::from(".."),
+            always: false,
+        };
+
+        let error = resolve_hook(&workspace, hook, DrillHookLifecycle::Setup).unwrap_err();
+
+        assert!(format!("{error:#}").contains("outside workspace"));
     }
 
     #[test]
