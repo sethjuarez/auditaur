@@ -40,6 +40,7 @@ try {
     Invoke-Step "Rust formatting" { cargo fmt --check }
     Invoke-Step "Collector receiver compatibility tests" { cargo test -p auditaur-collector receiver }
     Invoke-Step "CLI tests" { cargo test -p auditaur-cli -- --test-threads=1 }
+    Invoke-Step "API typecheck" { npm --prefix packages\api run typecheck }
     Invoke-Step "API tests" { npm --prefix packages\api test }
     Invoke-Step "API build" { npm --prefix packages\api run build }
     Invoke-Step "Docs build" { npm --prefix docs run build }

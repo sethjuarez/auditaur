@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuditaurExporter } from './exporter';
 import { AUDITAUR_TRACE_CONTEXT_ARG, AUDITAUR_TRACEPARENT_HEADER, createAuditaurTraceContext, instrumentedInvoke } from './invoke';
+import type { AuditaurInvokeArgs } from './types';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -131,10 +132,11 @@ describe('instrumentedInvoke', () => {
   it('does not overwrite an existing reserved Auditaur arg', async () => {
     mocks.invoke.mockResolvedValueOnce('ok').mockResolvedValueOnce(undefined);
     const exporter = new AuditaurExporter(1_000_000, 64);
+    // A caller's own (malformed) reserved arg must pass through untouched.
     const args = {
       message: 'hello',
       auditaurTraceContext: { user: true },
-    };
+    } as unknown as AuditaurInvokeArgs;
 
     await instrumentedInvoke<string>(exporter, 'successful_command', args, 16_384, true, true);
     await exporter.flush();

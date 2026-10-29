@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { executeDriveBridgeRequest } from './drive-bridge';
 import { cssPath, generateLocator } from './locator-gen';
-import { MAX_RECORDED_STEPS, startRecording, stopRecording, takeRecording } from './recorder';
 import type { DriveBridgeRequest } from './types';
 
 const $ = (selector: string) => document.querySelector(selector)!;
@@ -78,6 +77,7 @@ describe('locate bridge action', () => {
     action: 'locate',
     selector,
     visibleOnly: false,
+    createdAtUnixNanos: 0,
   });
 
   it('suggests a locator for each css match', async () => {

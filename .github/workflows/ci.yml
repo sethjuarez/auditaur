@@ -50,6 +50,9 @@ jobs:
           cache-dependency-path: packages/api/package-lock.json
       - run: npm install
         working-directory: packages/api
+      # Vitest strips types, so test files are only typechecked here.
+      - run: npm run typecheck
+        working-directory: packages/api
       - run: npm test
         working-directory: packages/api
       - run: npm run build
