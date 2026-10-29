@@ -289,10 +289,6 @@ export async function executeDriveBridgeRequest(
       hoverElement(el);
       return { ok: true, visibleOnly: request.visibleOnly };
     }
-
-    function selectorNotFoundMessage(selector: string | undefined): string {
-      return selector ? `Selector \`${selector}\` was not found.` : 'Selector was not provided.';
-    }
     case 'fill': {
       const el = requireSelector(request.selector, request.visibleOnly);
       setElementValue(el, request.value ?? '');
@@ -544,16 +540,73 @@ function insertContentEditableText(el: Element, value: string): void {
   el.textContent = `${el.textContent ?? ''}${value}`;
 }
 
-function pressKey(selector: string | undefined, key: string, visibleOnly: boolean): void {
+// Module scope: a function declared inside handleRequest's switch is in its TDZ for the
+// cases above it once compiled, which broke not-found replies (and so every auto-wait).
+function selectorNotFoundMessage(selector: string | undefined): string {
+  return selector ? `Selector \`${selector}\` was not found.` : 'Selector was not provided.';
+}
+
+const MODIFIER_FLAGS = {
+  Alt: 'altKey',
+  Control: 'ctrlKey',
+  Meta: 'metaKey',
+  Shift: 'shiftKey',
+} as const;
+type Modifier = keyof typeof MODIFIER_FLAGS;
+
+/** Split a Playwright-style chord such as `Control+Shift+s` into modifiers and a key. */
+export function parseKeyChord(chord: string, isMac = isMacPlatform()): { modifiers: Modifier[]; key: string } {
+  // Playwright's tokenizer: `+` splits only after a token, so `+` and `Shift++` name the `+` key.
+  const parts: string[] = [];
+  let token = '';
+  for (const char of chord) {
+    if (char === '+' && token) {
+      parts.push(token);
+      token = '';
+    } else {
+      token += char;
+    }
+  }
+  parts.push(token);
+  const key = parts.pop() ?? '';
+  if (!key) {
+    throw new Error(`invalid key chord \`${chord}\``);
+  }
+  const modifiers = parts.map((part) => {
+    const name = part === 'ControlOrMeta' ? (isMac ? 'Meta' : 'Control') : part;
+    if (!(name in MODIFIER_FLAGS)) {
+      throw new Error(`invalid key chord \`${chord}\`: unknown modifier \`${part}\``);
+    }
+    return name as Modifier;
+  });
+  return { modifiers, key };
+}
+
+function isMacPlatform(): boolean {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+}
+
+function pressKey(selector: string | undefined, chord: string, visibleOnly: boolean): void {
   const target = selector
     ? requireSelector(selector, visibleOnly)
     : document.activeElement ?? document.body;
   if (!target) {
     throw new Error('selector not found');
   }
+  const { modifiers, key } = parseKeyChord(chord);
   (target as HTMLElement).focus?.();
-  for (const type of ['keydown', 'keyup']) {
-    target.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
+  const flags: Record<string, boolean> = { altKey: false, ctrlKey: false, metaKey: false, shiftKey: false };
+  const send = (type: string, eventKey: string) =>
+    target.dispatchEvent(new KeyboardEvent(type, { key: eventKey, ...flags, bubbles: true, cancelable: true }));
+  for (const modifier of modifiers) {
+    flags[MODIFIER_FLAGS[modifier]] = true;
+    send('keydown', modifier);
+  }
+  send('keydown', key);
+  send('keyup', key);
+  for (const modifier of [...modifiers].reverse()) {
+    flags[MODIFIER_FLAGS[modifier]] = false;
+    send('keyup', modifier);
   }
 }
 
