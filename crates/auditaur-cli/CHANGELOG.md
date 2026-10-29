@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.11](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.10...auditaur-cli-v0.4.11) - 2026-10-29
+
+### Added
+
+- *(drills)* CutReady drill requests (run step, suite env, value/telemetry assertions) ([#87](https://github.com/sethjuarez/auditaur/pull/87))
+
 ## [0.4.10](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.9...auditaur-cli-v0.4.10) - 2026-10-29
 
 ### Fixed
