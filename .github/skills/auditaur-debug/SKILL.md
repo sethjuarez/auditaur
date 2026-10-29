@@ -198,7 +198,7 @@ Prefer `--session <id>`, `--db <path>`, `--active`, `--latest`, `--pid`, or `--i
 
 ## Drill tests
 
-For repeatable checks, write Playwright-style suites in `.auditaur/drills/<name>.drill.json` and run them with `auditaur drill test`. Each test is a list of steps: actions (`click`, `fill`, `press`, `select`, `check`, ...), auto-retrying UI assertions (`expect` with `toBeVisible`, `toHaveText`, `toMatchAriaSnapshot`, `toHaveScreenshot`, ...), and telemetry assertions (`expectIpc`, `expectEvent`, `expectLog`, `expectNoErrors`) scoped to that test.
+For repeatable checks, write Playwright-style suites in `.auditaur/drills/<name>.drill.json` and run them with `auditaur drill test`. Each test is a list of steps: actions (`click`, `fill`, `press`, `select`, `check`, ...), auto-retrying UI assertions (`expect` with `toBeVisible`, `toHaveText`, `toMatchAriaSnapshot`, `toHaveScreenshot`, ...), polled JavaScript value assertions (`expectValue` with `toEqual`, `toContain`, `toMatch`), and telemetry assertions (`expectIpc`, `expectEvent`, `expectLog`, `expectNoErrors`) scoped to that test.
 
 ```bash
 auditaur drill validate                      # schema check with "did you mean" hints

@@ -34,7 +34,7 @@ use crate::{
         drills::{
             model::{
                 DrillSuite, Expectation, Locator, Matcher, ScreenshotMatch, Step, StepKind,
-                TelemetryExpectation, WaitState,
+                TelemetryExpectation, ValueExpectation, WaitState,
             },
             run::ErrorInfo,
         },
@@ -387,6 +387,16 @@ fn check_drill_support(session: &BridgeSession) -> Result<()> {
 }
 
 /// Old bridges reject `locator:` selectors and newer actions (`dblclick`, `inspect`).
+/// Received values in failure messages stay readable.
+fn clip_value(value: &Value) -> String {
+    let text = value.to_string();
+    if text.chars().count() > 500 {
+        format!("{}…", text.chars().take(500).collect::<String>())
+    } else {
+        text
+    }
+}
+
 fn is_stale_bridge(error: &str) -> bool {
     (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
         || error.contains("unsupported drive bridge action")
@@ -525,6 +535,82 @@ impl BridgeDriver {
                 _ => self.expect(ctx, expectation),
             },
             StepKind::Telemetry(expectation) => self.expect_telemetry(ctx, step, expectation),
+            StepKind::ExpectValue(expectation) => self.expect_value(ctx, step, expectation),
+        }
+    }
+
+    /// Re-evaluate the expression until its result matches, like Playwright's `expect.poll`.
+    /// A throwing expression counts as a miss and is retried.
+    fn expect_value(
+        &self,
+        ctx: &StepCtx<'_>,
+        step: &Step,
+        expectation: &ValueExpectation,
+    ) -> StepOutcome {
+        let started = Instant::now();
+        let give_up = (started + ctx.expect_timeout).min(ctx.deadline);
+        let mut last: Option<String> = None;
+        let mut first = true;
+        loop {
+            let now = Instant::now();
+            if now >= give_up && !first {
+                break;
+            }
+            let budget = give_up.saturating_duration_since(now);
+            let wait = if first {
+                budget.max(MIN_INSPECT_TIMEOUT)
+            } else {
+                budget
+            }
+            .min(ctx.remaining());
+            first = false;
+            if wait.is_zero() {
+                break;
+            }
+            let reply = self.request(
+                ctx,
+                "evaluate",
+                None,
+                Some(expectation.expression.clone()),
+                wait,
+            );
+            match reply {
+                Ok(reply) if reply.ok => {
+                    let Some(value) = reply.payload.get("value") else {
+                        return Err(failed("bridge `evaluate` reply had no `value`"));
+                    };
+                    if expectation.matcher.matches(value) != expectation.not {
+                        return Ok(());
+                    }
+                    last = Some(clip_value(value));
+                }
+                Ok(reply) => {
+                    let error = reply
+                        .error
+                        .unwrap_or_else(|| "bridge returned ok=false".to_string());
+                    last = Some(format!("threw: {error}"));
+                }
+                Err(error) => last = Some(format!("evaluate failed: {error:#}")),
+            }
+            thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
+        }
+        let ms = started.elapsed().as_millis();
+        let not = if expectation.not { "not " } else { "" };
+        let expected = format!("{not}{}", expectation.matcher);
+        let actual = last.unwrap_or_else(|| "no time left to evaluate".to_string());
+        let info = ErrorInfo {
+            message: format!(
+                "{} failed after {ms}ms\nexpected: {expected}\nreceived: {actual}",
+                step.title
+            ),
+            expected: Some(Value::String(expected)),
+            actual: Some(Value::String(actual)),
+            ..ErrorInfo::default()
+        };
+        if ctx.expired() && give_up < started + ctx.expect_timeout {
+            Err(StepResult::TimedOut(info))
+        } else {
+            Err(StepResult::Failed(info))
         }
     }
 

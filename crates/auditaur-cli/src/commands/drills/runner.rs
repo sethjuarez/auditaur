@@ -614,7 +614,10 @@ impl SuiteRun<'_, '_> {
                 .step_started(budget.phase, &step.title, step.action)?;
             // On assertions `timeoutMs` is the retry window (Playwright's `expect(..., { timeout })`),
             // so running out is a failed assertion; on actions it bounds the step.
-            let assertion = matches!(step.kind, StepKind::Expect(_) | StepKind::Telemetry(_));
+            let assertion = matches!(
+                step.kind,
+                StepKind::Expect(_) | StepKind::ExpectValue(_) | StepKind::Telemetry(_)
+            );
             // A person's wait is off the test clock, like Playwright's `page.pause()`; the
             // gate's own `timeoutMs` (or the step's) bounds it instead.
             let gate = matches!(step.kind, StepKind::Gate(_));
@@ -882,6 +885,7 @@ fn hook_always(hook: &Value) -> bool {
 pub fn is_soft(step: &Step) -> bool {
     match &step.kind {
         StepKind::Expect(expectation) => expectation.soft,
+        StepKind::ExpectValue(expectation) => expectation.soft,
         StepKind::Telemetry(expectation) => match expectation {
             TelemetryExpectation::Ipc { soft, .. }
             | TelemetryExpectation::Event { soft, .. }

@@ -69,7 +69,11 @@ pub const ACTION_KEYS: &[&str] = &[
     "expectEvent",
     "expectLog",
     "expectNoErrors",
+    "expectValue",
 ];
+
+/// Matchers for `expectValue`, which asserts on a JavaScript expression's result.
+pub const VALUE_MATCHER_KEYS: &[&str] = &["toEqual", "toContain", "toMatch"];
 
 pub const MATCHER_KEYS: &[&str] = &[
     "toExist",
@@ -116,6 +120,7 @@ pub fn all_known_keys() -> Vec<&'static str> {
         STEP_COMMON_KEYS,
         ACTION_KEYS,
         MATCHER_KEYS,
+        VALUE_MATCHER_KEYS,
         SCREENSHOT_OPTION_KEYS,
         STEP_OPTION_KEYS,
         LOCATOR_KEYS,
@@ -239,7 +244,69 @@ pub enum StepKind {
     },
     Gate(Value),
     Expect(Expectation),
+    ExpectValue(ValueExpectation),
     Telemetry(TelemetryExpectation),
+}
+
+/// `expectValue`: poll a JavaScript expression until its result matches.
+#[derive(Debug, Clone)]
+pub struct ValueExpectation {
+    pub expression: String,
+    pub matcher: ValueMatcher,
+    pub not: bool,
+    pub soft: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum ValueMatcher {
+    /// Deep JSON equality; numbers compare by value.
+    ToEqual(Value),
+    /// Substring of a string result, or an element of an array result.
+    ToContain(Value),
+    /// Regular expression a string result matches.
+    ToMatch(Regex),
+}
+
+impl ValueMatcher {
+    pub fn matches(&self, actual: &Value) -> bool {
+        match self {
+            Self::ToEqual(expected) => json_equal(expected, actual),
+            Self::ToContain(expected) => match (actual, expected) {
+                (Value::String(actual), Value::String(expected)) => actual.contains(expected),
+                (Value::Array(items), expected) => {
+                    items.iter().any(|item| json_equal(expected, item))
+                }
+                _ => false,
+            },
+            Self::ToMatch(pattern) => actual.as_str().is_some_and(|text| pattern.is_match(text)),
+        }
+    }
+}
+
+impl fmt::Display for ValueMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ToEqual(value) => write!(f, "to equal {value}"),
+            Self::ToContain(value) => write!(f, "to contain {value}"),
+            Self::ToMatch(pattern) => write!(f, "to match /{}/", pattern.as_str()),
+        }
+    }
+}
+
+/// JSON equality where `1` and `1.0` are the same number, as in JavaScript.
+pub fn json_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => a == b || a.as_f64() == b.as_f64(),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| json_equal(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| json_equal(a, b)))
+        }
+        _ => a == b,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -993,6 +1060,7 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
         "expectEvent" => &["count", "not", "soft"],
         "expectLog" => &["level", "count", "not", "soft"],
         "expectNoErrors" => &["ignore", "soft"],
+        "expectValue" => &["toEqual", "toContain", "toMatch", "not", "soft"],
         _ => &[],
     };
     allowed.extend_from_slice(extra);
@@ -1178,7 +1246,75 @@ fn parse_step_kind(
             StepKind::Gate(raw.clone())
         }
         "expect" => StepKind::Expect(parse_expectation(ctx, map, raw, parent, path)?),
+        "expectValue" => {
+            StepKind::ExpectValue(parse_value_expectation(ctx, map, raw, parent, path)?)
+        }
         _ => StepKind::Telemetry(parse_telemetry(ctx, map, action, raw, parent, path)?),
+    })
+}
+
+fn parse_value_expectation(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    raw: &Value,
+    parent: &str,
+    path: &str,
+) -> Option<ValueExpectation> {
+    let expression = string_value(ctx, raw, path);
+    let not = get_bool(ctx, map, "not", parent);
+    let soft = get_bool(ctx, map, "soft", parent);
+    let present: Vec<&str> = VALUE_MATCHER_KEYS
+        .iter()
+        .copied()
+        .filter(|key| map.contains_key(*key))
+        .collect();
+    let key = match present.as_slice() {
+        [key] => *key,
+        [] => {
+            ctx.err(
+                parent,
+                format!(
+                    "`expectValue` needs one matcher: {}",
+                    VALUE_MATCHER_KEYS.join(", ")
+                ),
+            );
+            return None;
+        }
+        many => {
+            ctx.err(
+                parent,
+                format!(
+                    "`expectValue` has several matchers ({}); use one per step",
+                    many.join(", ")
+                ),
+            );
+            return None;
+        }
+    };
+    let value = &map[key];
+    let matcher = match key {
+        "toEqual" => Some(ValueMatcher::ToEqual(value.clone())),
+        "toContain" => Some(ValueMatcher::ToContain(value.clone())),
+        "toMatch" => {
+            let matcher_path = join(parent, key);
+            string_value(ctx, value, &matcher_path).and_then(|pattern| match Regex::new(&pattern) {
+                Ok(regex) => Some(ValueMatcher::ToMatch(regex)),
+                Err(error) => {
+                    ctx.err(
+                        &matcher_path,
+                        format!("invalid regular expression: {error}"),
+                    );
+                    None
+                }
+            })
+        }
+        _ => unreachable!("value matcher keys are exhaustive"),
+    };
+    Some(ValueExpectation {
+        expression: expression?,
+        matcher: matcher?,
+        not,
+        soft,
     })
 }
 
@@ -1654,6 +1790,14 @@ pub fn describe(kind: &StepKind) -> String {
             };
             format!("expect {} {not}{matcher}", expectation.target)
         }
+        StepKind::ExpectValue(expectation) => {
+            let not = if expectation.not { "not " } else { "" };
+            format!(
+                "expect value of {} {not}{}",
+                clip(&expectation.expression, 60),
+                expectation.matcher
+            )
+        }
         StepKind::Telemetry(expectation) => {
             let times = |verb: &str, not: bool, count: Option<u64>| match count {
                 _ if not => format!("not {verb}"),
@@ -1912,6 +2056,46 @@ mod tests {
             "{issues:?}"
         );
         assert!(!issues.iter().any(|m| m.contains("\"c\"")), "{issues:?}");
+    }
+
+    #[test]
+    fn validates_value_expectations() {
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "expectValue": "1" },
+                { "expectValue": "1", "toEqual": 1, "toMatch": "x" },
+                { "expectValue": "1", "toMatch": "(" },
+                { "expectValue": " ", "toEqual": 1 },
+                { "expectValue": "1", "toEqual": 1, "count": 1 }
+            ] }] }"##,
+        );
+        for needle in [
+            "`expectValue` needs one matcher",
+            "several matchers",
+            "invalid regular expression",
+            "expectValue: must not be empty",
+            "`count` is not valid with `expectValue`",
+        ] {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn value_matchers_compare_like_javascript() {
+        let equal = ValueMatcher::ToEqual(serde_json::json!({ "n": 1.0, "xs": [1, "a"] }));
+        assert!(equal.matches(&serde_json::json!({ "xs": [1, "a"], "n": 1 })));
+        assert!(!equal.matches(&serde_json::json!({ "n": 1 })));
+        let contain = ValueMatcher::ToContain(serde_json::json!("ell"));
+        assert!(contain.matches(&serde_json::json!("hello")));
+        assert!(!contain.matches(&serde_json::json!(["hello"])));
+        let element = ValueMatcher::ToContain(serde_json::json!({ "id": 2 }));
+        assert!(element.matches(&serde_json::json!([{ "id": 1 }, { "id": 2.0 }])));
+        let pattern = ValueMatcher::ToMatch(Regex::new("^v\\d+$").unwrap());
+        assert!(pattern.matches(&serde_json::json!("v12")));
+        assert!(!pattern.matches(&serde_json::json!(12)));
     }
 
     #[test]

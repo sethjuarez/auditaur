@@ -91,7 +91,8 @@
         { "$ref": "#/$defs/stepExpectIpc" },
         { "$ref": "#/$defs/stepExpectEvent" },
         { "$ref": "#/$defs/stepExpectLog" },
-        { "$ref": "#/$defs/stepExpectNoErrors" }
+        { "$ref": "#/$defs/stepExpectNoErrors" },
+        { "$ref": "#/$defs/stepExpectValue" }
       ]
     },
     "stepName": { "$ref": "#/$defs/text", "description": "Custom step title." },
@@ -247,6 +248,19 @@
         "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
         "expectNoErrors": { "const": true },
         "ignore": { "type": "array", "items": { "$ref": "#/$defs/text" }, "description": "Error messages containing any of these are ignored." },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectValue": {
+      "type": "object", "additionalProperties": false, "required": ["expectValue"],
+      "oneOf": [{ "required": ["toEqual"] }, { "required": ["toContain"] }, { "required": ["toMatch"] }],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectValue": { "$ref": "#/$defs/text", "description": "JavaScript expression, re-evaluated until the matcher passes." },
+        "toEqual": { "description": "Deep JSON equality." },
+        "toContain": { "description": "Substring of a string result, or an element of an array result." },
+        "toMatch": { "$ref": "#/$defs/text", "description": "Regular expression a string result matches." },
+        "not": { "type": "boolean" },
         "soft": { "type": "boolean" }
       }
     },
