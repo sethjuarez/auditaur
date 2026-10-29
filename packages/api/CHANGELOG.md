@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/sethjuarez/auditaur/compare/api-v0.6.1...api-v0.7.0) (2026-10-29)
+
+
+### Features
+
+* **drills:** unit-test-style drills, a routed drills canvas, and the Auditaur Copilot plugin ([#82](https://github.com/sethjuarez/auditaur/issues/82)) ([4df1708](https://github.com/sethjuarez/auditaur/commit/4df1708b61aa14e4478d3df67d500bb1726e64e8))
+
 ## [0.6.1](https://github.com/sethjuarez/auditaur/compare/api-v0.6.0...api-v0.6.1) (2026-10-23)
 
 
