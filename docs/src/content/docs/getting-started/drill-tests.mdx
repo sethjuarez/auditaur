@@ -112,8 +112,10 @@ Telemetry assertions only see what the app recorded after the test started. Nega
 `run` runs a program (no shell) mid-test, with the same `args` and workspace-contained `cwd` as hooks, bounded by the step's `timeoutMs`. It passes when the exit code is `exitCode` (default 0) and `stdout`/`stderr` contain the given text or `{ "pattern": "regex" }`. Its output is attached to the step, as with hooks, so don't print secrets:
 
 ```json
-{ "run": "git", "args": ["log", "-1", "--format=%an <%ae>"], "cwd": "fixture", "stdout": "Ada <ada@example.com>" }
+{ "run": "git", "args": ["log", "-1", "--format=%an <%ae>"], "cwd": "${APP_PROJECT}", "stdout": "Ada <ada@example.com>" }
 ```
+
+`${NAME}` in `args` and `cwd` (hooks and `run` steps) expands from suite `env` and `$AUDITAUR_DRILL_ENV_FILE`; other `${…}` text passes through to the command. A literal `cwd` is relative to the workspace and must stay inside it; a `cwd` built from a drill variable, such as a temp fixture, may be anywhere.
 
 ### Human gates
 
