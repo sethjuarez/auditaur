@@ -904,6 +904,36 @@ fn get_string(ctx: &mut Ctx, map: &Map<String, Value>, key: &str, path: &str) ->
     string_value(ctx, value, &join(path, key))
 }
 
+/// Validate a Playwright-style key chord the way the drive bridge tokenizes it:
+/// `+` splits only after a token, so `+` and `Shift++` name the `+` key.
+fn check_key_chord(chord: &str) -> Result<(), String> {
+    const MODIFIERS: [&str; 5] = ["Alt", "Control", "ControlOrMeta", "Meta", "Shift"];
+    let mut parts = Vec::new();
+    let mut token = String::new();
+    for c in chord.chars() {
+        if c == '+' && !token.is_empty() {
+            parts.push(std::mem::take(&mut token));
+        } else {
+            token.push(c);
+        }
+    }
+    if token.is_empty() {
+        return Err(format!(
+            "invalid key chord `{chord}`: missing key after `+`"
+        ));
+    }
+    match parts
+        .iter()
+        .find(|part| !MODIFIERS.contains(&part.as_str()))
+    {
+        Some(part) => Err(format!(
+            "invalid key chord `{chord}`: unknown modifier `{part}` (use {})",
+            MODIFIERS.join(", ")
+        )),
+        None => Ok(()),
+    }
+}
+
 fn string_value(ctx: &mut Ctx, value: &Value, path: &str) -> Option<String> {
     match value {
         Value::String(text) if text.trim().is_empty() => {
@@ -1376,7 +1406,13 @@ fn parse_step_kind(
             }
         }
         "press" => {
-            let key = string_value(ctx, raw, path);
+            let key = string_value(ctx, raw, path).filter(|chord| match check_key_chord(chord) {
+                Ok(()) => true,
+                Err(message) => {
+                    ctx.err(path, message);
+                    false
+                }
+            });
             let target = optional_locator(ctx, map, "target", parent);
             StepKind::Press {
                 key: key?,
@@ -2398,6 +2434,26 @@ mod tests {
             issues.iter().any(|m| m.contains("did you mean `click`")),
             "{issues:?}"
         );
+    }
+
+    #[test]
+    fn validates_press_chords() {
+        for ok in [
+            "Enter",
+            "+",
+            "Control+s",
+            "ControlOrMeta+Shift+K",
+            "Shift++",
+        ] {
+            let doc =
+                format!(r#"{{ "tests": [{{ "name": "a", "steps": [{{ "press": "{ok}" }}] }}] }}"#);
+            assert!(messages(&doc).is_empty(), "{ok}: {:?}", messages(&doc));
+        }
+        let issues = messages(
+            r#"{ "tests": [{ "name": "a", "steps": [{ "press": "Ctrl+s" }, { "press": "Control+" }] }] }"#,
+        );
+        assert!(issues[0].contains("unknown modifier `Ctrl`"), "{issues:?}");
+        assert!(issues[1].contains("missing key after `+`"), "{issues:?}");
     }
 
     #[test]
