@@ -72,6 +72,7 @@ pub const ACTION_KEYS: &[&str] = &[
     "expectValue",
     "expectSpan",
     "expectNoTelemetry",
+    "run",
 ];
 
 /// Matchers for `expectValue`, which asserts on a JavaScript expression's result.
@@ -108,6 +109,11 @@ pub const STEP_OPTION_KEYS: &[&str] = &[
     "ignore",
     "attributes",
     "in",
+    "args",
+    "cwd",
+    "exitCode",
+    "stdout",
+    "stderr",
 ];
 
 pub const LOCATOR_KEYS: &[&str] = &[
@@ -259,6 +265,34 @@ pub enum StepKind {
     Expect(Expectation),
     ExpectValue(ValueExpectation),
     Telemetry(TelemetryExpectation),
+    Run(CommandStep),
+}
+
+/// `run`: a command run mid-test, with the same `cwd` rules as suite hooks.
+#[derive(Debug, Clone)]
+pub struct CommandStep {
+    pub run: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub exit_code: i32,
+    pub stdout: Option<Needle>,
+    pub stderr: Option<Needle>,
+}
+
+impl CommandStep {
+    /// The equivalent hook object, so the step runs exactly like a suite hook.
+    pub fn hook(&self, name: &str, timeout_ms: u64) -> Value {
+        let mut hook = serde_json::json!({
+            "name": name,
+            "run": self.run,
+            "args": self.args,
+            "timeoutMs": timeout_ms.max(1),
+        });
+        if let Some(cwd) = &self.cwd {
+            hook["cwd"] = Value::String(cwd.clone());
+        }
+        hook
+    }
 }
 
 /// `expectValue`: poll a JavaScript expression until its result matches.
@@ -1209,6 +1243,7 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
         "expectNoTelemetry" => &["in", "soft"],
         "expectNoErrors" => &["ignore", "soft"],
         "expectValue" => &["toEqual", "toContain", "toMatch", "not", "soft"],
+        "run" => &["args", "cwd", "exitCode", "stdout", "stderr"],
         _ => &[],
     };
     allowed.extend_from_slice(extra);
@@ -1397,8 +1432,79 @@ fn parse_step_kind(
         "expectValue" => {
             StepKind::ExpectValue(parse_value_expectation(ctx, map, raw, parent, path)?)
         }
+        "run" => StepKind::Run(parse_command_step(ctx, map, raw, parent, path)?),
         _ => StepKind::Telemetry(parse_telemetry(ctx, map, action, raw, parent, path)?),
     })
+}
+
+fn parse_command_step(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    raw: &Value,
+    parent: &str,
+    path: &str,
+) -> Option<CommandStep> {
+    let run = string_value(ctx, raw, path);
+    let args = match map.get("args") {
+        None => Some(Vec::new()),
+        Some(Value::Array(items)) => {
+            let args_path = join(parent, "args");
+            let parsed: Vec<Option<String>> = items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| match item {
+                    Value::String(text) => Some(text.clone()),
+                    other => {
+                        ctx.err(
+                            &format!("{args_path}[{i}]"),
+                            format!("expected string, found {}", type_name(other)),
+                        );
+                        None
+                    }
+                })
+                .collect();
+            parsed.into_iter().collect()
+        }
+        Some(other) => {
+            ctx.err(
+                &join(parent, "args"),
+                format!("expected an array of strings, found {}", type_name(other)),
+            );
+            None
+        }
+    };
+    let cwd = get_string(ctx, map, "cwd", parent);
+    let exit_code = match map.get("exitCode") {
+        None => Some(0),
+        Some(value) => match value.as_i64().and_then(|code| i32::try_from(code).ok()) {
+            Some(code) => Some(code),
+            None => {
+                ctx.err(&join(parent, "exitCode"), "expected an integer exit code");
+                None
+            }
+        },
+    };
+    let mut output = |key: &str| match map.get(key) {
+        None => Some(None),
+        Some(value) => parse_name_match(ctx, value, &join(parent, key)).map(|m| Some(needle(m))),
+    };
+    let stdout = output("stdout");
+    let stderr = output("stderr");
+    Some(CommandStep {
+        run: run?,
+        args: args?,
+        cwd,
+        exit_code: exit_code?,
+        stdout: stdout?,
+        stderr: stderr?,
+    })
+}
+
+fn needle(text: TextMatch) -> Needle {
+    match text {
+        TextMatch::Exact(text) => Needle::Contains(text),
+        TextMatch::Pattern(pattern) => Needle::Pattern(pattern),
+    }
 }
 
 fn parse_value_expectation(
@@ -1797,10 +1903,7 @@ fn parse_telemetry(
             })
         }
         "expectNoTelemetry" => {
-            let needle = match parse_name_match(ctx, raw, path)? {
-                TextMatch::Exact(text) => Needle::Contains(text),
-                TextMatch::Pattern(pattern) => Needle::Pattern(pattern),
-            };
+            let needle = needle(parse_name_match(ctx, raw, path)?);
             let kinds = match map.get("in") {
                 None => Some(TelemetryKind::ALL.to_vec()),
                 Some(Value::Array(items)) if !items.is_empty() => {
@@ -2063,6 +2166,13 @@ pub fn describe(kind: &StepKind) -> String {
                 Matcher::ToHaveScreenshot(_) => "to match screenshot".to_string(),
             };
             format!("expect {} {not}{matcher}", expectation.target)
+        }
+        StepKind::Run(command) => {
+            let line = std::iter::once(command.run.as_str())
+                .chain(command.args.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("run {}", clip(&line, 60))
         }
         StepKind::ExpectValue(expectation) => {
             let not = if expectation.not { "not " } else { "" };
@@ -2408,6 +2518,50 @@ mod tests {
             "invalid regular expression",
             "expectValue: must not be empty",
             "`count` is not valid with `expectValue`",
+        ] {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_and_validates_run_steps() {
+        let parsed = parse(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "run": "git", "args": ["log", "-1"], "cwd": "fixture", "exitCode": 2, "stdout": { "pattern": "^a" }, "stderr": "warn" }
+            ] }] }"##,
+        );
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        let suite = parsed.suite.as_ref().unwrap();
+        let StepKind::Run(command) = &suite.tests[0].steps[0].kind else {
+            panic!("not a run step");
+        };
+        assert_eq!(command.args, ["log", "-1"]);
+        assert_eq!(command.cwd.as_deref(), Some("fixture"));
+        assert_eq!(command.exit_code, 2);
+        assert!(command.stdout.as_ref().unwrap().is_in("abc"));
+        assert!(command.stderr.as_ref().unwrap().is_in("a warning"));
+        let hook = command.hook("t", 5);
+        assert_eq!(hook["timeoutMs"], 5);
+        assert_eq!(hook["cwd"], "fixture");
+
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "run": " " },
+                { "run": "git", "args": "log" },
+                { "run": "git", "exitCode": 1.5 },
+                { "run": "git", "stdout": "" },
+                { "run": "git", "soft": true }
+            ] }] }"##,
+        );
+        for needle in [
+            "run: must not be empty",
+            "args",
+            "exitCode",
+            "stdout",
+            "`soft` is not valid with `run`",
         ] {
             assert!(
                 issues.iter().any(|m| m.contains(needle)),

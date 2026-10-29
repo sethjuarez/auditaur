@@ -191,10 +191,28 @@ impl Host for FakeHost {
         if name == "cancel" {
             state.cancel.as_ref().unwrap().store(true, Ordering::SeqCst);
         }
+        let run = hook["run"].as_str().unwrap_or_default();
+        let args: Vec<&str> = hook["args"]
+            .as_array()
+            .map(|args| args.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if hook.get("args").is_some() {
+            state.log.push(format!("ran {run} {}", args.join(" ")));
+        }
+        let timed_out = run == "slow";
+        let exit_code = if name == "bad" || run == "fail" { 1 } else { 0 };
         Ok(HookResult {
-            passed: name != "bad",
-            timed_out: false,
-            report: json!({ "name": name, "env": { "token": "secret-value" } }),
+            passed: exit_code == 0 && !timed_out,
+            timed_out,
+            report: json!({
+                "name": name,
+                "env": { "token": "secret-value" },
+                "exitCode": if timed_out { Value::Null } else { json!(exit_code) },
+                "timedOut": timed_out,
+                "timeoutMs": hook["timeoutMs"],
+                "stdout": format!("out of {run} {}", args.join(" ")),
+                "stderr": if exit_code == 0 { "" } else { "it broke" },
+            }),
         })
     }
 }
@@ -365,6 +383,70 @@ fn step_attachments_are_recorded() {
     let attempt = read_attempt(&ran.dir, summary).unwrap();
     assert_eq!(attempt.steps[0].attachments.len(), 1);
     assert_eq!(test(&ran, "shot").status, Status::Passed);
+}
+
+#[test]
+fn run_steps_check_exit_code_and_output_in_order() {
+    let ran = run(r##"{ "tests": [
+        { "name": "ok", "steps": [
+            { "click": "#a" },
+            { "run": "git", "args": ["log", "-1"], "stdout": "git log" },
+            { "click": "#b" }
+        ] },
+        { "name": "exit", "steps": [{ "run": "fail" }] },
+        { "name": "expected-exit", "steps": [{ "run": "fail", "exitCode": 1, "stderr": { "pattern": "bro+ke" } }] },
+        { "name": "output", "steps": [{ "run": "git", "stdout": "nope" }] },
+        { "name": "slow", "steps": [{ "run": "slow" }] }
+    ] }"##);
+    assert_eq!(test(&ran, "ok").status, Status::Passed);
+    let order: Vec<_> = ran
+        .log
+        .iter()
+        .filter(|line| line.starts_with("ran ") || line.contains("#a") || line.contains("#b"))
+        .cloned()
+        .collect();
+    assert!(
+        order.iter().position(|l| l.contains("#a"))
+            < order.iter().position(|l| l == "ran git log -1")
+            && order.iter().position(|l| l == "ran git log -1")
+                < order.iter().position(|l| l.contains("#b")),
+        "{order:?}"
+    );
+    let attempt = read_attempt(&ran.dir, &test(&ran, "ok").attempts[0]).unwrap();
+    let saved = &attempt.steps[1].attachments[0];
+    let written = fs::read_to_string(ran.dir.join(&saved.path)).unwrap();
+    assert!(written.contains("out of git log -1"), "{written}");
+    assert!(!written.contains("secret-value"), "{written}");
+    let message = |name: &str| {
+        test(&ran, name).attempts[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .clone()
+    };
+    assert!(
+        message("exit").contains("exit with 0, got exit code 1"),
+        "{}",
+        message("exit")
+    );
+    assert!(message("exit").contains("it broke"), "{}", message("exit"));
+    assert_eq!(test(&ran, "expected-exit").status, Status::Passed);
+    assert!(
+        message("output").contains("stdout to contain"),
+        "{}",
+        message("output")
+    );
+    assert!(
+        message("output").contains("out of git"),
+        "{}",
+        message("output")
+    );
+    assert!(
+        message("slow").contains("did not finish"),
+        "{}",
+        message("slow")
+    );
 }
 
 #[test]

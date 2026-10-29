@@ -21,7 +21,9 @@ use auditaur_core::redaction::redact_json;
 use serde_json::Value;
 
 use super::{
-    model::{DrillSuite, Matcher, Step, StepKind, TelemetryExpectation, TestCase, TestMode},
+    model::{
+        CommandStep, DrillSuite, Matcher, Step, StepKind, TelemetryExpectation, TestCase, TestMode,
+    },
     run::{ErrorInfo, Outcome, Phase, RunWriter, Status},
     title, Selected,
 };
@@ -648,10 +650,10 @@ impl SuiteRun<'_, '_> {
                 wrote_baseline: false,
                 cancel: self.options.cancel.clone(),
             };
-            let result = if gate {
-                budget.untimed(|| driver.run_step(step, &mut ctx))
-            } else {
-                driver.run_step(step, &mut ctx)
+            let result = match &step.kind {
+                StepKind::Run(command) => run_command(&mut *self.host, step, command, &mut ctx),
+                _ if gate => budget.untimed(|| driver.run_step(step, &mut ctx)),
+                _ => driver.run_step(step, &mut ctx),
             };
             // Evidence captured below is not part of the step's duration.
             ctx.writer.step_ended();
@@ -829,6 +831,96 @@ impl SuiteRun<'_, '_> {
         Ok(Some(error))
     }
 }
+
+/// Run a `run` step's command as a hook bounded by the step's remaining time, attach its
+/// redacted output, and check its exit code and output.
+fn run_command(
+    host: &mut dyn Host,
+    step: &Step,
+    command: &CommandStep,
+    ctx: &mut StepCtx<'_>,
+) -> StepResult {
+    let fail = |message: String| StepResult::Failed(ErrorInfo::new(message));
+    let timeout_ms = u64::try_from(ctx.remaining().as_millis()).unwrap_or(u64::MAX);
+    if timeout_ms == 0 {
+        return StepResult::TimedOut(ErrorInfo::new("no time left to run the command"));
+    }
+    let hook = command.hook(&step.title, timeout_ms);
+    let result = match host.run_hook(&hook, false) {
+        Ok(result) => result,
+        Err(error) => return fail(format!("could not run `{}`: {error:#}", command.run)),
+    };
+    let mut shown = redact_json(&result.report, &[]).value;
+    if let Some(report) = shown.as_object_mut() {
+        report.remove("lifecycle");
+        report.remove("always");
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(&shown) {
+        let file = format!("step-{}-run.json", ctx.step_index);
+        if let Err(error) = ctx
+            .writer
+            .attach("command output", "application/json", &file, &bytes)
+        {
+            return fail(format!("could not record command output: {error:#}"));
+        }
+    }
+    let text = |report: &Value, key: &str| {
+        report
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let tail = |key: &str| {
+        let text = text(&shown, key);
+        let text = text.trim();
+        let start = text
+            .char_indices()
+            .rev()
+            .nth(OUTPUT_SHOWN - 1)
+            .map_or(0, |(at, _)| at);
+        if text.is_empty() {
+            format!("{key} was empty")
+        } else if start > 0 {
+            format!("{key} ended with: …{}", &text[start..])
+        } else {
+            format!("{key}: {text}")
+        }
+    };
+    if result.report.get("timedOut").and_then(Value::as_bool) == Some(true) || result.timed_out {
+        return StepResult::TimedOut(ErrorInfo::new(format!(
+            "`{}` did not finish within {timeout_ms}ms",
+            command.run
+        )));
+    }
+    let exit_code = result
+        .report
+        .get("exitCode")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+    if exit_code != Some(command.exit_code) {
+        let got = exit_code.map_or("no exit code".to_string(), |code| {
+            format!("exit code {code}")
+        });
+        return fail(format!(
+            "expected `{}` to exit with {}, got {got}; {}",
+            command.run,
+            command.exit_code,
+            tail("stderr")
+        ));
+    }
+    for (key, needle) in [("stdout", &command.stdout), ("stderr", &command.stderr)] {
+        if let Some(needle) = needle {
+            if !needle.is_in(&text(&result.report, key)) {
+                return fail(format!("expected {key} to contain {needle}; {}", tail(key)));
+            }
+        }
+    }
+    StepResult::Passed
+}
+
+/// How much of a command's output a failure message shows.
+const OUTPUT_SHOWN: usize = 500;
 
 impl Budget {
     fn new(phase: Phase, timeout_ms: u64, test_id: Option<String>, since_unix_nanos: i64) -> Self {

@@ -536,6 +536,8 @@ impl BridgeDriver {
             },
             StepKind::Telemetry(expectation) => self.expect_telemetry(ctx, step, expectation),
             StepKind::ExpectValue(expectation) => self.expect_value(ctx, step, expectation),
+            // The runner runs commands through the host; they never reach the app.
+            StepKind::Run(_) => Err(failed("`run` steps are run by the host")),
         }
     }
 

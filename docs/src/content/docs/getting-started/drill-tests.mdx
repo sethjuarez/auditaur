@@ -87,7 +87,7 @@ Every step accepts `name` and `timeoutMs`.
 | --- | --- |
 | Actions | `click`, `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`), `hover`, `select` + `value` or `values`, `check`, `uncheck` |
 | Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload` |
-| Other | `evaluate` (JavaScript), `screenshot` (attachment only), `gate` (human-in-the-loop) |
+| Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
 | Value assertions | `expectValue` (JavaScript) + one of `toEqual` (deep JSON equality), `toContain` (substring or array element), `toMatch` (regex string) |
 | Telemetry assertions | `expectIpc` (+ `status`, `count`, `maxMs`), `expectEvent` (+ `count`), `expectLog` (+ `level`, `attributes`, `count`), `expectSpan` (+ `status`, `attributes`, `count`), `expectNoTelemetry` (+ `in`), `expectNoErrors` (+ `ignore`) |
@@ -107,6 +107,12 @@ Telemetry assertions only see what the app recorded after the test started. Nega
 ```json
 { "expectSpan": "chat.send", "status": "ok", "attributes": { "harness": "prompty" } },
 { "expectNoTelemetry": "ada@example.com", "in": ["logs", "spans", "ipc"] }
+```
+
+`run` runs a program (no shell) mid-test, with the same `args` and workspace-contained `cwd` as hooks, bounded by the step's `timeoutMs`. It passes when the exit code is `exitCode` (default 0) and `stdout`/`stderr` contain the given text or `{ "pattern": "regex" }`. Its output is attached to the step, as with hooks, so don't print secrets:
+
+```json
+{ "run": "git", "args": ["log", "-1", "--format=%an <%ae>"], "cwd": "fixture", "stdout": "Ada <ada@example.com>" }
 ```
 
 ### Human gates

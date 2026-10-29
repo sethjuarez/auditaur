@@ -94,7 +94,8 @@
         { "$ref": "#/$defs/stepExpectSpan" },
         { "$ref": "#/$defs/stepExpectNoTelemetry" },
         { "$ref": "#/$defs/stepExpectNoErrors" },
-        { "$ref": "#/$defs/stepExpectValue" }
+        { "$ref": "#/$defs/stepExpectValue" },
+        { "$ref": "#/$defs/stepRun" }
       ]
     },
     "stepName": { "$ref": "#/$defs/text", "description": "Custom step title." },
@@ -304,6 +305,18 @@
         "toMatch": { "$ref": "#/$defs/text", "description": "Regular expression a string result matches." },
         "not": { "type": "boolean" },
         "soft": { "type": "boolean" }
+      }
+    },
+    "stepRun": {
+      "type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "run": { "$ref": "#/$defs/text", "description": "Program to run, without a shell." },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "$ref": "#/$defs/text", "description": "Working directory inside the workspace (default: the workspace root)." },
+        "exitCode": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "description": "Expected exit code (default 0)." },
+        "stdout": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stdout must contain." },
+        "stderr": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stderr must contain." }
       }
     },
     "snapshotName": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$" },

@@ -2374,6 +2374,9 @@ fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> Dril
         .stderr(Stdio::piped());
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
+    // Its own process group, so a timeout stops the whole tree.
+    #[cfg(unix)]
+    command.process_group(0);
 
     match command.spawn() {
         Ok(child) => wait_for_hook_output(hook, lifecycle, started, timeout, child),
@@ -2396,7 +2399,9 @@ fn wait_for_hook_output(
             Ok(Some(status)) => break exit_code(status),
             Ok(None) if started.elapsed() >= timeout => {
                 timed_out = true;
-                let _ = cleanup_process_tree(child.id());
+                if cleanup_process_tree(child.id()).is_err() {
+                    let _ = child.kill();
+                }
                 break child.wait().ok().and_then(exit_code);
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
