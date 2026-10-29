@@ -12,6 +12,7 @@ import { bridgeCss } from "./theme-bridge.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "..", "..", ".github", "extensions", "auditaur-drills", "ui");
 const mirror = join(here, "..", "..", "crates", "auditaur-cli", "assets", "auditaur-drills", "ui");
+const plugin = join(here, "..", "..", "plugins", "auditaur", "com.github.copilot", "extensions", "auditaur-drills", "ui");
 const primitives = dirname(createRequire(import.meta.url).resolve("@primer/primitives/package.json"));
 const css = (path) => readFile(join(primitives, "dist", "css", path), "utf8");
 
@@ -81,8 +82,9 @@ const used = usedVariables([outputs.js, outputs.css, ...scales, bridge.css], the
 const trimmed = themes.map((theme) => withAliases(theme.replace(/\/\*\*[\s\S]*?\*\/\s*/, "").replace(DECLARATION, (all, name, value) => (used.has(name) ? `${name}:${value.trim()};` : "")).replace(/\n\s*\n/g, "\n")));
 const app = { js: outputs.js, css: [...scales.map(withAliases), ...trimmed, outputs.css, bridge.css].join("\n") };
 
-// The extension serves ui/ from .github/extensions; `auditaur init` embeds the crate's copy.
-for (const dir of [out, mirror]) {
+// The extension serves ui/ from .github/extensions; `auditaur init` embeds the crate's copy, and the
+// Copilot plugin ships its own.
+for (const dir of [out, mirror, plugin]) {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "app.js"), app.js);
     await writeFile(join(dir, "app.css"), app.css);

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "auditaur",
+  "version": "0.4.8",
+  "description": "Debug and test Tauri apps with Auditaur: the auditaur-debug skill and the Auditaur Drills canvas.",
+  "author": {
+    "name": "Auditaur contributors",
+    "url": "https://github.com/sethjuarez/auditaur"
+  },
+  "homepage": "https://auditaur.dev",
+  "repository": "https://github.com/sethjuarez/auditaur",
+  "license": "MIT",
+  "keywords": [
+    "tauri",
+    "auditaur",
+    "drills",
+    "testing",
+    "canvas"
+  ]
+}

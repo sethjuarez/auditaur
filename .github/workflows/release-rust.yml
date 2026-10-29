@@ -84,11 +84,33 @@ jobs:
             libwebkit2gtk-4.1-dev
       - uses: Swatinem/rust-cache@v2
       - name: Run release-plz PR
+        id: release-plz
         uses: MarcoIeni/release-plz-action@v0.5
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # release-plz bumps Cargo.toml only; the Copilot plugin and marketplace versions follow it.
+      # Runs whenever a release PR exists, whether this run opened it or updated it.
+      - name: Stamp the Copilot plugin version on the release PR
+        env:
+          PR: ${{ steps.release-plz.outputs.pr }}
+        run: |
+          branch=$(jq -r '.head_branch // empty' <<<"${PR:-null}" 2>/dev/null || true)
+          if [ -z "$branch" ]; then
+            echo "No release PR to stamp."
+            exit 0
+          fi
+          git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+          git switch -C "$branch" "origin/$branch"
+          python scripts/check-skill-drift.py --write
+          git add -A plugins .github/plugin crates/auditaur-cli/assets
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(plugin): stamp the Copilot plugin version"
+            git push origin "$branch"
+          fi
 
   publish:
     name: Publish if release PR

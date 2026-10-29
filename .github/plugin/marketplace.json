@@ -1,0 +1,32 @@
+{
+  "name": "auditaur",
+  "metadata": {
+    "description": "Copilot plugin for debugging and testing Tauri apps with Auditaur.",
+    "version": "1.0.0"
+  },
+  "owner": {
+    "name": "Auditaur contributors",
+    "url": "https://github.com/sethjuarez/auditaur"
+  },
+  "plugins": [
+    {
+      "name": "auditaur",
+      "description": "Debug and test Tauri apps with Auditaur: the auditaur-debug skill and the Auditaur Drills canvas.",
+      "version": "0.4.8",
+      "author": {
+        "name": "Auditaur contributors",
+        "url": "https://github.com/sethjuarez/auditaur"
+      },
+      "homepage": "https://auditaur.dev",
+      "repository": "https://github.com/sethjuarez/auditaur",
+      "keywords": [
+        "tauri",
+        "auditaur",
+        "drills",
+        "testing",
+        "canvas"
+      ],
+      "source": "plugins/auditaur"
+    }
+  ]
+}

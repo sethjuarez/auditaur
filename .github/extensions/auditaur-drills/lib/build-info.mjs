@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { INSTALL } from "./paths.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODE = /\.(mjs|js|css)$/;
@@ -39,7 +40,19 @@ export async function fingerprint() {
 
 const startedAt = new Date().toISOString();
 const running = fingerprint();
+const version = pluginVersion();
 let failedPages = [];
+
+// The Auditaur plugin version when this copy ships in the plugin
+// (`<plugin>/com.github.copilot/extensions/auditaur-drills`); null for a committed copy.
+export async function pluginVersion(root = ROOT) {
+    try {
+        const manifest = JSON.parse(await readFile(join(root, "..", "..", "..", "plugin.json"), "utf8"));
+        return manifest.name === "auditaur" ? manifest.version ?? null : null;
+    } catch {
+        return null;
+    }
+}
 
 // Pages whose feature module failed to load (see features.mjs).
 export function reportFailedPages(failed) {
@@ -49,5 +62,14 @@ export function reportFailedPages(failed) {
 export async function health() {
     const build = await running;
     const onDisk = await fingerprint().catch(() => build);
-    return { build, onDisk, stale: onDisk !== build, startedAt, pid: process.pid, failedPages };
+    return {
+        build,
+        onDisk,
+        stale: onDisk !== build,
+        install: INSTALL,
+        version: await version,
+        startedAt,
+        pid: process.pid,
+        failedPages,
+    };
 }
