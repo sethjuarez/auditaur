@@ -440,6 +440,17 @@ pub fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     write_atomic(path, &serde_json::to_vec_pretty(value)?)
 }
 
+/// How long a write waits for another process to release the target. Losing a write
+/// leaves a run that reads as interrupted, so wait out antivirus or indexer scans.
+const LOCKED_FILE_WAIT: Duration = Duration::from_secs(5);
+
+/// Whether a rename failed only because another process holds the file open. Windows
+/// reports that as access denied (5), a sharing violation (32) or a lock violation (33).
+fn is_transient_lock(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied
+        || (cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33)))
+}
+
 /// Write bytes via a uniquely named temp file and rename (see [`write_json_atomic`]).
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let file_name = path
@@ -448,13 +459,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .unwrap_or_default();
     let tmp = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
     fs::write(&tmp, bytes).with_context(|| format!("failed to write `{}`", tmp.display()))?;
-    let mut attempts = 0;
+    let deadline = Instant::now() + LOCKED_FILE_WAIT;
+    let mut pause = Duration::from_millis(25);
     loop {
         match fs::rename(&tmp, path) {
             Ok(()) => return Ok(()),
-            Err(error) if attempts < 40 && error.kind() == std::io::ErrorKind::PermissionDenied => {
-                attempts += 1;
-                std::thread::sleep(Duration::from_millis(25));
+            Err(error) if is_transient_lock(&error) && Instant::now() < deadline => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(200));
             }
             Err(error) => {
                 let _ = fs::remove_file(&tmp);
@@ -535,6 +547,8 @@ pub struct RunWriter {
     step: Option<ActiveStep>,
     keep: usize,
     finished: bool,
+    /// Set when `RunFinished` is logged but its `run.json` snapshot failed.
+    final_snapshot_pending: bool,
     /// Set when an event line may be partial; nothing more is written.
     poisoned: bool,
 }
@@ -639,6 +653,7 @@ impl RunWriter {
             step: None,
             keep: options.keep.max(1),
             finished: false,
+            final_snapshot_pending: false,
             poisoned: false,
         };
         writer.commit(RunEvent::RunStarted { run_id, tests }, true)?;
@@ -1211,15 +1226,21 @@ impl RunWriter {
         self.report.ended_at = Some(now());
         self.report.duration_ms = Some(duration_ms);
         let totals = self.report.totals.clone();
-        self.commit(
+        let logged = self.seq;
+        let result = self.commit(
             RunEvent::RunFinished {
                 status,
                 duration_ms,
                 totals,
             },
             true,
-        )?;
-        self.finished = true;
+        );
+        if self.seq > logged {
+            // The outcome is logged; never re-finish it as interrupted, only re-save it.
+            self.finished = true;
+            self.final_snapshot_pending = result.is_err();
+        }
+        result?;
         // Pruning is housekeeping; failing it must not fail the run.
         let _ = prune_runs(&self.runs_root, self.keep, &self.report.run_id);
         Ok(())
@@ -1228,6 +1249,10 @@ impl RunWriter {
 
 impl Drop for RunWriter {
     fn drop(&mut self) {
+        if self.final_snapshot_pending {
+            let _ = write_json_atomic(&self.dir.join("run.json"), &self.report);
+            return;
+        }
         // A runner that bails out with `?` still leaves a readable, finished run.
         let _ = self.finish_inner(true);
     }
@@ -1373,13 +1398,19 @@ pub fn resolve_run(root: &Path, selector: Option<&str>) -> Result<PathBuf> {
 /// Read a run report. A `running` run whose owner process is gone reads as
 /// interrupted, along with its running suites, tests and attempts.
 pub fn read_run(dir: &Path) -> Result<RunReport> {
+    read_run_with(dir, process_alive)
+}
+
+fn read_run_with(dir: &Path, mut alive: impl FnMut(u32) -> bool) -> Result<RunReport> {
     let path = dir.join("run.json");
     let mut report = parse_run(&path)?;
-    if report.status == Status::Running && !process_alive(report.pid) {
-        // The run may have written its final report and exited after the first read.
-        report = parse_run(&path)?;
+    // Check liveness once, then re-read: a runner seen dead has made its last write,
+    // so only a report that is still running afterwards was really interrupted.
+    if report.status != Status::Running || alive(report.pid) {
+        return Ok(report);
     }
-    if report.status == Status::Running && !process_alive(report.pid) {
+    report = parse_run(&path)?;
+    if report.status == Status::Running {
         report.status = Status::Interrupted;
         for suite in &mut report.suites {
             if suite.status == Status::Running {
@@ -2028,6 +2059,129 @@ mod tests {
         write_json_atomic(&path, &serde_json::json!({ "ok": true })).unwrap();
         handle.join().unwrap();
         assert!(fs::read_to_string(&path).unwrap().contains("ok"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_outlasts_an_exclusive_scan_longer_than_a_second() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.json");
+        fs::write(&path, "{}").unwrap();
+        // No sharing at all, like an antivirus scan that holds the file for a while.
+        let scanner = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1500));
+            drop(scanner);
+        });
+        write_json_atomic(&path, &serde_json::json!({ "ok": true })).unwrap();
+        handle.join().unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("ok"));
+    }
+
+    #[test]
+    fn a_run_is_only_interrupted_if_still_running_after_its_runner_is_seen_dead() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.drill.json");
+        fs::write(
+            &file,
+            r##"{ "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }] }"##,
+        )
+        .unwrap();
+        let loaded = load(&[file]);
+        let plan = select(&loaded.suites, &Filters::default());
+        let writer = RunWriter::create(
+            RunOptions {
+                workspace: dir.path().to_path_buf(),
+                invocation: Invocation::default(),
+                keep: 5,
+            },
+            &plan,
+        )
+        .unwrap();
+        let run_dir = writer.dir().to_path_buf();
+
+        // Alive at the check, even if it exits right after: one check, no stale verdict.
+        let mut checks = 0;
+        let live = read_run_with(&run_dir, |_| {
+            checks += 1;
+            checks == 1
+        })
+        .unwrap();
+        assert_eq!(live.status, Status::Running);
+        assert_eq!(checks, 1);
+
+        // Finished between the first read and the liveness check: the re-read wins.
+        let mut writer = Some(writer);
+        let done = read_run_with(&run_dir, |_| {
+            writer.take().unwrap().finish(false).unwrap();
+            false
+        })
+        .unwrap();
+        assert!(done.ended_at.is_some(), "{done:?}");
+        assert!(done.seq > live.seq);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_locked_final_snapshot_is_resaved_not_refinished() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.drill.json");
+        fs::write(
+            &file,
+            r##"{ "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }] }"##,
+        )
+        .unwrap();
+        let loaded = load(&[file]);
+        let plan = select(&loaded.suites, &Filters::default());
+        let writer = RunWriter::create(
+            RunOptions {
+                workspace: dir.path().to_path_buf(),
+                invocation: Invocation::default(),
+                keep: 5,
+            },
+            &plan,
+        )
+        .unwrap();
+        let run_dir = writer.dir().to_path_buf();
+        let scanner = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(run_dir.join("run.json"))
+            .unwrap();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(LOCKED_FILE_WAIT + Duration::from_millis(500));
+            drop(scanner);
+        });
+        assert!(writer.finish(false).is_err());
+        handle.join().unwrap();
+        let lines = fs::read_to_string(run_dir.join("events.jsonl")).unwrap();
+        let finished: Vec<Value> = lines
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|line| line["type"] == "runFinished")
+            .collect();
+        assert_eq!(finished.len(), 1, "{lines}");
+        let snapshot: Value =
+            serde_json::from_str(&fs::read_to_string(run_dir.join("run.json")).unwrap()).unwrap();
+        assert_eq!(snapshot["seq"], finished[0]["seq"]);
+    }
+
+    #[test]
+    fn only_lock_errors_are_retried() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(is_transient_lock(&denied));
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(!is_transient_lock(&missing));
+        assert_eq!(
+            is_transient_lock(&std::io::Error::from_raw_os_error(32)),
+            cfg!(windows)
+        );
     }
 
     #[test]
