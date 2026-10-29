@@ -1558,8 +1558,13 @@ fn apply_gate_queue_response(
         .unwrap_or(DEFAULT_MANUAL_CHOICE_ID);
     let Some(choice) = select_gate_choice(gate, choice_line)? else {
         return Err(anyhow!(
-            "human gate response `{}` did not select a valid choice",
-            request.request_id
+            "human gate response `{}` did not select a valid choice ({}; valid: {})",
+            request.request_id,
+            response
+                .choice_id
+                .as_deref()
+                .map_or("no choiceId".to_string(), |id| format!("got `{id}`")),
+            valid_choice_ids(gate)
         ));
     };
     if choice.outcome == DrillGateChoiceOutcome::Retry {
@@ -1916,6 +1921,17 @@ fn apply_gate_response(
 }
 
 const DEFAULT_MANUAL_CHOICE_ID: &str = "__manual_continue";
+
+fn valid_choice_ids(gate: &ResolvedDrillGate) -> String {
+    if gate.choices.is_empty() {
+        return "none; this gate takes no choice".to_string();
+    }
+    gate.choices
+        .iter()
+        .map(|choice| format!("`{}`", choice.id))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 fn select_gate_choice(gate: &ResolvedDrillGate, line: &str) -> Result<Option<DrillGateChoice>> {
     let input = line.trim();
@@ -3674,6 +3690,32 @@ mod tests {
         );
         assert_eq!(report.inputs.len(), 1);
         assert_eq!(report.inputs[0].value, Some("[REDACTED]".to_string()));
+    }
+
+    #[test]
+    fn lists_valid_gate_choice_ids() {
+        let choice = |id: &str, outcome| DrillGateChoice {
+            id: id.to_string(),
+            label: id.to_string(),
+            outcome,
+        };
+        let mut gate = ResolvedDrillGate {
+            name: "Approve".to_string(),
+            instructions: String::new(),
+            selector: None,
+            expect_text: None,
+            timeout_ms: 1_000,
+            manual_continue: false,
+            choices: vec![
+                choice("done", DrillGateChoiceOutcome::Continue),
+                choice("blocked", DrillGateChoiceOutcome::Fail),
+            ],
+            inputs: Vec::new(),
+            clipboard: None,
+        };
+        assert_eq!(valid_choice_ids(&gate), "`done`, `blocked`");
+        gate.choices.clear();
+        assert!(valid_choice_ids(&gate).contains("no choice"));
     }
 
     #[test]
