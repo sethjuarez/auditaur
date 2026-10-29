@@ -890,7 +890,9 @@ pub fn is_soft(step: &Step) -> bool {
             TelemetryExpectation::Ipc { soft, .. }
             | TelemetryExpectation::Event { soft, .. }
             | TelemetryExpectation::Log { soft, .. }
-            | TelemetryExpectation::NoErrors { soft, .. } => *soft,
+            | TelemetryExpectation::Span { soft, .. }
+            | TelemetryExpectation::NoErrors { soft, .. }
+            | TelemetryExpectation::NoTelemetry { soft, .. } => *soft,
         },
         _ => false,
     }

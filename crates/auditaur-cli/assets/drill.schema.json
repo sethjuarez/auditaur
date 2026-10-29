@@ -91,6 +91,8 @@
         { "$ref": "#/$defs/stepExpectIpc" },
         { "$ref": "#/$defs/stepExpectEvent" },
         { "$ref": "#/$defs/stepExpectLog" },
+        { "$ref": "#/$defs/stepExpectSpan" },
+        { "$ref": "#/$defs/stepExpectNoTelemetry" },
         { "$ref": "#/$defs/stepExpectNoErrors" },
         { "$ref": "#/$defs/stepExpectValue" }
       ]
@@ -211,7 +213,7 @@
       "not": { "required": ["not", "count"], "properties": { "not": { "const": true } } },
       "properties": {
         "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
-        "expectIpc": { "$ref": "#/$defs/text", "description": "Tauri command name." },
+        "expectIpc": { "$ref": "#/$defs/nameMatch", "description": "Tauri command name, or { \"pattern\": regex }." },
         "status": { "enum": ["ok", "error"] },
         "count": { "type": "integer", "minimum": 0 },
         "maxMs": { "type": "integer", "minimum": 1 },
@@ -237,9 +239,49 @@
         "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
         "expectLog": { "$ref": "#/$defs/text", "description": "Text the log message contains." },
         "level": { "$ref": "#/$defs/text" },
+        "attributes": { "$ref": "#/$defs/attributes" },
         "count": { "type": "integer", "minimum": 0 },
         "not": { "type": "boolean" },
         "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectSpan": {
+      "type": "object", "additionalProperties": false, "required": ["expectSpan"],
+      "not": { "required": ["not", "count"], "properties": { "not": { "const": true } } },
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectSpan": { "$ref": "#/$defs/nameMatch", "description": "Span name, or { \"pattern\": regex }." },
+        "status": { "enum": ["ok", "error", "unset"] },
+        "attributes": { "$ref": "#/$defs/attributes" },
+        "count": { "type": "integer", "minimum": 0 },
+        "not": { "type": "boolean" },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectNoTelemetry": {
+      "type": "object", "additionalProperties": false, "required": ["expectNoTelemetry"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectNoTelemetry": { "$ref": "#/$defs/nameMatch", "description": "Text, or { \"pattern\": regex }, that no recorded telemetry may contain." },
+        "in": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "enum": ["logs", "spans", "ipc", "events"] },
+          "description": "Kinds to search; defaults to all."
+        },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "attributes": {
+      "type": "object",
+      "description": "Attributes the record must have: exact values, or { \"pattern\": regex } for strings.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": ["string", "number", "boolean"] },
+          {
+            "type": "object", "additionalProperties": false, "required": ["pattern"],
+            "properties": { "pattern": { "$ref": "#/$defs/text", "description": "Regular expression." } }
+          }
+        ]
       }
     },
     "stepExpectNoErrors": {
@@ -268,6 +310,15 @@
     "autoSnapshotName": {
       "oneOf": [{ "const": true }, { "$ref": "#/$defs/snapshotName" }],
       "description": "Snapshot name, or true to derive one from the test and step."
+    },
+    "nameMatch": {
+      "oneOf": [
+        { "$ref": "#/$defs/text" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["pattern"],
+          "properties": { "pattern": { "$ref": "#/$defs/text", "description": "Regular expression." } }
+        }
+      ]
     },
     "textMatch": {
       "oneOf": [

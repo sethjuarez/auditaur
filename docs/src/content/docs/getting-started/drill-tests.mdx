@@ -90,7 +90,7 @@ Every step accepts `name` and `timeoutMs`.
 | Other | `evaluate` (JavaScript), `screenshot` (attachment only), `gate` (human-in-the-loop) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
 | Value assertions | `expectValue` (JavaScript) + one of `toEqual` (deep JSON equality), `toContain` (substring or array element), `toMatch` (regex string) |
-| Telemetry assertions | `expectIpc` (+ `status`, `count`, `maxMs`), `expectEvent` (+ `count`), `expectLog` (+ `level`, `count`), `expectNoErrors` (+ `ignore`) |
+| Telemetry assertions | `expectIpc` (+ `status`, `count`, `maxMs`), `expectEvent` (+ `count`), `expectLog` (+ `level`, `attributes`, `count`), `expectSpan` (+ `status`, `attributes`, `count`), `expectNoTelemetry` (+ `in`), `expectNoErrors` (+ `ignore`) |
 
 Assertions retry until they pass or `expectTimeoutMs` (default 5s) runs out. Add `"soft": true` to record a failure and keep going. Add `"not": true` to negate any assertion except snapshots and `expectNoErrors`. `toHaveText` and `toHaveValue` take a string or `{ "pattern": "regex" }`; `toContainText` takes a string.
 
@@ -100,7 +100,14 @@ Assertions retry until they pass or `expectTimeoutMs` (default 5s) runs out. Add
 { "expectValue": "localStorage.getItem('theme')", "toEqual": "dark" }
 ```
 
-Telemetry assertions only see what the app recorded after the test started. Negative, exact-count, and `expectNoErrors` assertions check what has been recorded so far, so place them after the actions they cover.
+Telemetry assertions only see what the app recorded after the test started. Negative, exact-count, `expectNoTelemetry`, and `expectNoErrors` assertions check what has been recorded so far, so place them after the actions they cover.
+
+`expectIpc` and `expectSpan` take a name or `{ "pattern": "regex" }`. `attributes` maps attribute keys to exact values or `{ "pattern": "regex" }`. `expectNoTelemetry` fails if any log, span, IPC call, or event (narrow with `in`) contains the text or pattern anywhere in its data, which makes a privacy guard:
+
+```json
+{ "expectSpan": "chat.send", "status": "ok", "attributes": { "harness": "prompty" } },
+{ "expectNoTelemetry": "ada@example.com", "in": ["logs", "spans", "ipc"] }
+```
 
 ### Human gates
 

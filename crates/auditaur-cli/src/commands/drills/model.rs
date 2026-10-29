@@ -70,6 +70,8 @@ pub const ACTION_KEYS: &[&str] = &[
     "expectLog",
     "expectNoErrors",
     "expectValue",
+    "expectSpan",
+    "expectNoTelemetry",
 ];
 
 /// Matchers for `expectValue`, which asserts on a JavaScript expression's result.
@@ -93,8 +95,19 @@ pub const SCREENSHOT_OPTION_KEYS: &[&str] =
 
 /// Step option keys that only apply to some actions.
 pub const STEP_OPTION_KEYS: &[&str] = &[
-    "value", "values", "target", "state", "soft", "not", "status", "count", "maxMs", "level",
+    "value",
+    "values",
+    "target",
+    "state",
+    "soft",
+    "not",
+    "status",
+    "count",
+    "maxMs",
+    "level",
     "ignore",
+    "attributes",
+    "in",
 ];
 
 pub const LOCATOR_KEYS: &[&str] = &[
@@ -296,7 +309,9 @@ impl fmt::Display for ValueMatcher {
 /// JSON equality where `1` and `1.0` are the same number, as in JavaScript.
 pub fn json_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => a == b || a.as_f64() == b.as_f64(),
+        // Integers compare exactly; a float on either side compares by value (`2 == 2.0`).
+        (Value::Number(a), Value::Number(b)) if !a.is_f64() && !b.is_f64() => a == b,
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
         (Value::Array(a), Value::Array(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(a, b)| json_equal(a, b))
         }
@@ -410,7 +425,7 @@ pub fn normalize_whitespace(value: &str) -> String {
 #[derive(Debug, Clone)]
 pub enum TelemetryExpectation {
     Ipc {
-        command: String,
+        command: TextMatch,
         status: Option<IpcStatus>,
         count: Option<u64>,
         max_ms: Option<u64>,
@@ -426,6 +441,15 @@ pub enum TelemetryExpectation {
     Log {
         contains: String,
         level: Option<String>,
+        attributes: Vec<AttributeMatch>,
+        count: Option<u64>,
+        not: bool,
+        soft: bool,
+    },
+    Span {
+        name: TextMatch,
+        status: Option<SpanStatus>,
+        attributes: Vec<AttributeMatch>,
         count: Option<u64>,
         not: bool,
         soft: bool,
@@ -434,6 +458,128 @@ pub enum TelemetryExpectation {
         ignore: Vec<String>,
         soft: bool,
     },
+    /// Nothing recorded so far contains the needle, e.g. a privacy guard.
+    NoTelemetry {
+        needle: Needle,
+        kinds: Vec<TelemetryKind>,
+        soft: bool,
+    },
+}
+
+/// One `attributes` entry: the attribute equals a JSON value or matches `{ "pattern" }`.
+#[derive(Debug, Clone)]
+pub struct AttributeMatch {
+    pub key: String,
+    pub value: AttributeValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum AttributeValue {
+    Equals(Value),
+    Pattern(Regex),
+}
+
+impl AttributeMatch {
+    pub fn matches(&self, attributes: &Value) -> bool {
+        let Some(actual) = attributes.get(&self.key) else {
+            return false;
+        };
+        match &self.value {
+            AttributeValue::Equals(expected) => json_equal(expected, actual),
+            AttributeValue::Pattern(pattern) => match actual {
+                Value::String(text) => pattern.is_match(text),
+                other => pattern.is_match(&other.to_string()),
+            },
+        }
+    }
+}
+
+impl fmt::Display for AttributeMatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.value {
+            AttributeValue::Equals(value) => write!(f, "{}={value}", self.key),
+            AttributeValue::Pattern(pattern) => write!(f, "{}=/{}/", self.key, pattern.as_str()),
+        }
+    }
+}
+
+/// A substring, or `{ "pattern": "regex" }`.
+#[derive(Debug, Clone)]
+pub enum Needle {
+    Contains(String),
+    Pattern(Regex),
+}
+
+impl Needle {
+    pub fn is_in(&self, text: &str) -> bool {
+        match self {
+            Self::Contains(needle) => text.contains(needle.as_str()),
+            Self::Pattern(pattern) => pattern.is_match(text),
+        }
+    }
+}
+
+impl fmt::Display for Needle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Contains(text) => write!(f, "{text:?}"),
+            Self::Pattern(pattern) => write!(f, "/{}/", pattern.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetryKind {
+    Logs,
+    Spans,
+    Ipc,
+    Events,
+}
+
+impl TelemetryKind {
+    pub const ALL: [Self; 4] = [Self::Logs, Self::Spans, Self::Ipc, Self::Events];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Logs => "logs",
+            Self::Spans => "spans",
+            Self::Ipc => "ipc",
+            Self::Events => "events",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanStatus {
+    Ok,
+    Error,
+    Unset,
+}
+
+impl SpanStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Error => "error",
+            Self::Unset => "unset",
+        }
+    }
+}
+
+/// A name for titles: exact names bare, patterns as `/regex/`.
+pub fn name_label(name: &TextMatch) -> String {
+    match name {
+        TextMatch::Exact(name) => name.clone(),
+        TextMatch::Pattern(pattern) => format!("/{}/", pattern.as_str()),
+    }
+}
+
+/// Telemetry names (commands, spans) match exactly, without text whitespace normalization.
+pub fn name_matches(name: &TextMatch, actual: &str) -> bool {
+    match name {
+        TextMatch::Exact(name) => name == actual,
+        TextMatch::Pattern(pattern) => pattern.is_match(actual),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1058,7 +1204,9 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
         "expect" => &["not", "soft"],
         "expectIpc" => &["status", "count", "maxMs", "not", "soft"],
         "expectEvent" => &["count", "not", "soft"],
-        "expectLog" => &["level", "count", "not", "soft"],
+        "expectLog" => &["level", "attributes", "count", "not", "soft"],
+        "expectSpan" => &["status", "attributes", "count", "not", "soft"],
+        "expectNoTelemetry" => &["in", "soft"],
         "expectNoErrors" => &["ignore", "soft"],
         "expectValue" => &["toEqual", "toContain", "toMatch", "not", "soft"],
         _ => &[],
@@ -1555,6 +1703,15 @@ fn parse_text_match(ctx: &mut Ctx, value: &Value, path: &str) -> Option<TextMatc
     }
 }
 
+/// A string or `{ "pattern" }` that names something; an empty string is a mistake.
+fn parse_name_match(ctx: &mut Ctx, value: &Value, path: &str) -> Option<TextMatch> {
+    if value.as_str().is_some_and(|text| text.trim().is_empty()) {
+        ctx.err(path, "must not be empty");
+        return None;
+    }
+    parse_text_match(ctx, value, path)
+}
+
 fn parse_telemetry(
     ctx: &mut Ctx,
     map: &Map<String, Value>,
@@ -1570,9 +1727,10 @@ fn parse_telemetry(
         ctx.err(parent, "use either `not` or `count`, not both");
         return None;
     }
+    let attributes = parse_attributes(ctx, map, parent);
     match action {
         "expectIpc" => {
-            let command = string_value(ctx, raw, path);
+            let command = parse_name_match(ctx, raw, path);
             let status = match map.get("status") {
                 None => Some(None),
                 Some(Value::String(status)) if status == "ok" => Some(Some(IpcStatus::Ok)),
@@ -1605,8 +1763,79 @@ fn parse_telemetry(
             Some(TelemetryExpectation::Log {
                 contains: contains?,
                 level,
+                attributes: attributes?,
                 count,
                 not,
+                soft,
+            })
+        }
+        "expectSpan" => {
+            let name = parse_name_match(ctx, raw, path);
+            let status = match map.get("status") {
+                None => Some(None),
+                Some(Value::String(status)) => match status.as_str() {
+                    "ok" => Some(Some(SpanStatus::Ok)),
+                    "error" => Some(Some(SpanStatus::Error)),
+                    "unset" => Some(Some(SpanStatus::Unset)),
+                    _ => None,
+                },
+                Some(_) => None,
+            };
+            if status.is_none() {
+                ctx.err(
+                    &join(parent, "status"),
+                    "expected \"ok\", \"error\" or \"unset\"",
+                );
+            }
+            Some(TelemetryExpectation::Span {
+                name: name?,
+                status: status?,
+                attributes: attributes?,
+                count,
+                not,
+                soft,
+            })
+        }
+        "expectNoTelemetry" => {
+            let needle = match parse_name_match(ctx, raw, path)? {
+                TextMatch::Exact(text) => Needle::Contains(text),
+                TextMatch::Pattern(pattern) => Needle::Pattern(pattern),
+            };
+            let kinds = match map.get("in") {
+                None => Some(TelemetryKind::ALL.to_vec()),
+                Some(Value::Array(items)) if !items.is_empty() => {
+                    let in_path = join(parent, "in");
+                    let mut kinds = Vec::new();
+                    let mut ok = true;
+                    for (i, item) in items.iter().enumerate() {
+                        match TelemetryKind::ALL
+                            .into_iter()
+                            .find(|kind| item.as_str() == Some(kind.as_str()))
+                        {
+                            Some(kind) if !kinds.contains(&kind) => kinds.push(kind),
+                            Some(_) => {}
+                            None => {
+                                ctx.err(
+                                    &format!("{in_path}[{i}]"),
+                                    "expected \"logs\", \"spans\", \"ipc\" or \"events\"",
+                                );
+                                ok = false;
+                            }
+                        }
+                    }
+                    ok.then_some(kinds)
+                }
+                Some(_) => {
+                    ctx.err(
+                        &join(parent, "in"),
+                        "expected a non-empty array of \"logs\", \"spans\", \"ipc\" or \"events\"",
+                    );
+                    None
+                }
+            };
+            Some(TelemetryExpectation::NoTelemetry {
+                needle,
+                kinds: kinds?,
                 soft,
             })
         }
@@ -1631,6 +1860,51 @@ fn parse_telemetry(
         }
         _ => unreachable!("telemetry actions are exhaustive"),
     }
+}
+
+/// `attributes: { "key": value | { "pattern": "regex" } }`; `None` when invalid.
+fn parse_attributes(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    parent: &str,
+) -> Option<Vec<AttributeMatch>> {
+    let Some(value) = map.get("attributes") else {
+        return Some(Vec::new());
+    };
+    let path = join(parent, "attributes");
+    let Value::Object(entries) = value else {
+        ctx.err(&path, "expected an object of attribute names to values");
+        return None;
+    };
+    let mut ok = true;
+    let mut matches = Vec::new();
+    for (key, expected) in entries {
+        let value = match expected {
+            Value::Object(object) if object.contains_key("pattern") => {
+                match parse_text_match(ctx, expected, &join(&path, key)) {
+                    Some(TextMatch::Pattern(pattern)) => AttributeValue::Pattern(pattern),
+                    _ => {
+                        ok = false;
+                        continue;
+                    }
+                }
+            }
+            Value::Object(_) | Value::Array(_) | Value::Null => {
+                ctx.err(
+                    &join(&path, key),
+                    "expected a string, number, boolean or { \"pattern\": ... }",
+                );
+                ok = false;
+                continue;
+            }
+            scalar => AttributeValue::Equals(scalar.clone()),
+        };
+        matches.push(AttributeMatch {
+            key: key.clone(),
+            value,
+        });
+    }
+    ok.then_some(matches)
 }
 
 /// Parse a standalone locator, e.g. from a CLI flag or MCP tool argument.
@@ -1820,7 +2094,8 @@ pub fn describe(kind: &StepKind) -> String {
                         None => "",
                     };
                     format!(
-                        "expect IPC `{command}` {}",
+                        "expect IPC `{}` {}",
+                        name_label(command),
                         times(&format!("called{status}"), *not, *count)
                     )
                 }
@@ -1844,6 +2119,25 @@ pub fn describe(kind: &StepKind) -> String {
                     )
                 }
                 TelemetryExpectation::NoErrors { .. } => "expect no errors".to_string(),
+                TelemetryExpectation::Span {
+                    name,
+                    status,
+                    count,
+                    not,
+                    ..
+                } => {
+                    let status = status
+                        .map(|status| format!(" with status {}", status.as_str()))
+                        .unwrap_or_default();
+                    format!(
+                        "expect span `{}`{status} {}",
+                        name_label(name),
+                        times("recorded", *not, *count)
+                    )
+                }
+                TelemetryExpectation::NoTelemetry { needle, .. } => {
+                    format!("expect no telemetry containing {needle}")
+                }
             }
         }
     }
@@ -2059,6 +2353,45 @@ mod tests {
     }
 
     #[test]
+    fn validates_telemetry_assertions() {
+        let valid = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "expectIpc": { "pattern": "^plugin:chat\\|" } },
+                { "expectLog": "sent", "attributes": { "harness": "prompty", "n": 2, "id": { "pattern": "^u" } } },
+                { "expectSpan": "chat.send", "status": "ok", "attributes": { "harness": "prompty" }, "count": 1 },
+                { "expectNoTelemetry": "ada@example.com", "in": ["logs", "ipc"] },
+                { "expectNoTelemetry": { "pattern": "codename-\\w+" } }
+            ] }] }"##,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "expectIpc": "" },
+                { "expectSpan": "s", "status": "done" },
+                { "expectSpan": "s", "attributes": { "k": [1] } },
+                { "expectNoTelemetry": "x", "in": [] },
+                { "expectNoTelemetry": "x", "in": ["metrics"] },
+                { "expectNoTelemetry": "x", "count": 1 },
+                { "expectIpc": "x", "attributes": {} }
+            ] }] }"##,
+        );
+        for needle in [
+            "expectIpc: must not be empty",
+            "steps[1].status: expected \"ok\", \"error\" or \"unset\"",
+            "attributes.k",
+            "in: expected a non-empty array",
+            "in[0]: expected",
+            "`count` is not valid with `expectNoTelemetry`",
+            "`attributes` is not valid with `expectIpc`",
+        ] {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
     fn validates_value_expectations() {
         let issues = messages(
             r##"{ "tests": [{ "name": "a", "steps": [
@@ -2096,6 +2429,12 @@ mod tests {
         let pattern = ValueMatcher::ToMatch(Regex::new("^v\\d+$").unwrap());
         assert!(pattern.matches(&serde_json::json!("v12")));
         assert!(!pattern.matches(&serde_json::json!(12)));
+        let big = ValueMatcher::ToEqual(serde_json::json!(9_007_199_254_740_992_u64));
+        assert!(!big.matches(&serde_json::json!(9_007_199_254_740_993_u64)));
+        assert!(!name_matches(
+            &TextMatch::Exact("chat send".into()),
+            "chat  send"
+        ));
     }
 
     #[test]
