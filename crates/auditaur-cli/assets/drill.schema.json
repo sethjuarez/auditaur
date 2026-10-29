@@ -14,6 +14,11 @@
     "timeoutMs": { "type": "integer", "minimum": 1, "description": "Default per-test timeout." },
     "expectTimeoutMs": { "type": "integer", "minimum": 1, "description": "How long expect steps keep retrying before failing." },
     "retries": { "$ref": "#/$defs/retries" },
+    "env": {
+      "type": "object", "additionalProperties": { "type": "string", "pattern": "^[^\\u0000]*$" },
+      "propertyNames": { "minLength": 1, "pattern": "^[^=\\s\\u0000]+$", "not": { "const": "AUDITAUR_DRILL_ENV_FILE" } },
+      "description": "Environment for the app launch, hooks, and run steps. Setup hooks can add KEY=VALUE lines to $AUDITAUR_DRILL_ENV_FILE."
+    },
     "setup": { "type": "array", "items": { "$ref": "#/$defs/hook" }, "description": "Process hooks run before the app launches." },
     "teardown": { "type": "array", "items": { "$ref": "#/$defs/hook" }, "description": "Process hooks run after the app stops." },
     "beforeAll": { "$ref": "#/$defs/steps" },

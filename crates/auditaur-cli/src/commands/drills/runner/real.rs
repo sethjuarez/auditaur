@@ -76,9 +76,21 @@ pub struct RealHost {
 }
 
 impl Host for RealHost {
-    fn launch(&mut self, _suite: &DrillSuite) -> Result<Box<dyn AppDriver>> {
-        let (command, environment) = match &self.source {
-            LaunchSource::Attach => return self.attach(),
+    fn launch(
+        &mut self,
+        suite: &DrillSuite,
+        env: &[(String, String)],
+    ) -> Result<Box<dyn AppDriver>> {
+        let (command, mut environment) = match &self.source {
+            LaunchSource::Attach => {
+                if !env.is_empty() {
+                    eprintln!(
+                        "warning: suite `{}` sets environment, but an attached app was started without it",
+                        suite.suite
+                    );
+                }
+                return self.attach();
+            }
             LaunchSource::Command(command) => (command.clone(), Vec::new()),
             LaunchSource::Config(path) => {
                 let config = workflow::load_launch_config(path)?
@@ -89,11 +101,18 @@ impl Host for RealHost {
                 (command, config.environment)
             }
         };
+        // Fresh port variables from the config win over the suite's.
+        environment.splice(0..0, env.iter().cloned());
         self.spawn(&command, &environment)
     }
 
-    fn run_hook(&mut self, hook: &Value, teardown: bool) -> Result<HookResult> {
-        let run = drill::run_hook_json(&self.workspace_root, hook, teardown)?;
+    fn run_hook(
+        &mut self,
+        hook: &Value,
+        teardown: bool,
+        env: &[(String, String)],
+    ) -> Result<HookResult> {
+        let run = drill::run_hook_json(&self.workspace_root, hook, teardown, env)?;
         Ok(HookResult {
             passed: run.passed,
             timed_out: run.timed_out,

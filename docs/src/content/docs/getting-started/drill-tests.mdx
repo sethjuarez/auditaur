@@ -166,6 +166,19 @@ auditaur drill locate "li button" --app my-app
 | `expectTimeoutMs` | suite | How long assertions retry. |
 | `retries` | suite, test | Overrides `--retries`. |
 | `expectFail` | test | The test passes only if it fails. |
+| `env` | suite | Environment variables for the app launch, hooks, and `run` steps. |
+
+Setup hooks can add computed values, such as a temp fixture path, by appending `KEY=VALUE` lines to the file named by `$AUDITAUR_DRILL_ENV_FILE`, like `$GITHUB_ENV`. Later values win, and the launch, later hooks, and `run` steps see them. The file is deleted when the suite ends. When the config's `start` command provides port variables, those win. An attached app (no launch command) never sees suite environment.
+
+```json
+"env": { "VITE_STARTUP_VIEW": "editor" },
+"setup": [{ "name": "fixture", "run": "node", "args": ["scripts/make-fixture.mjs"] }]
+```
+
+```js
+// scripts/make-fixture.mjs
+fs.appendFileSync(process.env.AUDITAUR_DRILL_ENV_FILE, `APP_PROJECT=${dir}\n`);
+```
 
 ## Snapshots
 

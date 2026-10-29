@@ -23,6 +23,7 @@ pub const SUITE_KEYS: &[&str] = &[
     "timeoutMs",
     "expectTimeoutMs",
     "retries",
+    "env",
     "setup",
     "teardown",
     "beforeAll",
@@ -164,6 +165,9 @@ pub struct DrillSuite {
     pub expect_timeout_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retries: Option<u32>,
+    /// Environment for the app launch, hooks, and `run` steps, in file order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<(String, String)>,
     /// Process hooks validated against the existing drill hook schema.
     pub setup: Vec<Value>,
     pub teardown: Vec<Value>,
@@ -1032,6 +1036,7 @@ fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> 
     let timeout_ms = get_u64(ctx, map, "timeoutMs", "", 1);
     let expect_timeout_ms = get_u64(ctx, map, "expectTimeoutMs", "", 1);
     let retries = get_retries(ctx, map, "");
+    let env = parse_env(ctx, map);
     let setup = parse_hooks(ctx, map, "setup");
     let teardown = parse_hooks(ctx, map, "teardown");
     let before_all = parse_steps(ctx, map, "beforeAll", "");
@@ -1073,6 +1078,7 @@ fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> 
         timeout_ms,
         expect_timeout_ms,
         retries,
+        env,
         setup,
         teardown,
         before_all,
@@ -1081,6 +1087,56 @@ fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> 
         after_all,
         tests,
     })
+}
+
+fn parse_env(ctx: &mut Ctx, map: &Map<String, Value>) -> Vec<(String, String)> {
+    let Some(value) = map.get("env") else {
+        return Vec::new();
+    };
+    let Some(vars) = value.as_object() else {
+        ctx.err(
+            "env",
+            format!("expected object of strings, found {}", type_name(value)),
+        );
+        return Vec::new();
+    };
+    let mut env = Vec::new();
+    for (name, value) in vars {
+        let path = format!("env.{name}");
+        if let Err(problem) = check_env_name(name) {
+            ctx.err(&path, problem);
+        } else if let Some(text) = value.as_str() {
+            if text.contains('\0') {
+                ctx.err(&path, "must not contain NUL");
+            } else {
+                env.push((name.clone(), text.to_string()));
+            }
+        } else {
+            ctx.err(
+                &path,
+                format!("expected string, found {}", type_name(value)),
+            );
+        }
+    }
+    env
+}
+
+/// Setup hooks append `KEY=VALUE` lines to the file this names to set suite environment.
+pub const ENV_FILE_VAR: &str = "AUDITAUR_DRILL_ENV_FILE";
+
+/// Why `name` can't be an environment variable name, if it can't.
+pub fn check_env_name(name: &str) -> Result<(), String> {
+    if name.eq_ignore_ascii_case(ENV_FILE_VAR) {
+        Err(format!("{ENV_FILE_VAR} is set by Auditaur"))
+    } else if name.is_empty() {
+        Err("environment variable name must not be empty".to_string())
+    } else if name.contains(['=', '\0']) || name.chars().any(char::is_whitespace) {
+        Err(format!(
+            "invalid environment variable name {name:?}: no `=`, NUL, or whitespace"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn parse_hooks(ctx: &mut Ctx, map: &Map<String, Value>, key: &str) -> Vec<Value> {
@@ -2568,6 +2624,29 @@ mod tests {
                 "{needle}: {issues:?}"
             );
         }
+    }
+
+    #[test]
+    fn parses_and_validates_suite_env() {
+        let parsed = parse(
+            r##"{ "env": { "B": "2", "A": "x=y" }, "tests": [{ "name": "a", "steps": [{ "click": "#a" }] }] }"##,
+        );
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        let env = &parsed.suite.as_ref().unwrap().env;
+        assert!(env.contains(&("A".into(), "x=y".into())), "{env:?}");
+        assert_eq!(env.len(), 2);
+        let issues = messages(
+            r##"{ "env": { "A=B": "1", "": "2", "N": 3 }, "tests": [{ "name": "a", "steps": [{ "click": "#a" }] }] }"##,
+        );
+        for needle in ["no `=`", "must not be empty", "expected string, found"] {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
+        assert!(messages(r##"{ "env": [], "tests": [] }"##)
+            .iter()
+            .any(|m| m.contains("expected object of strings")));
     }
 
     #[test]

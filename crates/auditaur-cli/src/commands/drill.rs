@@ -644,6 +644,8 @@ struct ResolvedDrillHook {
     timeout_ms: u64,
     cwd: PathBuf,
     always: bool,
+    /// Added to the inherited environment.
+    env: Vec<(String, String)>,
 }
 
 fn resolve_gates(gates: Vec<DrillGate>) -> Result<Vec<ResolvedDrillGate>> {
@@ -827,6 +829,7 @@ fn resolve_hook(
         timeout_ms: hook.timeout_ms,
         cwd,
         always: hook.always,
+        env: Vec::new(),
     })
 }
 
@@ -2340,11 +2343,13 @@ pub(crate) struct HookRun {
     pub report: Value,
 }
 
-/// Run one legacy command hook described as JSON (used by drill suites).
+/// Run one legacy command hook described as JSON (used by drill suites), adding `env` to
+/// the inherited environment.
 pub(crate) fn run_hook_json(
     workspace_root: &Path,
     value: &Value,
     teardown: bool,
+    env: &[(String, String)],
 ) -> Result<HookRun> {
     let lifecycle = if teardown {
         DrillHookLifecycle::Teardown
@@ -2352,7 +2357,8 @@ pub(crate) fn run_hook_json(
         DrillHookLifecycle::Setup
     };
     let hook: DrillHook = serde_json::from_value(value.clone())?;
-    let resolved = resolve_hook(workspace_root, hook, lifecycle)?;
+    let mut resolved = resolve_hook(workspace_root, hook, lifecycle)?;
+    resolved.env = env.to_vec();
     let report = execute_hook(&resolved, lifecycle);
     let kind = hook_exit_kind(&report);
     Ok(HookRun {
@@ -2368,6 +2374,7 @@ fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> Dril
     let mut command = Command::new(&hook.run);
     command
         .args(&hook.args)
+        .envs(hook.env.iter().map(|(key, value)| (key, value)))
         .current_dir(&hook.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -3782,6 +3789,7 @@ mod tests {
                     timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
                     cwd: workspace.path().to_path_buf(),
                     always: false,
+                    env: Vec::new(),
                 },
                 ResolvedDrillHook {
                     name: "Always cleanup".to_string(),
@@ -3790,6 +3798,7 @@ mod tests {
                     timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
                     cwd: workspace.path().to_path_buf(),
                     always: true,
+                    env: Vec::new(),
                 },
             ],
         };
@@ -3895,6 +3904,7 @@ mod tests {
             timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
             cwd: cwd.to_path_buf(),
             always: false,
+            env: Vec::new(),
         }
     }
 
