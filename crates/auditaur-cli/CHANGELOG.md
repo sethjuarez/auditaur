@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.12](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.11...auditaur-cli-v0.4.12) - 2026-10-29
+
+### Fixed
+
+- *(drills)* api 0.7.1 bridge fixes and CutReady follow-ups (AR-7/8/9) ([#89](https://github.com/sethjuarez/auditaur/pull/89))
+
 ## [0.4.11](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.10...auditaur-cli-v0.4.11) - 2026-10-29
 
 ### Added
