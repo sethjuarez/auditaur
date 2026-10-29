@@ -34,7 +34,7 @@ use crate::{
         drills::{
             model::{
                 DrillSuite, Expectation, Locator, Matcher, ScreenshotMatch, Step, StepKind,
-                TelemetryExpectation, WaitState,
+                TelemetryExpectation, ValueExpectation, WaitState,
             },
             run::ErrorInfo,
         },
@@ -76,9 +76,21 @@ pub struct RealHost {
 }
 
 impl Host for RealHost {
-    fn launch(&mut self, _suite: &DrillSuite) -> Result<Box<dyn AppDriver>> {
-        let (command, environment) = match &self.source {
-            LaunchSource::Attach => return self.attach(),
+    fn launch(
+        &mut self,
+        suite: &DrillSuite,
+        env: &[(String, String)],
+    ) -> Result<Box<dyn AppDriver>> {
+        let (command, mut environment) = match &self.source {
+            LaunchSource::Attach => {
+                if !env.is_empty() {
+                    eprintln!(
+                        "warning: suite `{}` sets environment, but an attached app was started without it",
+                        suite.suite
+                    );
+                }
+                return self.attach();
+            }
             LaunchSource::Command(command) => (command.clone(), Vec::new()),
             LaunchSource::Config(path) => {
                 let config = workflow::load_launch_config(path)?
@@ -89,11 +101,18 @@ impl Host for RealHost {
                 (command, config.environment)
             }
         };
+        // Fresh port variables from the config win over the suite's.
+        environment.splice(0..0, env.iter().cloned());
         self.spawn(&command, &environment)
     }
 
-    fn run_hook(&mut self, hook: &Value, teardown: bool) -> Result<HookResult> {
-        let run = drill::run_hook_json(&self.workspace_root, hook, teardown)?;
+    fn run_hook(
+        &mut self,
+        hook: &Value,
+        teardown: bool,
+        env: &[(String, String)],
+    ) -> Result<HookResult> {
+        let run = drill::run_hook_json(&self.workspace_root, hook, teardown, env)?;
         Ok(HookResult {
             passed: run.passed,
             timed_out: run.timed_out,
@@ -124,6 +143,7 @@ impl RealHost {
                 "{error:#}\nStart the app first, or pass `-- <command>` (or a config `start` command) so the drill launches it."
             )
         })?;
+        check_drill_support(&session)?;
         Ok(Box::new(BridgeDriver::new(session, None)))
     }
 
@@ -141,7 +161,12 @@ impl RealHost {
         let mut child = drill::spawn_command(command, environment)?;
         let deadline = Instant::now() + self.ready_timeout;
         let ready = self.wait_until_ready(&mut child, started_at, &preexisting_ids, deadline);
-        match ready.and_then(|app| BridgeSession::connect(&drill::drive_selector(&app))) {
+        let session = ready.and_then(|app| {
+            let session = BridgeSession::connect(&drill::drive_selector(&app))?;
+            check_drill_support(&session)?;
+            Ok(session)
+        });
+        match session {
             Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child)))),
             Err(error) => {
                 let _ = drill::cleanup_child_tree(&mut child);
@@ -352,13 +377,54 @@ fn about(target: &Locator, error: String) -> String {
     }
 }
 
+/// First `@auditaur/api` release whose drive bridge understands `locator:` selectors and the
+/// drill actions (`dblclick`, `inspect`).
+const MIN_DRILL_API_VERSION: &str = "0.7.0";
+
+/// Fail the launch, not step 1, when the app's bridge predates drill locators. Only a known
+/// stale-bridge reply fails; anything else is left for the steps to report.
+fn check_drill_support(session: &BridgeSession) -> Result<()> {
+    let probe = bridge_selector(&Locator::Css("html".to_string()));
+    let reply = session.request(
+        "exists",
+        Some(probe),
+        None,
+        Vec::new(),
+        false,
+        None,
+        None,
+        CAPTURE_TIMEOUT,
+    );
+    let error = match reply {
+        Ok(reply) => reply.error,
+        Err(error) => Some(format!("{error:#}")),
+    };
+    match error {
+        Some(error) if is_stale_bridge(&error) => Err(anyhow!(explain(error))),
+        _ => Ok(()),
+    }
+}
+
 /// Old bridges reject `locator:` selectors and newer actions (`dblclick`, `inspect`).
+/// Received values in failure messages stay readable.
+fn clip_value(value: &Value) -> String {
+    let text = value.to_string();
+    if text.chars().count() > 500 {
+        format!("{}…", text.chars().take(500).collect::<String>())
+    } else {
+        text
+    }
+}
+
+fn is_stale_bridge(error: &str) -> bool {
+    (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
+        || error.contains("unsupported drive bridge action")
+}
+
 fn explain(error: String) -> String {
-    let stale = (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
-        || error.contains("unsupported drive bridge action");
-    if stale {
+    if is_stale_bridge(&error) {
         format!(
-            "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to drive this app with drills."
+            "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to {MIN_DRILL_API_VERSION} or newer to drive this app with drills."
         )
     } else {
         error
@@ -488,6 +554,84 @@ impl BridgeDriver {
                 _ => self.expect(ctx, expectation),
             },
             StepKind::Telemetry(expectation) => self.expect_telemetry(ctx, step, expectation),
+            StepKind::ExpectValue(expectation) => self.expect_value(ctx, step, expectation),
+            // The runner runs commands through the host; they never reach the app.
+            StepKind::Run(_) => Err(failed("`run` steps are run by the host")),
+        }
+    }
+
+    /// Re-evaluate the expression until its result matches, like Playwright's `expect.poll`.
+    /// A throwing expression counts as a miss and is retried.
+    fn expect_value(
+        &self,
+        ctx: &StepCtx<'_>,
+        step: &Step,
+        expectation: &ValueExpectation,
+    ) -> StepOutcome {
+        let started = Instant::now();
+        let give_up = (started + ctx.expect_timeout).min(ctx.deadline);
+        let mut last: Option<String> = None;
+        let mut first = true;
+        loop {
+            let now = Instant::now();
+            if now >= give_up && !first {
+                break;
+            }
+            let budget = give_up.saturating_duration_since(now);
+            let wait = if first {
+                budget.max(MIN_INSPECT_TIMEOUT)
+            } else {
+                budget
+            }
+            .min(ctx.remaining());
+            first = false;
+            if wait.is_zero() {
+                break;
+            }
+            let reply = self.request(
+                ctx,
+                "evaluate",
+                None,
+                Some(expectation.expression.clone()),
+                wait,
+            );
+            match reply {
+                Ok(reply) if reply.ok => {
+                    let Some(value) = reply.payload.get("value") else {
+                        return Err(failed("bridge `evaluate` reply had no `value`"));
+                    };
+                    if expectation.matcher.matches(value) != expectation.not {
+                        return Ok(());
+                    }
+                    last = Some(clip_value(value));
+                }
+                Ok(reply) => {
+                    let error = reply
+                        .error
+                        .unwrap_or_else(|| "bridge returned ok=false".to_string());
+                    last = Some(format!("threw: {error}"));
+                }
+                Err(error) => last = Some(format!("evaluate failed: {error:#}")),
+            }
+            thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
+        }
+        let ms = started.elapsed().as_millis();
+        let not = if expectation.not { "not " } else { "" };
+        let expected = format!("{not}{}", expectation.matcher);
+        let actual = last.unwrap_or_else(|| "no time left to evaluate".to_string());
+        let info = ErrorInfo {
+            message: format!(
+                "{} failed after {ms}ms\nexpected: {expected}\nreceived: {actual}",
+                step.title
+            ),
+            expected: Some(Value::String(expected)),
+            actual: Some(Value::String(actual)),
+            ..ErrorInfo::default()
+        };
+        if ctx.expired() && give_up < started + ctx.expect_timeout {
+            Err(StepResult::TimedOut(info))
+        } else {
+            Err(StepResult::Failed(info))
         }
     }
 
@@ -1456,7 +1600,7 @@ mod selector_tests {
     #[test]
     fn explains_old_bridges() {
         let error = "click failed: 'locator:{}' is not a valid selector".to_string();
-        assert!(explain(error).contains("upgrade it"));
+        assert!(explain(error).contains("upgrade it to 0.7.0 or newer"));
         assert!(explain("unsupported drive bridge action: inspect".into()).contains("upgrade it"));
         assert_eq!(explain("selector not found".into()), "selector not found");
     }

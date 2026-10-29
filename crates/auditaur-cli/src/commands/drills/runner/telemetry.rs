@@ -8,9 +8,16 @@
 
 use std::collections::BTreeMap;
 
-use auditaur_core::{model::LogRecord, storage::RelatedTelemetry};
+use auditaur_core::{
+    model::{LogRecord, SpanRecord},
+    storage::RelatedTelemetry,
+};
+use serde_json::Value;
 
-use crate::commands::drills::model::{IpcStatus, TelemetryExpectation};
+use crate::commands::drills::model::{
+    name_label, name_matches, AttributeMatch, IpcStatus, Needle, SpanStatus, TelemetryExpectation,
+    TelemetryKind,
+};
 
 /// How many records a failure message lists.
 const SHOWN: usize = 5;
@@ -59,9 +66,10 @@ pub fn judge(expectation: &TelemetryExpectation, telemetry: &RelatedTelemetry) -
             let matching: Vec<_> = telemetry
                 .tauri_ipc_calls
                 .iter()
-                .filter(|call| &call.command == command)
+                .filter(|call| name_matches(command, &call.command))
                 .filter(|call| status.is_none_or(|status| ipc_status(&call.status) == status))
                 .collect();
+            let command = name_label(command);
             let what = match status {
                 Some(status) => format!(
                     "IPC call to `{command}` with status {}",
@@ -136,6 +144,7 @@ pub fn judge(expectation: &TelemetryExpectation, telemetry: &RelatedTelemetry) -
         TelemetryExpectation::Log {
             contains,
             level,
+            attributes,
             count,
             not,
             ..
@@ -144,25 +153,81 @@ pub fn judge(expectation: &TelemetryExpectation, telemetry: &RelatedTelemetry) -
             let level = level.as_deref().map(normalize_level);
             let found = entries
                 .iter()
-                .filter(|(entry_level, text)| {
+                .filter(|(entry_level, text, entry_attributes)| {
                     text.contains(contains.as_str())
                         && level.as_deref().is_none_or(|level| entry_level == level)
+                        && attributes
+                            .iter()
+                            .all(|attribute| attribute.matches(entry_attributes))
                 })
                 .count();
             let what = match &level {
                 Some(level) => format!("{level} log containing {contains:?}"),
                 None => format!("log containing {contains:?}"),
-            };
+            } + &with_attributes(attributes);
             let seen = || {
                 listing(
                     entries
                         .iter()
                         .rev()
-                        .map(|(level, text)| format!("[{level}] {}", clip(text))),
+                        .map(|(level, text, _)| format!("[{level}] {}", clip(text))),
                     "no logs",
                 )
             };
             quantity(found, *count, *not, &what, seen)
+        }
+        TelemetryExpectation::Span {
+            name,
+            status,
+            attributes,
+            count,
+            not,
+            ..
+        } => {
+            let found = telemetry
+                .spans
+                .iter()
+                .filter(|span| name_matches(name, &span.name))
+                .filter(|span| status.is_none_or(|status| span_status(span) == status))
+                .filter(|span| {
+                    attributes
+                        .iter()
+                        .all(|attribute| attribute.matches(&span.attributes))
+                })
+                .count();
+            let status_text = status
+                .map(|status| format!(" with status {}", status.as_str()))
+                .unwrap_or_default();
+            let what =
+                format!("span `{}`{status_text}", name_label(name)) + &with_attributes(attributes);
+            let seen = || {
+                let mut names = BTreeMap::<&str, usize>::new();
+                for span in &telemetry.spans {
+                    *names.entry(&span.name).or_default() += 1;
+                }
+                listing(
+                    names.into_iter().map(|(name, n)| format!("{name} ×{n}")),
+                    "no spans",
+                )
+            };
+            quantity(found, *count, *not, &what, seen)
+        }
+        TelemetryExpectation::NoTelemetry { needle, kinds, .. } => {
+            let hits = telemetry_hits(telemetry, needle, kinds);
+            let scope = kinds
+                .iter()
+                .map(|kind| kind.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Verdict {
+                judgement: if hits.is_empty() {
+                    Judgement::Pass
+                } else {
+                    Judgement::Failed
+                },
+                expected: format!("no {scope} containing {needle}"),
+                actual: listing(hits.into_iter(), "none"),
+            }
         }
         TelemetryExpectation::NoErrors { ignore, .. } => {
             let errors: Vec<String> = errors(telemetry)
@@ -229,25 +294,134 @@ fn quantity(
     }
 }
 
-/// Logs and frontend errors as `(level, text)`, oldest first.
-fn log_entries(telemetry: &RelatedTelemetry) -> Vec<(String, String)> {
-    let mut entries: Vec<(i64, String, String)> = telemetry
+/// Logs and frontend errors as `(level, text, attributes)`, oldest first.
+fn log_entries(telemetry: &RelatedTelemetry) -> Vec<(String, String, &Value)> {
+    let mut entries: Vec<(i64, String, String, &Value)> = telemetry
         .logs
         .iter()
-        .map(|log| (log.timestamp_unix_nanos, log_level(log), log_text(log)))
+        .map(|log| {
+            (
+                log.timestamp_unix_nanos,
+                log_level(log),
+                log_text(log),
+                &log.attributes,
+            )
+        })
         .chain(telemetry.frontend_errors.iter().map(|error| {
             (
                 error.timestamp_unix_nanos,
                 "error".to_string(),
                 error.message.clone(),
+                &error.attributes,
             )
         }))
         .collect();
     entries.sort_by_key(|(at, ..)| *at);
     entries
         .into_iter()
-        .map(|(_, level, text)| (level, text))
+        .map(|(_, level, text, attributes)| (level, text, attributes))
         .collect()
+}
+
+fn with_attributes(attributes: &[AttributeMatch]) -> String {
+    if attributes.is_empty() {
+        return String::new();
+    }
+    let list = attributes
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" with {list}")
+}
+
+fn span_status(span: &SpanRecord) -> SpanStatus {
+    let code = span.status_code.as_deref().unwrap_or_default();
+    let code = code.to_ascii_lowercase();
+    match code.trim_start_matches("status_code_") {
+        "ok" => SpanStatus::Ok,
+        "error" => SpanStatus::Error,
+        _ => SpanStatus::Unset,
+    }
+}
+
+/// Where the needle appears, as `kind: name` labels. Every string in a record is searched,
+/// including nested attributes and payloads; numbers and booleans as their JSON text.
+fn telemetry_hits(
+    telemetry: &RelatedTelemetry,
+    needle: &Needle,
+    kinds: &[TelemetryKind],
+) -> Vec<String> {
+    fn found<T: serde::Serialize>(needle: &Needle, record: &T) -> bool {
+        // The record's own field names, IDs, timestamps, and durations are bookkeeping, not
+        // app data; nested keys are data.
+        match serde_json::to_value(record) {
+            Ok(Value::Object(fields)) => fields
+                .iter()
+                .filter(|(key, _)| !is_bookkeeping(key))
+                .any(|(_, value)| contains(needle, value)),
+            Ok(value) => contains(needle, &value),
+            Err(_) => false,
+        }
+    }
+    fn is_bookkeeping(key: &str) -> bool {
+        key.ends_with("Id") || key.ends_with("Nanos") || key == "durationMs"
+    }
+    fn contains(needle: &Needle, value: &Value) -> bool {
+        match value {
+            Value::String(text) => needle.is_in(text),
+            Value::Array(items) => items.iter().any(|item| contains(needle, item)),
+            Value::Object(map) => map
+                .iter()
+                .any(|(key, value)| needle.is_in(key) || contains(needle, value)),
+            Value::Number(number) => needle.is_in(&number.to_string()),
+            Value::Bool(_) | Value::Null => false,
+        }
+    }
+    let mut hits = Vec::new();
+    for kind in kinds {
+        match kind {
+            TelemetryKind::Logs => {
+                for log in &telemetry.logs {
+                    if found(needle, log) {
+                        hits.push(format!("log: {}", clip(&log_text(log))));
+                    }
+                }
+                for error in &telemetry.frontend_errors {
+                    if found(needle, error) {
+                        hits.push(format!("frontend error: {}", clip(&error.message)));
+                    }
+                }
+            }
+            TelemetryKind::Spans => {
+                for span in &telemetry.spans {
+                    if found(needle, span) {
+                        hits.push(format!("span: {}", span.name));
+                    }
+                }
+                for event in &telemetry.span_events {
+                    if found(needle, event) {
+                        hits.push(format!("span event: {}", event.name));
+                    }
+                }
+            }
+            TelemetryKind::Ipc => {
+                for call in &telemetry.tauri_ipc_calls {
+                    if found(needle, call) {
+                        hits.push(format!("IPC: {}", call.command));
+                    }
+                }
+            }
+            TelemetryKind::Events => {
+                for event in &telemetry.tauri_events {
+                    if found(needle, event) {
+                        hits.push(format!("event: {}", event.event_name));
+                    }
+                }
+            }
+        }
+    }
+    hits
 }
 
 /// Every error the app reported: frontend errors, error logs, and failed IPC calls.
@@ -361,8 +535,168 @@ fn clip(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::drills::model::{AttributeValue, TextMatch};
     use auditaur_core::model::{FrontendError, TauriEventRecord, TauriIpcCall, TelemetrySource};
+    use regex::Regex;
     use serde_json::json;
+
+    fn span(name: &str, status: Option<&str>, attributes: Value) -> SpanRecord {
+        SpanRecord {
+            session_id: "s".into(),
+            trace_id: "t".into(),
+            span_id: "x".into(),
+            parent_span_id: None,
+            name: name.into(),
+            kind: None,
+            start_time_unix_nanos: 1,
+            end_time_unix_nanos: Some(2),
+            status_code: status.map(str::to_string),
+            status_message: None,
+            scope_name: None,
+            scope_version: None,
+            attributes,
+            source: TelemetrySource::Backend,
+        }
+    }
+
+    fn attribute(key: &str, value: AttributeValue) -> AttributeMatch {
+        AttributeMatch {
+            key: key.into(),
+            value,
+        }
+    }
+
+    #[test]
+    fn spans_match_name_status_and_attributes() {
+        let telemetry = RelatedTelemetry {
+            spans: vec![
+                span(
+                    "chat.send",
+                    Some("STATUS_CODE_OK"),
+                    json!({ "harness": "prompty", "turns": 2 }),
+                ),
+                span("chat.send", Some("Error"), json!({ "harness": "other" })),
+                span("startup", None, json!({})),
+            ],
+            ..RelatedTelemetry::default()
+        };
+        let expect = |name: TextMatch, status, attributes, count| TelemetryExpectation::Span {
+            name,
+            status,
+            attributes,
+            count,
+            not: false,
+            soft: false,
+        };
+        let exact = || TextMatch::Exact("chat.send".into());
+        assert_eq!(
+            judge(&expect(exact(), None, vec![], Some(2)), &telemetry).judgement,
+            Judgement::Pass
+        );
+        let ok = expect(
+            exact(),
+            Some(SpanStatus::Ok),
+            vec![
+                attribute("harness", AttributeValue::Equals(json!("prompty"))),
+                attribute("turns", AttributeValue::Equals(json!(2.0))),
+            ],
+            Some(1),
+        );
+        assert_eq!(judge(&ok, &telemetry).judgement, Judgement::Pass);
+        let unset = expect(
+            TextMatch::Pattern(Regex::new("^start").unwrap()),
+            Some(SpanStatus::Unset),
+            vec![],
+            None,
+        );
+        assert_eq!(judge(&unset, &telemetry).judgement, Judgement::Pass);
+        let missing = judge(
+            &expect(
+                exact(),
+                None,
+                vec![attribute(
+                    "harness",
+                    AttributeValue::Pattern(Regex::new("^none$").unwrap()),
+                )],
+                None,
+            ),
+            &telemetry,
+        );
+        assert_eq!(missing.judgement, Judgement::Pending);
+        assert_eq!(missing.actual, "0 matching; seen: chat.send ×2, startup ×1");
+    }
+
+    #[test]
+    fn logs_match_attributes_and_ipc_matches_patterns() {
+        let mut tagged = log("INFO", "sent", 1);
+        tagged.attributes = json!({ "harness": "prompty" });
+        let telemetry = RelatedTelemetry {
+            logs: vec![tagged, log("INFO", "sent", 2)],
+            tauri_ipc_calls: vec![call("plugin:chat|send", "OK", 1.0)],
+            ..RelatedTelemetry::default()
+        };
+        let expect = |attributes| TelemetryExpectation::Log {
+            contains: "sent".into(),
+            level: None,
+            attributes,
+            count: Some(1),
+            not: false,
+            soft: false,
+        };
+        let harness = vec![attribute(
+            "harness",
+            AttributeValue::Equals(json!("prompty")),
+        )];
+        assert_eq!(
+            judge(&expect(harness), &telemetry).judgement,
+            Judgement::Pass
+        );
+        let pattern = TelemetryExpectation::Ipc {
+            command: TextMatch::Pattern(Regex::new("^plugin:chat\\|").unwrap()),
+            status: None,
+            count: None,
+            max_ms: None,
+            not: false,
+            soft: false,
+        };
+        assert_eq!(judge(&pattern, &telemetry).judgement, Judgement::Pass);
+    }
+
+    #[test]
+    fn no_telemetry_searches_selected_kinds_but_not_bookkeeping() {
+        let mut leaky = call("save", "OK", 1.0);
+        leaky.args_json = Some(r#"{"author":"ada@example.com"}"#.into());
+        let mut nested = log("INFO", "fine", 1);
+        nested.attributes = json!({ "user": { "ada@example.com": true } });
+        let telemetry = RelatedTelemetry {
+            logs: vec![nested],
+            tauri_ipc_calls: vec![leaky],
+            ..RelatedTelemetry::default()
+        };
+        let expect = |needle, kinds: &[TelemetryKind]| TelemetryExpectation::NoTelemetry {
+            needle,
+            kinds: kinds.to_vec(),
+            soft: false,
+        };
+        let email = || Needle::Contains("ada@example.com".into());
+        let all = judge(&expect(email(), &TelemetryKind::ALL), &telemetry);
+        assert_eq!(all.judgement, Judgement::Failed);
+        assert_eq!(all.actual, "log: fine, IPC: save");
+        assert_eq!(
+            judge(
+                &expect(email(), &[TelemetryKind::Spans, TelemetryKind::Events]),
+                &telemetry
+            )
+            .judgement,
+            Judgement::Pass
+        );
+        // Session IDs, timestamps, and durations are not app data.
+        let digits = Needle::Pattern(Regex::new("^1$").unwrap());
+        assert_eq!(
+            judge(&expect(digits, &[TelemetryKind::Ipc]), &telemetry).judgement,
+            Judgement::Pass
+        );
+    }
 
     fn call(command: &str, status: &str, ms: f64) -> TauriIpcCall {
         TauriIpcCall {
@@ -440,7 +774,7 @@ mod tests {
         not: bool,
     ) -> TelemetryExpectation {
         TelemetryExpectation::Ipc {
-            command: command.into(),
+            command: TextMatch::Exact(command.into()),
             status,
             count,
             max_ms,
@@ -563,6 +897,7 @@ mod tests {
         let expect = |contains: &str, level: Option<&str>| TelemetryExpectation::Log {
             contains: contains.into(),
             level: level.map(str::to_string),
+            attributes: vec![],
             count: None,
             not: false,
             soft: false,

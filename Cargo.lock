@@ -282,6 +282,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "ctrlc",
+ "dunce",
  "jsonschema",
  "png",
  "regex",

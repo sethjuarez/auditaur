@@ -588,9 +588,10 @@ fn load_script(options: &DrillRunOptions) -> Result<Option<ResolvedDrillScript>>
         return Ok(None);
     };
     let workspace_root = std::env::current_dir()
-        .context("failed to resolve current workspace")?
-        .canonicalize()
-        .context("failed to canonicalize current workspace")?;
+        .context("failed to resolve current workspace")
+        .and_then(|dir| {
+            dunce::canonicalize(dir).context("failed to canonicalize current workspace")
+        })?;
     let script_path = resolve_existing_path(&workspace_root, path)
         .with_context(|| format!("invalid script path `{}`", path.display()))?;
     let contents = fs::read_to_string(&script_path)
@@ -643,6 +644,8 @@ struct ResolvedDrillHook {
     timeout_ms: u64,
     cwd: PathBuf,
     always: bool,
+    /// Added to the inherited environment.
+    env: Vec<(String, String)>,
 }
 
 fn resolve_gates(gates: Vec<DrillGate>) -> Result<Vec<ResolvedDrillGate>> {
@@ -826,14 +829,25 @@ fn resolve_hook(
         timeout_ms: hook.timeout_ms,
         cwd,
         always: hook.always,
+        env: Vec::new(),
     })
 }
 
+/// Resolve `path` against `workspace_root`, rejecting anything outside it. Containment is
+/// checked on `std` canonical (verbatim on Windows) forms of both sides so a plain root still
+/// matches; the result is then simplified so hooks get a normal cwd where possible (`cmd.exe`
+/// refuses `\\?\` cwds).
 fn resolve_existing_path(workspace_root: &Path, path: &Path) -> Result<PathBuf> {
+    let root = workspace_root.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize workspace `{}`",
+            workspace_root.display()
+        )
+    })?;
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        workspace_root.join(path)
+        root.join(path)
     };
     let resolved = joined.canonicalize().with_context(|| {
         format!(
@@ -842,14 +856,14 @@ fn resolve_existing_path(workspace_root: &Path, path: &Path) -> Result<PathBuf> 
             workspace_root.display()
         )
     })?;
-    if !resolved.starts_with(workspace_root) {
+    if !resolved.starts_with(&root) {
         return Err(anyhow!(
             "`{}` resolves outside workspace `{}`",
             path.display(),
             workspace_root.display()
         ));
     }
-    Ok(resolved)
+    Ok(dunce::simplified(&resolved).to_path_buf())
 }
 
 fn run_hooks(
@@ -2329,11 +2343,13 @@ pub(crate) struct HookRun {
     pub report: Value,
 }
 
-/// Run one legacy command hook described as JSON (used by drill suites).
+/// Run one legacy command hook described as JSON (used by drill suites), adding `env` to
+/// the inherited environment.
 pub(crate) fn run_hook_json(
     workspace_root: &Path,
     value: &Value,
     teardown: bool,
+    env: &[(String, String)],
 ) -> Result<HookRun> {
     let lifecycle = if teardown {
         DrillHookLifecycle::Teardown
@@ -2341,7 +2357,8 @@ pub(crate) fn run_hook_json(
         DrillHookLifecycle::Setup
     };
     let hook: DrillHook = serde_json::from_value(value.clone())?;
-    let resolved = resolve_hook(workspace_root, hook, lifecycle)?;
+    let mut resolved = resolve_hook(workspace_root, hook, lifecycle)?;
+    resolved.env = env.to_vec();
     let report = execute_hook(&resolved, lifecycle);
     let kind = hook_exit_kind(&report);
     Ok(HookRun {
@@ -2357,12 +2374,16 @@ fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> Dril
     let mut command = Command::new(&hook.run);
     command
         .args(&hook.args)
+        .envs(hook.env.iter().map(|(key, value)| (key, value)))
         .current_dir(&hook.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
+    // Its own process group, so a timeout stops the whole tree.
+    #[cfg(unix)]
+    command.process_group(0);
 
     match command.spawn() {
         Ok(child) => wait_for_hook_output(hook, lifecycle, started, timeout, child),
@@ -2385,7 +2406,9 @@ fn wait_for_hook_output(
             Ok(Some(status)) => break exit_code(status),
             Ok(None) if started.elapsed() >= timeout => {
                 timed_out = true;
-                let _ = cleanup_process_tree(child.id());
+                if cleanup_process_tree(child.id()).is_err() {
+                    let _ = child.kill();
+                }
                 break child.wait().ok().and_then(exit_code);
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
@@ -3651,6 +3674,44 @@ mod tests {
     }
 
     #[test]
+    fn resolves_dot_hook_cwd_against_a_plain_workspace_root() {
+        let workspace = TempDir::new().unwrap();
+        let hook = DrillHook {
+            name: "Here".to_string(),
+            run: "npm".to_string(),
+            args: Vec::new(),
+            timeout_ms: 1_000,
+            cwd: PathBuf::from("."),
+            always: false,
+        };
+
+        // `drill test` passes `current_dir()` as-is, which is never verbatim on Windows.
+        let resolved = resolve_hook(workspace.path(), hook, DrillHookLifecycle::Setup).unwrap();
+
+        assert_eq!(resolved.cwd, dunce::canonicalize(workspace.path()).unwrap());
+        assert!(!resolved.cwd.to_string_lossy().starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn rejects_hook_cwd_escaping_a_plain_workspace_root() {
+        let parent = TempDir::new().unwrap();
+        let workspace = parent.path().join("app");
+        fs::create_dir(&workspace).unwrap();
+        let hook = DrillHook {
+            name: "Up".to_string(),
+            run: "npm".to_string(),
+            args: Vec::new(),
+            timeout_ms: 1_000,
+            cwd: PathBuf::from(".."),
+            always: false,
+        };
+
+        let error = resolve_hook(&workspace, hook, DrillHookLifecycle::Setup).unwrap_err();
+
+        assert!(format!("{error:#}").contains("outside workspace"));
+    }
+
+    #[test]
     fn truncates_hook_output_on_character_boundaries() {
         let workspace = TempDir::new().unwrap();
         let hook = resolved_hook("Verbose", workspace.path());
@@ -3728,6 +3789,7 @@ mod tests {
                     timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
                     cwd: workspace.path().to_path_buf(),
                     always: false,
+                    env: Vec::new(),
                 },
                 ResolvedDrillHook {
                     name: "Always cleanup".to_string(),
@@ -3736,6 +3798,7 @@ mod tests {
                     timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
                     cwd: workspace.path().to_path_buf(),
                     always: true,
+                    env: Vec::new(),
                 },
             ],
         };
@@ -3841,6 +3904,7 @@ mod tests {
             timeout_ms: DEFAULT_HOOK_TIMEOUT_MS,
             cwd: cwd.to_path_buf(),
             always: false,
+            env: Vec::new(),
         }
     }
 

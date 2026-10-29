@@ -21,7 +21,10 @@ use auditaur_core::redaction::redact_json;
 use serde_json::Value;
 
 use super::{
-    model::{DrillSuite, Matcher, Step, StepKind, TelemetryExpectation, TestCase, TestMode},
+    model::{
+        check_env_name, CommandStep, DrillSuite, Matcher, Step, StepKind, TelemetryExpectation,
+        TestCase, TestMode, ENV_FILE_VAR,
+    },
     run::{ErrorInfo, Outcome, Phase, RunWriter, Status},
     title, Selected,
 };
@@ -92,8 +95,18 @@ pub trait AppDriver {
 
 /// Launches apps and runs suite command hooks.
 pub trait Host {
-    fn launch(&mut self, suite: &DrillSuite) -> Result<Box<dyn AppDriver>>;
-    fn run_hook(&mut self, hook: &Value, teardown: bool) -> Result<HookResult>;
+    /// Launch the suite's app with `env` added to its environment.
+    fn launch(
+        &mut self,
+        suite: &DrillSuite,
+        env: &[(String, String)],
+    ) -> Result<Box<dyn AppDriver>>;
+    fn run_hook(
+        &mut self,
+        hook: &Value,
+        teardown: bool,
+        env: &[(String, String)],
+    ) -> Result<HookResult>;
 }
 
 pub struct HookResult {
@@ -189,6 +202,8 @@ pub fn execute(
             wrote_baseline: false,
             stopped: None,
             attempt: None,
+            env: selected.suite.env.clone(),
+            env_file: None,
         }
         .run()?;
         if stopped.is_some() {
@@ -231,6 +246,10 @@ struct SuiteRun<'r, 'p> {
     stopped: Option<Stopped>,
     /// The test attempt being run; `None` in suite hooks.
     attempt: Option<u32>,
+    /// The suite's `env` plus what setup hooks wrote to [`ENV_FILE_VAR`].
+    env: Vec<(String, String)>,
+    /// Where setup hooks write environment; removed when the suite ends.
+    env_file: Option<tempfile::TempPath>,
 }
 
 /// Failures collected while running a list of steps.
@@ -310,6 +329,14 @@ impl SuiteRun<'_, '_> {
         self.writer.suite_started(self.index)?;
         self.reporter.suite_started(suite);
 
+        if !suite.setup.is_empty() {
+            self.env_file = Some(
+                tempfile::Builder::new()
+                    .prefix("auditaur-drill-env-")
+                    .tempfile()?
+                    .into_temp_path(),
+            );
+        }
         for (index, hook) in suite.setup.iter().enumerate() {
             if self.options.cancelled() {
                 self.stopped = Some(Stopped::Cancelled);
@@ -358,7 +385,7 @@ impl SuiteRun<'_, '_> {
         let index = self
             .writer
             .step_started(Phase::BeforeAll, "launch app", "launch")?;
-        match self.host.launch(self.selected.suite) {
+        match self.host.launch(self.selected.suite, &self.env) {
             Ok(driver) => {
                 self.writer.step_finished(Status::Passed, false, None)?;
                 self.writer.set_suite_app(driver.app_info())?;
@@ -614,7 +641,10 @@ impl SuiteRun<'_, '_> {
                 .step_started(budget.phase, &step.title, step.action)?;
             // On assertions `timeoutMs` is the retry window (Playwright's `expect(..., { timeout })`),
             // so running out is a failed assertion; on actions it bounds the step.
-            let assertion = matches!(step.kind, StepKind::Expect(_) | StepKind::Telemetry(_));
+            let assertion = matches!(
+                step.kind,
+                StepKind::Expect(_) | StepKind::ExpectValue(_) | StepKind::Telemetry(_)
+            );
             // A person's wait is off the test clock, like Playwright's `page.pause()`; the
             // gate's own `timeoutMs` (or the step's) bounds it instead.
             let gate = matches!(step.kind, StepKind::Gate(_));
@@ -645,10 +675,12 @@ impl SuiteRun<'_, '_> {
                 wrote_baseline: false,
                 cancel: self.options.cancel.clone(),
             };
-            let result = if gate {
-                budget.untimed(|| driver.run_step(step, &mut ctx))
-            } else {
-                driver.run_step(step, &mut ctx)
+            let result = match &step.kind {
+                StepKind::Run(command) => {
+                    run_command(&mut *self.host, &self.env, step, command, &mut ctx)
+                }
+                _ if gate => budget.untimed(|| driver.run_step(step, &mut ctx)),
+                _ => driver.run_step(step, &mut ctx),
             };
             // Evidence captured below is not part of the step's duration.
             ctx.writer.step_ended();
@@ -790,7 +822,12 @@ impl SuiteRun<'_, '_> {
             self.writer.step_finished(Status::Skipped, false, None)?;
             return Ok(None);
         }
-        let (status, message) = match self.host.run_hook(hook, teardown) {
+        let mut env = self.env.clone();
+        let env_file = self.env_file.as_ref().filter(|_| !teardown);
+        if let Some(path) = env_file {
+            env.push((ENV_FILE_VAR.to_string(), path.display().to_string()));
+        }
+        let (status, message) = match self.host.run_hook(hook, teardown, &env) {
             Ok(result) => {
                 let report = redact_json(&result.report, &[]).value;
                 self.writer.attach(
@@ -799,18 +836,26 @@ impl SuiteRun<'_, '_> {
                     &format!("hooks/{lifecycle}-{index}.json"),
                     &serde_json::to_vec_pretty(&report)?,
                 )?;
-                if result.passed {
-                    self.writer.step_finished(Status::Passed, false, None)?;
-                    return Ok(None);
-                }
-                if result.timed_out {
-                    (
-                        Status::TimedOut,
-                        format!("{lifecycle} hook `{name}` timed out"),
-                    )
-                } else {
-                    (Status::Failed, format!("{lifecycle} hook `{name}` failed"))
-                }
+                let bad_env = match env_file.map(|path| read_env_file(path)) {
+                    Some(Ok(vars)) => {
+                        self.env = self.selected.suite.env.clone();
+                        self.env.extend(vars);
+                        None
+                    }
+                    Some(Err(problem)) => Some(format!("wrote a bad ${ENV_FILE_VAR}: {problem}")),
+                    None => None,
+                };
+                // The hook's own failure comes first; a bad env file is often its symptom.
+                let (status, message) = match (result.passed, result.timed_out, bad_env) {
+                    (true, _, None) => {
+                        self.writer.step_finished(Status::Passed, false, None)?;
+                        return Ok(None);
+                    }
+                    (true, _, Some(bad)) => (Status::Failed, bad),
+                    (false, true, bad) => (Status::TimedOut, with(bad, "timed out")),
+                    (false, false, bad) => (Status::Failed, with(bad, "failed")),
+                };
+                (status, format!("{lifecycle} hook `{name}` {message}"))
             }
             Err(error) => (
                 Status::Failed,
@@ -826,6 +871,140 @@ impl SuiteRun<'_, '_> {
         Ok(Some(error))
     }
 }
+
+/// Run a `run` step's command as a hook bounded by the step's remaining time, attach its
+/// redacted output, and check its exit code and output.
+fn run_command(
+    host: &mut dyn Host,
+    env: &[(String, String)],
+    step: &Step,
+    command: &CommandStep,
+    ctx: &mut StepCtx<'_>,
+) -> StepResult {
+    let fail = |message: String| StepResult::Failed(ErrorInfo::new(message));
+    let timeout_ms = u64::try_from(ctx.remaining().as_millis()).unwrap_or(u64::MAX);
+    if timeout_ms == 0 {
+        return StepResult::TimedOut(ErrorInfo::new("no time left to run the command"));
+    }
+    let hook = command.hook(&step.title, timeout_ms);
+    let result = match host.run_hook(&hook, false, env) {
+        Ok(result) => result,
+        Err(error) => return fail(format!("could not run `{}`: {error:#}", command.run)),
+    };
+    let mut shown = redact_json(&result.report, &[]).value;
+    if let Some(report) = shown.as_object_mut() {
+        report.remove("lifecycle");
+        report.remove("always");
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(&shown) {
+        let file = format!("step-{}-run.json", ctx.step_index);
+        if let Err(error) = ctx
+            .writer
+            .attach("command output", "application/json", &file, &bytes)
+        {
+            return fail(format!("could not record command output: {error:#}"));
+        }
+    }
+    let text = |report: &Value, key: &str| {
+        report
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let tail = |key: &str| {
+        let text = text(&shown, key);
+        let text = text.trim();
+        let start = text
+            .char_indices()
+            .rev()
+            .nth(OUTPUT_SHOWN - 1)
+            .map_or(0, |(at, _)| at);
+        if text.is_empty() {
+            format!("{key} was empty")
+        } else if start > 0 {
+            format!("{key} ended with: …{}", &text[start..])
+        } else {
+            format!("{key}: {text}")
+        }
+    };
+    if result.report.get("timedOut").and_then(Value::as_bool) == Some(true) || result.timed_out {
+        return StepResult::TimedOut(ErrorInfo::new(format!(
+            "`{}` did not finish within {timeout_ms}ms",
+            command.run
+        )));
+    }
+    let exit_code = result
+        .report
+        .get("exitCode")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+    if exit_code != Some(command.exit_code) {
+        let got = exit_code.map_or("no exit code".to_string(), |code| {
+            format!("exit code {code}")
+        });
+        return fail(format!(
+            "expected `{}` to exit with {}, got {got}; {}",
+            command.run,
+            command.exit_code,
+            tail("stderr")
+        ));
+    }
+    for (key, needle) in [("stdout", &command.stdout), ("stderr", &command.stderr)] {
+        if let Some(needle) = needle {
+            if !needle.is_in(&text(&result.report, key)) {
+                return fail(format!("expected {key} to contain {needle}; {}", tail(key)));
+            }
+        }
+    }
+    StepResult::Passed
+}
+
+/// `what` happened, plus a secondary problem if there was one.
+fn with(secondary: Option<String>, what: &str) -> String {
+    match secondary {
+        Some(secondary) => format!("{what}; it also {secondary}"),
+        None => what.to_string(),
+    }
+}
+
+/// Read the `KEY=VALUE` lines setup hooks appended to [`ENV_FILE_VAR`], in order. Blank
+/// lines and `#` comments are skipped; a UTF-8 or UTF-16 byte order mark is honored so
+/// Windows PowerShell's `>>` works.
+fn read_env_file(path: &std::path::Path) -> Result<Vec<(String, String)>, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("could not read it: {error}"))?;
+    let text = if let Some(wide) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        if wide.len() % 2 != 0 {
+            return Err("it is not valid UTF-16".to_string());
+        }
+        let units: Vec<u16> = wide
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16(&units).map_err(|_| "it is not valid UTF-16".to_string())?
+    } else {
+        let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        String::from_utf8(bytes.to_vec()).map_err(|_| "it is not valid UTF-8".to_string())?
+    };
+    let mut vars = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        // A BOM can land mid-file when hooks append with different encodings.
+        let line = line.trim_start_matches('\u{feff}');
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            return Err(format!("line {}: expected KEY=VALUE", number + 1));
+        };
+        check_env_name(name).map_err(|problem| format!("line {}: {problem}", number + 1))?;
+        vars.push((name.to_string(), value.to_string()));
+    }
+    Ok(vars)
+}
+
+/// How much of a command's output a failure message shows.
+const OUTPUT_SHOWN: usize = 500;
 
 impl Budget {
     fn new(phase: Phase, timeout_ms: u64, test_id: Option<String>, since_unix_nanos: i64) -> Self {
@@ -882,11 +1061,14 @@ fn hook_always(hook: &Value) -> bool {
 pub fn is_soft(step: &Step) -> bool {
     match &step.kind {
         StepKind::Expect(expectation) => expectation.soft,
+        StepKind::ExpectValue(expectation) => expectation.soft,
         StepKind::Telemetry(expectation) => match expectation {
             TelemetryExpectation::Ipc { soft, .. }
             | TelemetryExpectation::Event { soft, .. }
             | TelemetryExpectation::Log { soft, .. }
-            | TelemetryExpectation::NoErrors { soft, .. } => *soft,
+            | TelemetryExpectation::Span { soft, .. }
+            | TelemetryExpectation::NoErrors { soft, .. }
+            | TelemetryExpectation::NoTelemetry { soft, .. } => *soft,
         },
         _ => false,
     }

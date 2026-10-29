@@ -24,6 +24,8 @@ struct Shared {
     since: Vec<i64>,
     /// Flipped by a `#cancel` step, like Ctrl+C.
     cancel: Option<Arc<AtomicBool>>,
+    /// `(who, env)` for every launch and hook that was given environment.
+    envs: Vec<(String, Vec<(String, String)>)>,
 }
 
 type State = Rc<RefCell<Shared>>;
@@ -163,14 +165,24 @@ impl AppDriver for FakeDriver {
     }
 }
 
-/// Hooks named `bad` fail and `cancel` cancels the run; suites named `nolaunch` cannot launch.
+/// Hooks named `bad` fail and `cancel` cancels the run; `write-env` hooks append their args as
+/// lines to the env file. Suites named `nolaunch` cannot launch.
 struct FakeHost {
     state: State,
 }
 
 impl Host for FakeHost {
-    fn launch(&mut self, suite: &DrillSuite) -> Result<Box<dyn AppDriver>> {
-        self.state.borrow_mut().log.push("launch".to_string());
+    fn launch(
+        &mut self,
+        suite: &DrillSuite,
+        env: &[(String, String)],
+    ) -> Result<Box<dyn AppDriver>> {
+        let mut state = self.state.borrow_mut();
+        state.log.push("launch".to_string());
+        if !env.is_empty() {
+            state.envs.push(("launch".to_string(), env.to_vec()));
+        }
+        drop(state);
         if suite.suite == "nolaunch" {
             return Err(anyhow!("no app"));
         }
@@ -184,17 +196,52 @@ impl Host for FakeHost {
         }))
     }
 
-    fn run_hook(&mut self, hook: &Value, _teardown: bool) -> Result<HookResult> {
+    fn run_hook(
+        &mut self,
+        hook: &Value,
+        _teardown: bool,
+        env: &[(String, String)],
+    ) -> Result<HookResult> {
         let name = hook["name"].as_str().unwrap().to_string();
         let mut state = self.state.borrow_mut();
         state.log.push(format!("hook {name}"));
+        if !env.is_empty() {
+            state.envs.push((format!("hook {name}"), env.to_vec()));
+        }
+        if hook["run"] == "write-env" {
+            let path = &env.iter().find(|(key, _)| key == ENV_FILE_VAR).unwrap().1;
+            let mut text = fs::read_to_string(path).unwrap();
+            for line in hook["args"].as_array().unwrap() {
+                text.push_str(line.as_str().unwrap());
+                text.push('\n');
+            }
+            fs::write(path, text).unwrap();
+        }
         if name == "cancel" {
             state.cancel.as_ref().unwrap().store(true, Ordering::SeqCst);
         }
+        let run = hook["run"].as_str().unwrap_or_default();
+        let args: Vec<&str> = hook["args"]
+            .as_array()
+            .map(|args| args.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if hook.get("args").is_some() {
+            state.log.push(format!("ran {run} {}", args.join(" ")));
+        }
+        let timed_out = run == "slow";
+        let exit_code = if name == "bad" || run == "fail" { 1 } else { 0 };
         Ok(HookResult {
-            passed: name != "bad",
-            timed_out: false,
-            report: json!({ "name": name, "env": { "token": "secret-value" } }),
+            passed: exit_code == 0 && !timed_out,
+            timed_out,
+            report: json!({
+                "name": name,
+                "env": { "token": "secret-value" },
+                "exitCode": if timed_out { Value::Null } else { json!(exit_code) },
+                "timedOut": timed_out,
+                "timeoutMs": hook["timeoutMs"],
+                "stdout": format!("out of {run} {}", args.join(" ")),
+                "stderr": if exit_code == 0 { "" } else { "it broke" },
+            }),
         })
     }
 }
@@ -204,6 +251,7 @@ struct Ran {
     log: Vec<String>,
     telemetry: Vec<(i64, bool)>,
     since: Vec<i64>,
+    envs: Vec<(String, Vec<(String, String)>)>,
     dir: std::path::PathBuf,
     stopped: Option<Stopped>,
     /// `(title, error messages)` per reported test attempt.
@@ -277,11 +325,13 @@ fn run_files(suites: &[&str], options: RunnerOptions) -> Ran {
     let log = state.borrow().log.clone();
     let telemetry = state.borrow().telemetry.clone();
     let since = state.borrow().since.clone();
+    let envs = state.borrow().envs.clone();
     Ran {
         report,
         log,
         telemetry,
         since,
+        envs,
         dir,
         stopped,
         reported: recorder.reported,
@@ -365,6 +415,174 @@ fn step_attachments_are_recorded() {
     let attempt = read_attempt(&ran.dir, summary).unwrap();
     assert_eq!(attempt.steps[0].attachments.len(), 1);
     assert_eq!(test(&ran, "shot").status, Status::Passed);
+}
+
+#[test]
+fn run_steps_check_exit_code_and_output_in_order() {
+    let ran = run(r##"{ "tests": [
+        { "name": "ok", "steps": [
+            { "click": "#a" },
+            { "run": "git", "args": ["log", "-1"], "stdout": "git log" },
+            { "click": "#b" }
+        ] },
+        { "name": "exit", "steps": [{ "run": "fail" }] },
+        { "name": "expected-exit", "steps": [{ "run": "fail", "exitCode": 1, "stderr": { "pattern": "bro+ke" } }] },
+        { "name": "output", "steps": [{ "run": "git", "stdout": "nope" }] },
+        { "name": "slow", "steps": [{ "run": "slow" }] }
+    ] }"##);
+    assert_eq!(test(&ran, "ok").status, Status::Passed);
+    let order: Vec<_> = ran
+        .log
+        .iter()
+        .filter(|line| line.starts_with("ran ") || line.contains("#a") || line.contains("#b"))
+        .cloned()
+        .collect();
+    assert!(
+        order.iter().position(|l| l.contains("#a"))
+            < order.iter().position(|l| l == "ran git log -1")
+            && order.iter().position(|l| l == "ran git log -1")
+                < order.iter().position(|l| l.contains("#b")),
+        "{order:?}"
+    );
+    let attempt = read_attempt(&ran.dir, &test(&ran, "ok").attempts[0]).unwrap();
+    let saved = &attempt.steps[1].attachments[0];
+    let written = fs::read_to_string(ran.dir.join(&saved.path)).unwrap();
+    assert!(written.contains("out of git log -1"), "{written}");
+    assert!(!written.contains("secret-value"), "{written}");
+    let message = |name: &str| {
+        test(&ran, name).attempts[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .clone()
+    };
+    assert!(
+        message("exit").contains("exit with 0, got exit code 1"),
+        "{}",
+        message("exit")
+    );
+    assert!(message("exit").contains("it broke"), "{}", message("exit"));
+    assert_eq!(test(&ran, "expected-exit").status, Status::Passed);
+    assert!(
+        message("output").contains("stdout to contain"),
+        "{}",
+        message("output")
+    );
+    assert!(
+        message("output").contains("out of git"),
+        "{}",
+        message("output")
+    );
+    assert!(
+        message("slow").contains("did not finish"),
+        "{}",
+        message("slow")
+    );
+}
+
+#[test]
+fn suite_env_and_setup_hook_env_reach_launch_hooks_and_run_steps() {
+    let ran = run(r##"{
+        "env": { "MODE": "test", "PROJECT": "default" },
+        "setup": [
+            { "name": "fixture", "run": "write-env", "args": ["# comment", "", "PROJECT=C:\\tmp\\a=b"] },
+            { "name": "second", "run": "x" }
+        ],
+        "teardown": [{ "name": "cleanup", "run": "x" }],
+        "tests": [{ "name": "t", "steps": [{ "run": "check" }] }]
+    }"##);
+    assert_eq!(test(&ran, "t").status, Status::Passed);
+    let env_of = |who: &str| {
+        ran.envs
+            .iter()
+            .find(|(seen, _)| seen == who)
+            .unwrap_or_else(|| panic!("{who}: {:?}", ran.envs))
+            .1
+            .clone()
+    };
+    let pairs = |env: &[(String, String)]| -> Vec<String> {
+        env.iter()
+            .filter(|(key, _)| key != ENV_FILE_VAR)
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect()
+    };
+    let suite = ["MODE=test", "PROJECT=default"];
+    let after = ["MODE=test", "PROJECT=default", r"PROJECT=C:\tmp\a=b"];
+    let fixture = env_of("hook fixture");
+    assert_eq!(pairs(&fixture), suite);
+    let file = &fixture
+        .iter()
+        .find(|(key, _)| key == ENV_FILE_VAR)
+        .unwrap()
+        .1;
+    assert!(
+        env_of("hook second")
+            .iter()
+            .any(|(key, _)| key == ENV_FILE_VAR),
+        "later setup hooks can append too"
+    );
+    assert_eq!(pairs(&env_of("hook second")), after);
+    assert_eq!(pairs(&env_of("launch")), after);
+    assert_eq!(pairs(&env_of("hook run check")), after);
+    let cleanup = env_of("hook cleanup");
+    assert_eq!(pairs(&cleanup), after);
+    assert!(!cleanup.iter().any(|(key, _)| key == ENV_FILE_VAR));
+    assert!(!std::path::Path::new(file).exists(), "env file is removed");
+}
+
+#[test]
+fn bad_env_file_lines_fail_the_setup_hook() {
+    let ran = run(r##"{
+        "setup": [{ "name": "fixture", "run": "write-env", "args": ["NOEQUALS"] }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }]
+    }"##);
+    let suite = &ran.report.suites[0];
+    let error = suite.error.as_ref().unwrap();
+    assert!(
+        error.message.contains("line 1: expected KEY=VALUE"),
+        "{}",
+        error.message
+    );
+    assert!(!ran.log.contains(&"launch".to_string()), "{:?}", ran.log);
+}
+
+#[test]
+fn a_failing_hook_keeps_its_status_over_a_bad_env_file() {
+    let ran = run(r##"{
+        "setup": [{ "name": "bad", "run": "write-env", "args": ["PARTIAL"] }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }]
+    }"##);
+    let message = &ran.report.suites[0].error.as_ref().unwrap().message;
+    assert!(
+        message.starts_with("setup hook `bad` failed; it also wrote a bad"),
+        "{message}"
+    );
+}
+
+#[test]
+fn env_file_reads_byte_order_marks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("env");
+    let mut wide = vec![0xFF, 0xFE];
+    for unit in "A=1\r\nB=2\r\n".encode_utf16() {
+        wide.extend_from_slice(&unit.to_le_bytes());
+    }
+    fs::write(&path, wide).unwrap();
+    assert_eq!(
+        read_env_file(&path).unwrap(),
+        [("A".into(), "1".into()), ("B".into(), "2".into())]
+    );
+    fs::write(&path, b"\xEF\xBB\xBFA=1\n\xEF\xBB\xBFB=2\n").unwrap();
+    assert_eq!(read_env_file(&path).unwrap().len(), 2);
+    fs::write(&path, [0xFF, 0xFE, b'A']).unwrap();
+    assert!(read_env_file(&path).unwrap_err().contains("UTF-16"));
+    fs::write(&path, "auditaur_drill_env_file=x\n").unwrap();
+    assert!(read_env_file(&path)
+        .unwrap_err()
+        .contains("set by Auditaur"));
+    fs::write(&path, "=x\n").unwrap();
+    assert!(read_env_file(&path).unwrap_err().contains("line 1"));
 }
 
 #[test]

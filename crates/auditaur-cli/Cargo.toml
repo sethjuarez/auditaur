@@ -20,6 +20,7 @@ auditaur-core = { version = "0.4.10", path = "../auditaur-core" }
 base64.workspace = true
 clap.workspace = true
 ctrlc = "3"
+dunce = "1"
 png = "0.18"
 regex = "1"
 serde.workspace = true

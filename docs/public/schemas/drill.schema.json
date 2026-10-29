@@ -14,6 +14,11 @@
     "timeoutMs": { "type": "integer", "minimum": 1, "description": "Default per-test timeout." },
     "expectTimeoutMs": { "type": "integer", "minimum": 1, "description": "How long expect steps keep retrying before failing." },
     "retries": { "$ref": "#/$defs/retries" },
+    "env": {
+      "type": "object", "additionalProperties": { "type": "string", "pattern": "^[^\\u0000]*$" },
+      "propertyNames": { "minLength": 1, "pattern": "^[^=\\s\\u0000]+$", "not": { "const": "AUDITAUR_DRILL_ENV_FILE" } },
+      "description": "Environment for the app launch, hooks, and run steps. Setup hooks can add KEY=VALUE lines to $AUDITAUR_DRILL_ENV_FILE."
+    },
     "setup": { "type": "array", "items": { "$ref": "#/$defs/hook" }, "description": "Process hooks run before the app launches." },
     "teardown": { "type": "array", "items": { "$ref": "#/$defs/hook" }, "description": "Process hooks run after the app stops." },
     "beforeAll": { "$ref": "#/$defs/steps" },
@@ -91,7 +96,11 @@
         { "$ref": "#/$defs/stepExpectIpc" },
         { "$ref": "#/$defs/stepExpectEvent" },
         { "$ref": "#/$defs/stepExpectLog" },
-        { "$ref": "#/$defs/stepExpectNoErrors" }
+        { "$ref": "#/$defs/stepExpectSpan" },
+        { "$ref": "#/$defs/stepExpectNoTelemetry" },
+        { "$ref": "#/$defs/stepExpectNoErrors" },
+        { "$ref": "#/$defs/stepExpectValue" },
+        { "$ref": "#/$defs/stepRun" }
       ]
     },
     "stepName": { "$ref": "#/$defs/text", "description": "Custom step title." },
@@ -210,7 +219,7 @@
       "not": { "required": ["not", "count"], "properties": { "not": { "const": true } } },
       "properties": {
         "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
-        "expectIpc": { "$ref": "#/$defs/text", "description": "Tauri command name." },
+        "expectIpc": { "$ref": "#/$defs/nameMatch", "description": "Tauri command name, or { \"pattern\": regex }." },
         "status": { "enum": ["ok", "error"] },
         "count": { "type": "integer", "minimum": 0 },
         "maxMs": { "type": "integer", "minimum": 1 },
@@ -236,9 +245,49 @@
         "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
         "expectLog": { "$ref": "#/$defs/text", "description": "Text the log message contains." },
         "level": { "$ref": "#/$defs/text" },
+        "attributes": { "$ref": "#/$defs/attributes" },
         "count": { "type": "integer", "minimum": 0 },
         "not": { "type": "boolean" },
         "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectSpan": {
+      "type": "object", "additionalProperties": false, "required": ["expectSpan"],
+      "not": { "required": ["not", "count"], "properties": { "not": { "const": true } } },
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectSpan": { "$ref": "#/$defs/nameMatch", "description": "Span name, or { \"pattern\": regex }." },
+        "status": { "enum": ["ok", "error", "unset"] },
+        "attributes": { "$ref": "#/$defs/attributes" },
+        "count": { "type": "integer", "minimum": 0 },
+        "not": { "type": "boolean" },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectNoTelemetry": {
+      "type": "object", "additionalProperties": false, "required": ["expectNoTelemetry"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectNoTelemetry": { "$ref": "#/$defs/nameMatch", "description": "Text, or { \"pattern\": regex }, that no recorded telemetry may contain." },
+        "in": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "enum": ["logs", "spans", "ipc", "events"] },
+          "description": "Kinds to search; defaults to all."
+        },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "attributes": {
+      "type": "object",
+      "description": "Attributes the record must have: exact values, or { \"pattern\": regex } for strings.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": ["string", "number", "boolean"] },
+          {
+            "type": "object", "additionalProperties": false, "required": ["pattern"],
+            "properties": { "pattern": { "$ref": "#/$defs/text", "description": "Regular expression." } }
+          }
+        ]
       }
     },
     "stepExpectNoErrors": {
@@ -250,10 +299,44 @@
         "soft": { "type": "boolean" }
       }
     },
+    "stepExpectValue": {
+      "type": "object", "additionalProperties": false, "required": ["expectValue"],
+      "oneOf": [{ "required": ["toEqual"] }, { "required": ["toContain"] }, { "required": ["toMatch"] }],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectValue": { "$ref": "#/$defs/text", "description": "JavaScript expression, re-evaluated until the matcher passes." },
+        "toEqual": { "description": "Deep JSON equality." },
+        "toContain": { "description": "Substring of a string result, or an element of an array result." },
+        "toMatch": { "$ref": "#/$defs/text", "description": "Regular expression a string result matches." },
+        "not": { "type": "boolean" },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "stepRun": {
+      "type": "object", "additionalProperties": false, "required": ["run"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "run": { "$ref": "#/$defs/text", "description": "Program to run, without a shell." },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "$ref": "#/$defs/text", "description": "Working directory inside the workspace (default: the workspace root)." },
+        "exitCode": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "description": "Expected exit code (default 0)." },
+        "stdout": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stdout must contain." },
+        "stderr": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stderr must contain." }
+      }
+    },
     "snapshotName": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$" },
     "autoSnapshotName": {
       "oneOf": [{ "const": true }, { "$ref": "#/$defs/snapshotName" }],
       "description": "Snapshot name, or true to derive one from the test and step."
+    },
+    "nameMatch": {
+      "oneOf": [
+        { "$ref": "#/$defs/text" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["pattern"],
+          "properties": { "pattern": { "$ref": "#/$defs/text", "description": "Regular expression." } }
+        }
+      ]
     },
     "textMatch": {
       "oneOf": [
