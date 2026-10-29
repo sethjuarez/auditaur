@@ -1,0 +1,11 @@
+.notices { display: flex; flex-direction: column; gap: var(--base-size-8); }
+.notices:empty { display: none; }
+.notice-pre {
+  margin: var(--base-size-4) 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--fontStack-monospace);
+  font-size: var(--text-caption-size);
+}

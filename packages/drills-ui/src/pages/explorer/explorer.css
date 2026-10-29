@@ -1,0 +1,17 @@
+.explorer-toolbar { gap: var(--base-size-4) var(--base-size-12); }
+.explorer-filter { flex: 1 1 240px; max-width: 360px; }
+.last-run { font-size: var(--text-caption-size); }
+.last-run-bar { gap: var(--base-size-8); margin-top: var(--base-size-8); }
+/* Row run buttons stay out of the way until the row is hovered or focused; touch shows them always. */
+.test .test-run { opacity: 0; }
+.test:hover .test-run, .test:focus-within .test-run, .test .test-run:focus-visible { opacity: 1; }
+@media (hover: none) { .test .test-run { opacity: 1; } }
+
+.detail-steps { margin: 0; padding-left: var(--base-size-20); font-size: var(--text-body-size-small); }
+.detail-steps li + li { margin-top: 2px; }
+
+.run-progress { margin-top: var(--base-size-8); }
+
+@media (max-width: 480px) {
+  .test .history { display: none; }
+}

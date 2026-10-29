@@ -1,0 +1,55 @@
+{
+  "$schema": "https://auditaur.dev/schemas/drill.schema.json",
+  "description": "Form controls driven through the drive bridge.",
+  "tags": ["@controls"],
+  "tests": [
+    {
+      "name": "fills the text input",
+      "steps": [
+        { "fill": { "label": "Text input" }, "value": "hello drills" },
+        { "expect": "#drive-input", "toHaveValue": "hello drills" },
+        { "fill": "#drive-input", "value": "" },
+        { "expect": "#drive-input", "toHaveValue": "" }
+      ]
+    },
+    {
+      "name": "types into the textarea",
+      "steps": [
+        { "fill": "#drive-textarea", "value": "" },
+        { "type": { "label": "Textarea" }, "value": "typed" },
+        { "expect": "#drive-textarea", "toHaveValue": { "pattern": "^typed$" } }
+      ]
+    },
+    {
+      "name": "selects and checks",
+      "steps": [
+        { "select": { "label": "Select" }, "value": "charlie" },
+        { "expect": "#drive-select", "toHaveValue": "charlie" },
+        { "check": { "role": "checkbox", "name": "Checkbox" } },
+        { "expect": "#drive-checkbox", "toBeChecked": true },
+        { "uncheck": "#drive-checkbox" },
+        { "expect": "#drive-checkbox", "toBeChecked": true, "not": true }
+      ]
+    },
+    {
+      "name": "hovers",
+      "steps": [
+        { "hover": { "role": "button", "name": "Hover target", "exact": true } },
+        { "press": "Escape" }
+      ]
+    },
+    {
+      "name": "matches the aria snapshot",
+      "steps": [
+        { "expect": "section.card:has(#failing-command)", "toMatchAriaSnapshot": "commands" }
+      ]
+    },
+    {
+      "name": "matches the screenshot",
+      "tags": ["@visual"],
+      "steps": [
+        { "expect": "section.card:has(#failing-command)", "toHaveScreenshot": "commands" }
+      ]
+    }
+  ]
+}

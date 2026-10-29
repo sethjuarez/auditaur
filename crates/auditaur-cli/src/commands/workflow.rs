@@ -504,6 +504,38 @@ pub fn stop(options: StopOptions) -> Result<()> {
     Ok(())
 }
 
+/// What a drill test run needs to launch (or attach to) the app under test.
+#[derive(Debug, Clone)]
+pub(crate) struct LaunchConfig {
+    pub app: String,
+    pub command: Option<Vec<String>>,
+    pub environment: Vec<(String, String)>,
+    pub require_frontend: bool,
+    pub timeout_seconds: Option<u64>,
+}
+
+/// Read launch settings from `.auditaur/config.json`; `None` when the file is absent.
+/// Ports are allocated fresh on every call, so call once per launch.
+pub(crate) fn load_launch_config(path: &Path) -> Result<Option<LaunchConfig>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let config = load_config(path)?;
+    let ports = allocate_ports(&config.ports)?;
+    let command = config
+        .start
+        .as_ref()
+        .map(|command| command_spec_to_argv(command, &ports))
+        .transpose()?;
+    Ok(Some(LaunchConfig {
+        app: config.app.clone(),
+        command,
+        environment: port_environment(&config.ports, &ports),
+        require_frontend: config.readiness.frontend,
+        timeout_seconds: config.readiness.timeout_seconds,
+    }))
+}
+
 fn load_config(path: &Path) -> Result<AgentConfig> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed to read `{}`", path.display()))?;
@@ -863,7 +895,7 @@ fn remove_session_file(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn process_exists(pid: u32) -> Result<bool> {
+pub(crate) fn process_exists(pid: u32) -> Result<bool> {
     let output = Command::new("tasklist")
         .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
         .output()
@@ -878,7 +910,7 @@ fn process_exists(pid: u32) -> Result<bool> {
 }
 
 #[cfg(not(windows))]
-fn process_exists(pid: u32) -> Result<bool> {
+pub(crate) fn process_exists(pid: u32) -> Result<bool> {
     let status = Command::new("kill")
         .args(["-0", &pid.to_string()])
         .stdout(Stdio::null())

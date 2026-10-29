@@ -1,0 +1,7 @@
+.meter { flex: 1 1 160px; min-width: 140px; display: flex; flex-direction: column; gap: var(--base-size-4); }
+.meter-label { display: flex; justify-content: space-between; align-items: baseline; gap: var(--base-size-8); font-size: var(--text-body-size-small); }
+.meter-name { font-weight: var(--base-text-weight-semibold); white-space: nowrap; }
+.meter-value { white-space: nowrap; font-size: var(--text-caption-size); }
+.meter-track { height: 8px; border-radius: var(--borderRadius-full, 999px); background: var(--bgColor-neutral-muted); overflow: hidden; }
+.meter-fill { height: 100%; border-radius: inherit; background: var(--bgColor-accent-emphasis); }
+.meter.complete .meter-fill { background: var(--bgColor-success-emphasis); }

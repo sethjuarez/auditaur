@@ -5,6 +5,8 @@ description: Use auditaur drill run for repeatable Tauri app smoke and confidenc
 
 `auditaur drill run` is the built-in confidence runner for Auditaur-enabled Tauri apps. Use it when a script or agent should own the full lifecycle: start the normal app command, wait for a fresh Auditaur session, run readiness and drive checks against that session, write a redacted report, and clean up the spawned process tree.
 
+For a growing suite of named tests with UI and telemetry assertions, use [Drill Tests](/getting-started/drill-tests/) instead.
+
 `drill run` is different from `debug run`: `debug run` starts an app under observation and leaves it running after readiness, while `drill run` is meant to finish with a pass/fail exit code.
 
 ## Run the dogfood drill

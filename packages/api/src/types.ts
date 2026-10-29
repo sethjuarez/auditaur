@@ -62,6 +62,7 @@ export interface DriveBridgeRequest {
     | 'exists'
     | 'text'
     | 'click'
+    | 'dblclick'
     | 'fill'
     | 'type'
     | 'press'
@@ -71,7 +72,11 @@ export interface DriveBridgeRequest {
     | 'uncheck'
     | 'evaluate'
     | 'snapshot'
+    | 'inspect'
+    | 'ariaSnapshot'
+  | 'flush'
     | 'screenshot'
+    | 'locate'
     | string;
   selector?: string;
   value?: string;

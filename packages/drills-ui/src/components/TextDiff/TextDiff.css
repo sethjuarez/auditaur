@@ -1,0 +1,46 @@
+/* Text diffs: the runner's line diff, and expected/actual files behind disclosures. */
+
+.line-diff { margin: 0; display: flex; flex-direction: column; border: var(--borderWidth-thin) solid var(--borderColor-default); border-radius: var(--borderRadius-medium); overflow: hidden; }
+.line-diff-legend {
+  display: flex;
+  gap: var(--base-size-12);
+  padding: var(--base-size-4) var(--base-size-8);
+  background: var(--bgColor-muted);
+  border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
+  font-family: var(--fontStack-monospace);
+  font-size: var(--text-caption-size);
+}
+.line-diff-count.del { color: var(--fgColor-danger); }
+.line-diff-count.ins { color: var(--fgColor-success); }
+
+.compare-lines { margin: 0; padding: var(--base-size-4) 0; max-height: 360px; overflow: auto; background: var(--bgColor-default); line-height: 20px; }
+.compare-lines .line { display: block; padding: 0 var(--base-size-8); white-space: pre-wrap; overflow-wrap: anywhere; }
+.compare-lines .del { background: var(--diffBlob-deletionLine-bgColor, var(--bgColor-danger-muted)); }
+.compare-lines .ins { background: var(--diffBlob-additionLine-bgColor, var(--bgColor-success-muted)); }
+
+.compare-text { border: var(--borderWidth-thin) solid var(--borderColor-default); border-radius: var(--borderRadius-medium); }
+.compare-text > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--base-size-8);
+  min-height: 32px;
+  padding: var(--base-size-4) var(--base-size-8);
+  cursor: pointer;
+  font-size: var(--text-body-size-small);
+}
+.compare-text > summary:hover { background: var(--control-transparent-bgColor-hover); }
+.compare-text > summary:focus-visible { outline: 2px solid var(--focus-outlineColor); outline-offset: -2px; }
+.compare-text[open] > summary { border-bottom: var(--borderWidth-thin) solid var(--borderColor-muted); }
+.compare-text-icon { color: var(--fgColor-muted); flex: none; }
+.compare-text-title { font-weight: var(--base-text-weight-semibold); white-space: nowrap; }
+.compare-text-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-text-body {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: var(--base-size-8);
+  background: var(--bgColor-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.compare-text-body.error { color: var(--fgColor-danger); }

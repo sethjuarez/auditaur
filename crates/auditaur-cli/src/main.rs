@@ -12,7 +12,7 @@ use std::path::PathBuf;
     name = "auditaur",
     version,
     about = "Runtime observability for Tauri apps and AI agents.",
-    after_help = "Agent commands:\n  agent guide [--json]  Print the recommended Auditaur workflow for coding agents\n  observe --app <name> -- <dev command>  Start a dev app under no-config observation\n\nBootstrap commands:\n  init skill [--path <repo-root>] [--agents-path] [--force] [--json]  Install the Auditaur debug agent skill\n  init extension [--path <repo-root>] [--force] [--json]  Install the Auditaur gate canvas extension"
+    after_help = "Agent commands:\n  agent guide [--json]  Print the recommended Auditaur workflow for coding agents\n  observe --app <name> -- <dev command>  Start a dev app under no-config observation\n\nBootstrap commands:\n  init skill [--path <repo-root>] [--agents-path] [--force] [--json]  Install the Auditaur debug agent skill\n  init extension [--path <repo-root>] [--force] [--json]  Install the Auditaur drills canvas extension"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -565,6 +565,127 @@ enum DebugCommand {
 
 #[derive(Debug, Subcommand)]
 enum DrillCommand {
+    /// List drill suites and tests under .auditaur/drills.
+    List {
+        /// Match a file path substring or suite name.
+        #[arg()]
+        filters: Vec<String>,
+        /// Only tests whose title or tags match this regex.
+        #[arg(long, short = 'g')]
+        grep: Option<String>,
+        /// Skip tests whose title or tags match this regex.
+        #[arg(long)]
+        grep_invert: Option<String>,
+        /// Only tests with this tag (repeatable; any may match).
+        #[arg(long)]
+        tag: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check drill files for errors (defaults to .auditaur/drills).
+    Validate {
+        #[arg()]
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List recorded drill runs under .auditaur/drill-runs, newest first.
+    Runs {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one drill run: `latest` (default) or a run id or prefix.
+    Show {
+        #[arg()]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show which IPC commands and events a run's tests exercised.
+    Coverage {
+        /// `latest` (default) or a run id or prefix.
+        #[arg()]
+        run: Option<String>,
+        /// Telemetry store whose commands and events count as the app's surface
+        /// (repeatable); anything recorded there but not exercised is listed too.
+        #[arg(long)]
+        db: Vec<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Suggest robust drill locators for the elements a CSS selector or locator
+    /// matches in a running app.
+    Locate {
+        /// CSS selector, or a drill locator as JSON (e.g. `{"role":"button","name":"Save"}`).
+        #[arg()]
+        target: String,
+        /// App name; defaults to `app` in the config.
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run drill tests and record them under .auditaur/drill-runs.
+    Test {
+        /// Match a file path substring or suite name.
+        #[arg()]
+        filters: Vec<String>,
+        /// Only tests whose title or tags match this regex.
+        #[arg(long, short = 'g')]
+        grep: Option<String>,
+        /// Skip tests whose title or tags match this regex.
+        #[arg(long)]
+        grep_invert: Option<String>,
+        /// Only tests with this tag (repeatable; any may match).
+        #[arg(long)]
+        tag: Vec<String>,
+        /// Retries for failed tests, unless the test or suite sets its own.
+        #[arg(long)]
+        retries: Option<u32>,
+        /// App name; defaults to `app` in the config.
+        #[arg(long)]
+        app: Option<String>,
+        /// Drive an already running app instead of launching one.
+        #[arg(long)]
+        attach: bool,
+        /// Treat a launched app as ready only once its frontend reports telemetry.
+        #[arg(long)]
+        require_frontend: bool,
+        /// Seconds to wait for each launched app to be ready.
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        /// Stop after the first failure (same as `--max-failures=1`).
+        #[arg(short = 'x', conflicts_with = "max_failures")]
+        exit_first: bool,
+        /// Stop starting tests after this many failures.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        max_failures: Option<u64>,
+        /// Only rerun tests that failed or did not run in the latest run.
+        #[arg(long)]
+        last_failed: bool,
+        /// Also write a JUnit XML report to this file.
+        #[arg(long, value_name = "FILE")]
+        junit: Option<PathBuf>,
+        /// Which snapshot baselines to write; bare `-u` means `changed`.
+        #[arg(
+            long,
+            short = 'u',
+            value_enum,
+            num_args = 0..=1,
+            require_equals = true,
+            default_value = "missing",
+            default_missing_value = "changed"
+        )]
+        update_snapshots: commands::drills::runner::snapshot::UpdateMode,
+        /// Record a screenshot and DOM after each step, for the trace canvas.
+        #[arg(long, value_enum, default_value = "off")]
+        trace: commands::drills::runner::TraceMode,
+        #[arg(long)]
+        json: bool,
+        /// Launch command; defaults to the config `start` command.
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
     Run {
         #[arg(long)]
         app: String,
@@ -977,6 +1098,97 @@ fn inner_main() -> Result<()> {
             session_file,
             json,
         } => match command {
+            Some(DrillCommand::List {
+                filters,
+                grep,
+                grep_invert,
+                tag,
+                json,
+            }) => {
+                let filters = commands::drills::Filters::new(
+                    filters,
+                    grep.as_deref(),
+                    grep_invert.as_deref(),
+                    tag,
+                )?;
+                let exit_code =
+                    commands::drills::list(commands::drills::ListOptions { filters, json })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
+            Some(DrillCommand::Validate { paths, json }) => {
+                let exit_code =
+                    commands::drills::validate(commands::drills::ValidateOptions { paths, json })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
+            Some(DrillCommand::Runs { json }) => commands::drills::runs(json),
+            Some(DrillCommand::Show { run, json }) => commands::drills::show(run.as_deref(), json),
+            Some(DrillCommand::Coverage { run, db, json }) => {
+                commands::drills::coverage::coverage(run.as_deref(), &db, json)
+            }
+            Some(DrillCommand::Locate { target, app, json }) => {
+                commands::drills::locate::locate(commands::drills::locate::LocateOptions {
+                    target,
+                    app,
+                    config,
+                    json,
+                })
+            }
+            Some(DrillCommand::Test {
+                filters,
+                grep,
+                grep_invert,
+                tag,
+                retries,
+                app,
+                attach,
+                require_frontend,
+                timeout_seconds,
+                exit_first,
+                max_failures,
+                last_failed,
+                junit,
+                update_snapshots,
+                trace,
+                json,
+                command,
+            }) => {
+                let filters = commands::drills::Filters::new(
+                    filters,
+                    grep.as_deref(),
+                    grep_invert.as_deref(),
+                    tag,
+                )?;
+                let exit_code = commands::drills::test(commands::drills::TestOptions {
+                    filters,
+                    retries,
+                    app,
+                    config,
+                    attach,
+                    require_frontend,
+                    timeout_seconds,
+                    update_snapshots,
+                    trace,
+                    max_failures: if exit_first {
+                        Some(1)
+                    } else {
+                        max_failures.map(|max| max as usize)
+                    },
+                    last_failed,
+                    junit,
+                    json,
+                    command,
+                })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
             Some(DrillCommand::Run {
                 app,
                 require_frontend,

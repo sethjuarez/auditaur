@@ -1,0 +1,358 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auditaur.dev/schemas/drill.schema.json",
+  "title": "Auditaur drill suite",
+  "description": "A suite of named drill tests for an Auditaur-enabled Tauri app. Files live at .auditaur/drills/**/*.drill.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tests"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "suite": { "$ref": "#/$defs/text", "description": "Suite name; defaults to the file name without .drill.json. Must be unique across files." },
+    "description": { "$ref": "#/$defs/text" },
+    "tags": { "$ref": "#/$defs/tags" },
+    "timeoutMs": { "type": "integer", "minimum": 1, "description": "Default per-test timeout." },
+    "expectTimeoutMs": { "type": "integer", "minimum": 1, "description": "How long expect steps keep retrying before failing." },
+    "retries": { "$ref": "#/$defs/retries" },
+    "setup": { "type": "array", "items": { "$ref": "#/$defs/hook" }, "description": "Process hooks run before the app launches." },
+    "teardown": { "type": "array", "items": { "$ref": "#/$defs/hook" }, "description": "Process hooks run after the app stops." },
+    "beforeAll": { "$ref": "#/$defs/steps" },
+    "beforeEach": { "$ref": "#/$defs/steps" },
+    "afterEach": { "$ref": "#/$defs/steps" },
+    "afterAll": { "$ref": "#/$defs/steps" },
+    "tests": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/test" } }
+  },
+  "$defs": {
+    "text": { "type": "string", "pattern": "\\S", "description": "Non-blank text." },
+    "onlySet": { "required": ["only"], "properties": { "only": { "const": true } } },
+    "skipSet": { "required": ["skip"], "properties": { "skip": { "not": { "const": false } } } },
+    "fixmeSet": { "required": ["fixme"], "properties": { "fixme": { "not": { "const": false } } } },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^@*[^\\s@]\\S*$" },
+      "description": "Tags for --tag and --grep; a leading @ is optional."
+    },
+    "retries": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "reason": {
+      "oneOf": [{ "const": true }, { "const": false }, { "$ref": "#/$defs/text" }]
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "allOf": [
+        {
+          "if": { "anyOf": [{ "$ref": "#/$defs/skipSet" }, { "$ref": "#/$defs/fixmeSet" }] },
+          "else": { "required": ["steps"], "properties": { "steps": { "minItems": 1 } } }
+        },
+        {
+          "not": {
+            "anyOf": [
+              { "allOf": [{ "$ref": "#/$defs/onlySet" }, { "$ref": "#/$defs/skipSet" }] },
+              { "allOf": [{ "$ref": "#/$defs/onlySet" }, { "$ref": "#/$defs/fixmeSet" }] },
+              { "allOf": [{ "$ref": "#/$defs/skipSet" }, { "$ref": "#/$defs/fixmeSet" }] }
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text" },
+        "tags": { "$ref": "#/$defs/tags" },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "retries": { "$ref": "#/$defs/retries" },
+        "skip": { "$ref": "#/$defs/reason", "description": "Skip this test, optionally with a reason." },
+        "fixme": { "$ref": "#/$defs/reason", "description": "Known broken; skipped and reported as fixme." },
+        "only": { "type": "boolean", "description": "Run only tests marked only." },
+        "slow": { "type": "boolean", "description": "Triple the timeout." },
+        "expectFail": { "$ref": "#/$defs/reason", "description": "Passes only if the test fails." },
+        "steps": { "$ref": "#/$defs/steps" }
+      }
+    },
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+    "step": {
+      "oneOf": [
+        { "$ref": "#/$defs/stepClick" },
+        { "$ref": "#/$defs/stepDblclick" },
+        { "$ref": "#/$defs/stepFill" },
+        { "$ref": "#/$defs/stepType" },
+        { "$ref": "#/$defs/stepPress" },
+        { "$ref": "#/$defs/stepHover" },
+        { "$ref": "#/$defs/stepSelect" },
+        { "$ref": "#/$defs/stepCheck" },
+        { "$ref": "#/$defs/stepUncheck" },
+        { "$ref": "#/$defs/stepWaitFor" },
+        { "$ref": "#/$defs/stepEvaluate" },
+        { "$ref": "#/$defs/stepReload" },
+        { "$ref": "#/$defs/stepSleep" },
+        { "$ref": "#/$defs/stepScreenshot" },
+        { "$ref": "#/$defs/stepGate" },
+        { "$ref": "#/$defs/stepExpect" },
+        { "$ref": "#/$defs/stepExpectIpc" },
+        { "$ref": "#/$defs/stepExpectEvent" },
+        { "$ref": "#/$defs/stepExpectLog" },
+        { "$ref": "#/$defs/stepExpectNoErrors" }
+      ]
+    },
+    "stepName": { "$ref": "#/$defs/text", "description": "Custom step title." },
+    "stepTimeout": { "type": "integer", "minimum": 1 },
+    "stepClick": {
+      "type": "object", "additionalProperties": false, "required": ["click"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "click": { "$ref": "#/$defs/locator" } }
+    },
+    "stepDblclick": {
+      "type": "object", "additionalProperties": false, "required": ["dblclick"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "dblclick": { "$ref": "#/$defs/locator" } }
+    },
+    "stepFill": {
+      "type": "object", "additionalProperties": false, "required": ["fill", "value"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "fill": { "$ref": "#/$defs/locator" }, "value": { "type": "string" } }
+    },
+    "stepType": {
+      "type": "object", "additionalProperties": false, "required": ["type", "value"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "type": { "$ref": "#/$defs/locator" }, "value": { "type": "string" } }
+    },
+    "stepPress": {
+      "type": "object", "additionalProperties": false, "required": ["press"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "press": { "$ref": "#/$defs/text", "description": "Key such as Enter, Tab or Control+A." }, "target": { "$ref": "#/$defs/locator" } }
+    },
+    "stepHover": {
+      "type": "object", "additionalProperties": false, "required": ["hover"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "hover": { "$ref": "#/$defs/locator" } }
+    },
+    "stepSelect": {
+      "type": "object", "additionalProperties": false, "required": ["select"],
+      "oneOf": [{ "required": ["value"] }, { "required": ["values"] }],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "select": { "$ref": "#/$defs/locator" },
+        "value": { "$ref": "#/$defs/text" },
+        "values": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } }
+      }
+    },
+    "stepCheck": {
+      "type": "object", "additionalProperties": false, "required": ["check"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "check": { "$ref": "#/$defs/locator" } }
+    },
+    "stepUncheck": {
+      "type": "object", "additionalProperties": false, "required": ["uncheck"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "uncheck": { "$ref": "#/$defs/locator" } }
+    },
+    "stepWaitFor": {
+      "type": "object", "additionalProperties": false, "required": ["waitFor"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "waitFor": { "$ref": "#/$defs/locator" },
+        "state": { "enum": ["attached", "detached", "visible", "hidden"], "default": "visible" }
+      }
+    },
+    "stepEvaluate": {
+      "type": "object", "additionalProperties": false, "required": ["evaluate"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "evaluate": { "$ref": "#/$defs/text", "description": "JavaScript evaluated in the webview." } }
+    },
+    "stepReload": {
+      "type": "object", "additionalProperties": false, "required": ["reload"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "reload": { "const": true } }
+    },
+    "stepSleep": {
+      "type": "object", "additionalProperties": false, "required": ["sleep"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "sleep": { "type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds. Prefer waitFor or expect." } }
+    },
+    "stepScreenshot": {
+      "type": "object", "additionalProperties": false, "required": ["screenshot"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "screenshot": { "$ref": "#/$defs/snapshotName" }, "target": { "$ref": "#/$defs/locator" } }
+    },
+    "stepGate": {
+      "type": "object", "additionalProperties": false, "required": ["gate"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "gate": { "$ref": "#/$defs/gate" } }
+    },
+    "stepExpect": {
+      "type": "object", "additionalProperties": false, "required": ["expect"],
+      "allOf": [
+        {
+          "if": { "anyOf": [{ "required": ["toMatchAriaSnapshot"] }, { "required": ["toHaveScreenshot"] }] },
+          "then": { "properties": { "not": { "const": false } } }
+        },
+        {
+          "if": { "anyOf": [{ "required": ["maxDiffPixels"] }, { "required": ["maxDiffPixelRatio"] }, { "required": ["threshold"] }, { "required": ["mask"] }] },
+          "then": { "required": ["toHaveScreenshot"] }
+        }
+      ],
+      "oneOf": [
+        { "required": ["toExist"] }, { "required": ["toBeVisible"] }, { "required": ["toBeHidden"] },
+        { "required": ["toHaveText"] }, { "required": ["toContainText"] }, { "required": ["toHaveCount"] },
+        { "required": ["toHaveValue"] }, { "required": ["toBeChecked"] },
+        { "required": ["toMatchAriaSnapshot"] }, { "required": ["toHaveScreenshot"] }
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expect": { "$ref": "#/$defs/locator" },
+        "not": { "type": "boolean", "description": "Invert the matcher (not supported for snapshot matchers)." },
+        "soft": { "type": "boolean", "description": "Record the failure and keep going." },
+        "toExist": { "const": true },
+        "toBeVisible": { "const": true },
+        "toBeHidden": { "const": true },
+        "toHaveText": { "$ref": "#/$defs/textMatch" },
+        "toContainText": { "$ref": "#/$defs/text" },
+        "toHaveCount": { "type": "integer", "minimum": 0 },
+        "toHaveValue": { "$ref": "#/$defs/textMatch" },
+        "toBeChecked": { "const": true },
+        "toMatchAriaSnapshot": { "$ref": "#/$defs/autoSnapshotName" },
+        "toHaveScreenshot": { "$ref": "#/$defs/autoSnapshotName" },
+        "maxDiffPixels": { "type": "integer", "minimum": 0 },
+        "maxDiffPixelRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2 },
+        "mask": { "type": "array", "items": { "$ref": "#/$defs/locator" } }
+      }
+    },
+    "stepExpectIpc": {
+      "type": "object", "additionalProperties": false, "required": ["expectIpc"],
+      "not": { "required": ["not", "count"], "properties": { "not": { "const": true } } },
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectIpc": { "$ref": "#/$defs/text", "description": "Tauri command name." },
+        "status": { "enum": ["ok", "error"] },
+        "count": { "type": "integer", "minimum": 0 },
+        "maxMs": { "type": "integer", "minimum": 1 },
+        "not": { "type": "boolean" },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectEvent": {
+      "type": "object", "additionalProperties": false, "required": ["expectEvent"],
+      "not": { "required": ["not", "count"], "properties": { "not": { "const": true } } },
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectEvent": { "$ref": "#/$defs/text" },
+        "count": { "type": "integer", "minimum": 0 },
+        "not": { "type": "boolean" },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectLog": {
+      "type": "object", "additionalProperties": false, "required": ["expectLog"],
+      "not": { "required": ["not", "count"], "properties": { "not": { "const": true } } },
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectLog": { "$ref": "#/$defs/text", "description": "Text the log message contains." },
+        "level": { "$ref": "#/$defs/text" },
+        "count": { "type": "integer", "minimum": 0 },
+        "not": { "type": "boolean" },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "stepExpectNoErrors": {
+      "type": "object", "additionalProperties": false, "required": ["expectNoErrors"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "expectNoErrors": { "const": true },
+        "ignore": { "type": "array", "items": { "$ref": "#/$defs/text" }, "description": "Error messages containing any of these are ignored." },
+        "soft": { "type": "boolean" }
+      }
+    },
+    "snapshotName": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$" },
+    "autoSnapshotName": {
+      "oneOf": [{ "const": true }, { "$ref": "#/$defs/snapshotName" }],
+      "description": "Snapshot name, or true to derive one from the test and step."
+    },
+    "textMatch": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["pattern"],
+          "properties": { "pattern": { "$ref": "#/$defs/text", "description": "Regular expression." } }
+        }
+      ]
+    },
+    "locator": {
+      "oneOf": [
+        { "$ref": "#/$defs/text", "description": "CSS selector." },
+        {
+          "type": "object", "additionalProperties": false,
+          "oneOf": [
+            { "required": ["css"] }, { "required": ["role"] }, { "required": ["text"] },
+            { "required": ["testId"] }, { "required": ["label"] }, { "required": ["placeholder"] }
+          ],
+          "dependentRequired": { "name": ["role"] },
+          "if": { "required": ["exact"] },
+          "then": {
+            "anyOf": [
+              { "required": ["role", "name"] }, { "required": ["text"] },
+              { "required": ["label"] }, { "required": ["placeholder"] }
+            ]
+          },
+          "properties": {
+            "css": { "$ref": "#/$defs/text" },
+            "role": { "$ref": "#/$defs/text", "description": "ARIA role such as button or textbox." },
+            "text": { "$ref": "#/$defs/text" },
+            "testId": { "$ref": "#/$defs/text", "description": "data-testid value." },
+            "label": { "$ref": "#/$defs/text" },
+            "placeholder": { "$ref": "#/$defs/text" },
+            "name": { "$ref": "#/$defs/text", "description": "Accessible name; role only." },
+            "exact": { "type": "boolean", "description": "Case-sensitive whole-string match." },
+            "nth": { "type": "integer", "description": "Pick one match; negative counts from the end." }
+          }
+        }
+      ]
+    },
+    "hook": {
+      "type": "object", "additionalProperties": false, "required": ["name", "run"],
+      "properties": {
+        "name": { "$ref": "#/$defs/text" },
+        "run": { "$ref": "#/$defs/text" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "timeoutMs": { "type": "integer", "minimum": 1, "default": 30000 },
+        "cwd": { "type": "string", "description": "Must stay inside the workspace." },
+        "always": { "type": "boolean", "description": "Run even after a failure." }
+      }
+    },
+    "gate": {
+      "type": "object", "additionalProperties": false, "required": ["name", "instructions"],
+      "dependentRequired": { "expectText": ["selector"] },
+      "anyOf": [
+        { "required": ["selector"] },
+        { "properties": { "manualContinue": { "const": true } } },
+        { "required": ["choices"], "properties": { "choices": { "minItems": 1 } } },
+        { "required": ["inputs"], "properties": { "inputs": { "minItems": 1 } } }
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/text" },
+        "instructions": { "$ref": "#/$defs/text" },
+        "selector": { "type": "string" },
+        "expectText": { "type": "string" },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "manualContinue": { "type": "boolean", "default": true, "description": "Offer a Continue button; with false, use selector, choices or inputs." },
+        "choices": { "type": "array", "items": { "$ref": "#/$defs/gateChoice" } },
+        "inputs": { "type": "array", "items": { "$ref": "#/$defs/gateInput" } },
+        "clipboard": { "$ref": "#/$defs/gateClipboard" }
+      }
+    },
+    "gateChoice": {
+      "type": "object", "additionalProperties": false, "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "label": { "$ref": "#/$defs/text" },
+        "outcome": { "enum": ["continue", "retry", "skip", "fail", "abort"] }
+      }
+    },
+    "gateInput": {
+      "type": "object", "additionalProperties": false, "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "label": { "$ref": "#/$defs/text" },
+        "kind": { "enum": ["text", "multilineText"] },
+        "required": { "type": "boolean" },
+        "sensitive": { "type": "boolean" }
+      }
+    },
+    "gateClipboard": {
+      "type": "object", "additionalProperties": false, "required": ["label", "value"],
+      "properties": {
+        "label": { "$ref": "#/$defs/text" },
+        "value": { "type": "string" },
+        "sensitive": { "type": "boolean" },
+        "copy": { "enum": ["attempt", "manualOnly", "disabled"] }
+      }
+    }
+  }
+}

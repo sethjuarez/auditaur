@@ -42,6 +42,12 @@ try {
     Invoke-Step "API tests" { npm --prefix packages\api test }
     Invoke-Step "API build" { npm --prefix packages\api run build }
     Invoke-Step "Docs build" { npm --prefix docs run build }
+    Invoke-Step "Drill canvases typecheck" { npm --prefix packages\drills-ui run typecheck }
+    Invoke-Step "Drill canvases bundle is current" {
+        npm --prefix packages\drills-ui run build
+        if ($LASTEXITCODE -ne 0) { return }
+        git diff --exit-code -- .github/extensions/auditaur-drills/ui crates/auditaur-cli/assets/auditaur-drills/ui
+    }
 
     Invoke-Step "Rust workspace package verification" {
         $args = @("package", "--workspace")

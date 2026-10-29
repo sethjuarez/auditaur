@@ -62,15 +62,15 @@ gh skill publish .github --dry-run
 
 `gh skill preview` reads from GitHub, so previewing `sethjuarez/auditaur` will only find `auditaur-debug` after the branch containing `.github/skills/auditaur-debug/SKILL.md` is pushed/merged.
 
-## Install the manual gate canvas extension
+## Install the canvas
 
-If the repo uses Copilot app canvases, install the Auditaur manual-gate canvas extension alongside the skill:
+In the Copilot app, prefer the Auditaur Copilot plugin: it ships the skill, the `auditaur-drills` canvas, and the MCP server without committing files (see [Drill tests](/getting-started/drill-tests/#in-the-copilot-app)). To commit the canvas to the consuming repo instead:
 
 ```powershell
 auditaur init extension
 ```
 
-This writes `.github/extensions/auditaur-gate/extension.mjs` in the consuming repo. During a drill human gate, agents can open the `auditaur-human-gate` canvas so the tester sees the instructions, evidence context, choices, and inputs in a first-class action card. The terminal and MCP response paths still work when no canvas client is available.
+This writes the `.github/extensions/auditaur-drills/` folder in the consuming repo; an existing one is kept unless you pass `--force`. The `auditaur-drills` canvas shows drill tests, runs, traces, snapshots, and coverage; see [Drill tests](/getting-started/drill-tests/#in-the-copilot-app). During a drill human gate, agents can show the gate on its Gate page so the tester answers from an action card. The terminal and MCP response paths still work when no canvas client is available.
 
 ## Simplest agent workflow
 

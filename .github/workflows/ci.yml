@@ -58,6 +58,30 @@ jobs:
         working-directory: packages/api
         continue-on-error: true
 
+  drills-ui:
+    name: Drills canvas
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/drills-ui/package-lock.json
+      - run: npm ci
+        working-directory: packages/drills-ui
+      - run: npm run typecheck
+        working-directory: packages/drills-ui
+      # Extension server tests (route, panel store, actions, HTTP API).
+      - run: npm test
+        working-directory: packages/drills-ui
+      - run: npm run build
+        working-directory: packages/drills-ui
+      # The bundle is committed so the extension and `auditaur init` need no Node build; it must match its source.
+      - name: Check committed bundle is current
+        run: git diff --exit-code -- .github/extensions/auditaur-drills/ui crates/auditaur-cli/assets/auditaur-drills/ui
+
   swift-apple-package:
     name: Swift Apple package
     runs-on: macos-latest
@@ -110,14 +134,18 @@ jobs:
         working-directory: examples/dogfood
         continue-on-error: true
 
-  tauri-check:
-    name: Dogfood Tauri check
+  tauri-drills:
+    name: Dogfood Tauri drills
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            examples/dogfood/src-tauri -> target
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -127,10 +155,27 @@ jobs:
             examples/dogfood/package-lock.json
       - run: npm install
         working-directory: packages/api
-      - run: npm run build
-        working-directory: packages/api
       - run: npm install
         working-directory: examples/dogfood
-      - run: npm run build:web
+      # A debug build embeds the frontend, so no dev server is needed, and keeps the drive bridge on.
+      - run: npm run tauri build -- --debug --no-bundle
         working-directory: examples/dogfood
-      - run: cargo check --manifest-path examples\dogfood\src-tauri\Cargo.toml
+      - run: cargo build -p auditaur-cli
+      # Screenshots (@visual) depend on the machine's DPI and fonts, so CI checks everything else.
+      - name: Run drills
+        working-directory: examples/dogfood
+        run: >
+          ..\..\target\debug\auditaur.exe drill test
+          --grep-invert '@visual' --update-snapshots=none --junit drill-results.xml
+          --app auditaur-dogfood --timeout-seconds 300
+          -- src-tauri\target\debug\auditaur-dogfood.exe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dogfood-drill-runs
+          path: |
+            examples/dogfood/drill-results.xml
+            examples/dogfood/.auditaur/drill-runs/
+          if-no-files-found: ignore
+          # Runs live under .auditaur/, which upload-artifact skips by default.
+          include-hidden-files: true

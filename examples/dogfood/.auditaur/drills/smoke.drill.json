@@ -1,0 +1,52 @@
+{
+  "$schema": "https://auditaur.dev/schemas/drill.schema.json",
+  "description": "Smoke tests for the dogfood telemetry generator.",
+  "tags": ["@smoke"],
+  "tests": [
+    {
+      "name": "renders the generator",
+      "steps": [
+        { "expect": { "role": "heading", "name": "Dogfood telemetry generator" }, "toBeVisible": true },
+        { "expect": "button", "toHaveCount": 7 },
+        { "expectNoErrors": true }
+      ]
+    },
+    {
+      "name": "successful command returns",
+      "tags": ["@ipc"],
+      "steps": [
+        { "click": { "role": "button", "name": "Call successful command" } },
+        { "expect": "#output", "toContainText": "Successful command returned" },
+        { "expectIpc": "successful_command", "status": "ok", "count": 1 },
+        { "expectNoErrors": true }
+      ]
+    },
+    {
+      "name": "failing command is reported",
+      "tags": ["@ipc"],
+      "steps": [
+        { "click": "#failing-command" },
+        { "expectIpc": "failing_command", "status": "error" }
+      ]
+    },
+    {
+      "name": "frontend error is captured",
+      "steps": [
+        { "click": { "text": "Throw frontend error" } },
+        { "expect": "#output", "toContainText": "Throwing frontend error" },
+        { "expectLog": "Intentional dogfood frontend error", "level": "error" }
+      ]
+    },
+    {
+      "name": "events round-trip",
+      "tags": ["@events"],
+      "steps": [
+        { "click": "#frontend-event" },
+        { "expectEvent": "dogfood:frontend-event" },
+        { "click": "#backend-event" },
+        { "expectEvent": "dogfood:backend-event" },
+        { "expect": "#output", "toHaveText": { "pattern": "Received backend event" } }
+      ]
+    }
+  ]
+}

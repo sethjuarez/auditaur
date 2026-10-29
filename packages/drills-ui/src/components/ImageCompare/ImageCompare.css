@@ -1,0 +1,90 @@
+/* Image comparisons: side by side, an overlay slider, or the pixel diff. */
+
+.compare-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--base-size-8); }
+.compare-figure { margin: 0; display: flex; flex-direction: column; gap: var(--base-size-4); min-width: 0; }
+.compare-figure img,
+.compare-slider {
+  display: block;
+  max-width: 100%;
+  border: var(--borderWidth-thin) solid var(--borderColor-default);
+  border-radius: var(--borderRadius-medium);
+  background: var(--bgColor-muted);
+}
+.compare-figure img { height: auto; align-self: flex-start; }
+.compare-figure figcaption { font-size: var(--text-caption-size); color: var(--fgColor-muted); }
+.compare-note { margin: 0; font-size: var(--text-body-size-small); color: var(--fgColor-muted); }
+
+.compare-slider {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  cursor: ew-resize;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.compare-slider img { display: block; width: 100%; height: auto; pointer-events: none; }
+.compare-slider .compare-top { position: absolute; top: 0; left: 0; clip-path: inset(0 calc(100% - var(--split, 50%)) 0 0); }
+
+.compare-label {
+  position: absolute;
+  top: var(--base-size-8);
+  padding: 0 var(--base-size-6, 6px);
+  border-radius: var(--borderRadius-medium);
+  background: var(--bgColor-emphasis);
+  color: var(--fgColor-onEmphasis);
+  font-size: var(--text-caption-size);
+  line-height: 20px;
+  font-weight: var(--base-text-weight-semibold);
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+.compare-label.left { left: var(--base-size-8); }
+.compare-label.right { right: var(--base-size-8); }
+.compare-label.covered { opacity: 0; }
+
+/* The accessible control: invisible over the images; the pointer is handled by the slider itself. */
+.compare-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.compare-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--split, 50%);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--bgColor-accent-emphasis);
+  pointer-events: none;
+}
+.compare-knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 32px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--borderRadius-medium);
+  background: var(--bgColor-accent-emphasis);
+  color: var(--fgColor-onEmphasis);
+  box-shadow: var(--shadow-resting-small, 0 1px 1px #0000001a);
+}
+.compare-range:focus-visible ~ .compare-handle .compare-knob {
+  outline: 2px solid var(--focus-outlineColor);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compare-label { transition: none; }
+}

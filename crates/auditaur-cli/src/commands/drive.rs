@@ -1256,6 +1256,148 @@ fn bridge_screenshot(selector: DriveAppSelector, options: ScreenshotOptions) -> 
     read::print_json_or_table(options.json, &result, || print_action_result(&result))
 }
 
+/// Non-printing bridge connection reused across many drill steps.
+pub(crate) struct BridgeSession {
+    attach: DriveAttachInfo,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BridgeReply {
+    pub ok: bool,
+    pub payload: Value,
+    pub error: Option<String>,
+}
+
+impl BridgeSession {
+    pub(crate) fn connect(selector: &DriveAppSelector) -> Result<Self> {
+        let target = resolve_target(selector)?;
+        let attach = DriveAttachInfo::discover(target)?;
+        require_bridge_active(&attach)?;
+        Ok(Self { attach })
+    }
+
+    pub(crate) fn db_path(&self) -> &str {
+        &self.attach.db_path
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.attach.session_id
+    }
+
+    pub(crate) fn gate_target(&self) -> super::drill::GateTarget {
+        super::drill::GateTarget {
+            session_id: self.attach.session_id.clone(),
+            instance_id: self.attach.instance_id.clone(),
+            pid: self.attach.pid,
+            database_path: self.attach.db_path.clone(),
+        }
+    }
+
+    pub(crate) fn app_info(&self) -> Value {
+        json!({
+            "serviceName": self.attach.service_name,
+            "serviceVersion": self.attach.service_version,
+            "appIdentifier": self.attach.app_identifier,
+            "pid": self.attach.pid,
+            "sessionId": self.attach.session_id,
+            "instanceId": self.attach.instance_id,
+            "windowLabel": self.attach.bridge.window_label,
+        })
+    }
+
+    pub(crate) fn request(
+        &self,
+        action: &str,
+        selector: Option<String>,
+        value: Option<String>,
+        values: Vec<String>,
+        visible_only: bool,
+        test_id: Option<String>,
+        step_id: Option<String>,
+        timeout: Duration,
+    ) -> Result<BridgeReply> {
+        let mut request = bridge_request(action, selector, value, visible_only, test_id, step_id);
+        request.values = values;
+        request.window_label = self.attach.bridge.window_label.clone();
+        let response = execute_bridge_request(
+            &self.attach,
+            &request,
+            timeout.min(DRIVE_BRIDGE_ACTION_TIMEOUT),
+        )?;
+        let error = response.error.clone().or_else(|| {
+            response
+                .payload
+                .get("error")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        });
+        Ok(BridgeReply {
+            ok: response.ok && error.is_none(),
+            payload: response.payload,
+            error,
+        })
+    }
+
+    pub(crate) fn screenshot_png(
+        &self,
+        selector: Option<String>,
+        test_id: Option<String>,
+        step_id: Option<String>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        self.screenshot(selector, None, Vec::new(), test_id, step_id, timeout)
+            .map(|shot| shot.png)
+    }
+
+    /// A screenshot plus what the bridge said about it (backend, masks, fallback errors).
+    /// `value` and `values` pass capture options through (`"expect"` stabilizes; masks).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn screenshot(
+        &self,
+        selector: Option<String>,
+        value: Option<String>,
+        values: Vec<String>,
+        test_id: Option<String>,
+        step_id: Option<String>,
+        timeout: Duration,
+    ) -> Result<Screenshot> {
+        let reply = self.request(
+            "screenshot",
+            selector,
+            value,
+            values,
+            false,
+            test_id,
+            step_id,
+            timeout,
+        )?;
+        let mut payload = reply.payload;
+        let png = payload
+            .as_object_mut()
+            .and_then(|object| object.remove("pngBase64"))
+            .and_then(|png| png.as_str().map(ToString::to_string))
+            .ok_or_else(|| {
+                anyhow!(
+                    "screenshot failed: {}",
+                    reply
+                        .error
+                        .as_deref()
+                        .unwrap_or("bridge response did not include pngBase64")
+                )
+            })?;
+        let png = BASE64_STANDARD
+            .decode(png.as_bytes())
+            .context("screenshot failed: bridge response had invalid pngBase64")?;
+        Ok(Screenshot { png, payload })
+    }
+}
+
+pub(crate) struct Screenshot {
+    pub png: Vec<u8>,
+    /// The bridge reply without `pngBase64`.
+    pub payload: Value,
+}
+
 fn require_bridge_active(attach: &DriveAttachInfo) -> Result<()> {
     if attach.bridge.active {
         return Ok(());

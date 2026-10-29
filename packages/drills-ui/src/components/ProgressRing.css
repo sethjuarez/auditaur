@@ -1,0 +1,4 @@
+.progress-ring { flex: none; display: block; }
+.progress-ring circle { fill: none; stroke-width: 2; }
+.progress-ring-track { stroke: var(--borderColor-default); }
+.progress-ring-fill { stroke: var(--fgColor-accent); stroke-linecap: round; transition: stroke-dashoffset .3s; }

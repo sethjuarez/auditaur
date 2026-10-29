@@ -1,0 +1,6 @@
+.history { display: inline-flex; gap: 2px; align-items: center; }
+.history .dot { width: 8px; height: 8px; border-radius: 2px; background: var(--borderColor-default); }
+.history .dot.passed { background: var(--fgColor-success); }
+.history .dot.failed, .history .dot.timedOut { background: var(--fgColor-danger); }
+.history .dot.flaky, .history .dot.interrupted { background: var(--fgColor-attention); }
+.history .dot.running { background: var(--fgColor-accent); }

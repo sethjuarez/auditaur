@@ -1,0 +1,2 @@
+.open-in { display: inline-flex; align-items: center; gap: var(--base-size-8); flex-wrap: wrap; }
+.open-in-caption { font-size: var(--text-caption-size); white-space: nowrap; }

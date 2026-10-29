@@ -9,12 +9,70 @@ use serde::Serialize;
 use crate::commands::read;
 
 pub(crate) const AUDITAUR_DEBUG_SKILL: &str = include_str!("../../assets/auditaur-debug-skill.md");
-pub(crate) const AUDITAUR_GATE_EXTENSION: &str =
-    include_str!("../../assets/auditaur-gate-extension.mjs");
+
 const GITHUB_SKILL_RELATIVE_PATH: [&str; 4] = [".github", "skills", "auditaur-debug", "SKILL.md"];
 const AGENTS_SKILL_RELATIVE_PATH: [&str; 4] = [".agents", "skills", "auditaur-debug", "SKILL.md"];
-const GITHUB_EXTENSION_RELATIVE_PATH: [&str; 4] =
-    [".github", "extensions", "auditaur-gate", "extension.mjs"];
+
+const GITHUB_DRILLS_EXTENSION_RELATIVE_DIR: [&str; 3] =
+    [".github", "extensions", "auditaur-drills"];
+
+/// The gate canvas prototype that `init extension` wrote before the drills canvas, whose Gate page
+/// replaces it. Only the shipped, unedited file is removed: FNV-1a 64 of its LF-normalized text.
+const LEGACY_GATE_EXTENSION_RELATIVE_DIR: [&str; 3] = [".github", "extensions", "auditaur-gate"];
+const LEGACY_GATE_EXTENSION_FNV: u64 = 0x4694_631c_8ad1_f50b;
+
+/// Embeds files from `assets/auditaur-drills` under their path relative to the extension folder.
+macro_rules! drills_extension_files {
+    ($($path:literal,)*) => {
+        &[$(($path, include_str!(concat!("../../assets/auditaur-drills/", $path))),)*]
+    };
+}
+
+/// Every file of the drills canvas extension. The entry point comes first.
+pub(crate) const AUDITAUR_DRILLS_EXTENSION_FILES: &[(&str, &str)] = drills_extension_files![
+    "extension.mjs",
+    "features/coverage/index.mjs",
+    "features/coverage/view.mjs",
+    "features/gate/index.mjs",
+    "features/gate/view.mjs",
+    "features/run/index.mjs",
+    "features/run/view.mjs",
+    "features/snapshots/index.mjs",
+    "features/snapshots/view.mjs",
+    "features/tests/index.mjs",
+    "features/tests/view.mjs",
+    "features/trace/index.mjs",
+    "features/trace/view.mjs",
+    "lib/actions.mjs",
+    "lib/api-routes.mjs",
+    "lib/app-panel.mjs",
+    "lib/apps.mjs",
+    "lib/attachments.mjs",
+    "lib/baselines.mjs",
+    "lib/browser.mjs",
+    "lib/build-info.mjs",
+    "lib/cli.mjs",
+    "lib/config.mjs",
+    "lib/errors.mjs",
+    "lib/events.mjs",
+    "lib/features.mjs",
+    "lib/files.mjs",
+    "lib/gate-queue.mjs",
+    "lib/gates.mjs",
+    "lib/launcher.mjs",
+    "lib/panel-store.mjs",
+    "lib/panels.mjs",
+    "lib/paths.mjs",
+    "lib/processes.mjs",
+    "lib/route.mjs",
+    "lib/runs.mjs",
+    "lib/schemas.mjs",
+    "lib/server.mjs",
+    "lib/telemetry.mjs",
+    "lib/view-state.mjs",
+    "ui/app.css",
+    "ui/app.js",
+];
 const DIAGNOSTICS_CONFIG_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.json"];
 const DIAGNOSTICS_GUIDE_RELATIVE_PATH: [&str; 2] = [".auditaur", "diagnostics.md"];
 const DIAGNOSTICS_CONFIG: &str = r#"{
@@ -76,6 +134,24 @@ struct InitSkillResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct InitExtensionResult {
+    ok: bool,
+    /// The first extension's path, kept for callers written before `extensions`.
+    path: String,
+    overwritten: bool,
+    extensions: Vec<InitExtension>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitExtension {
+    name: &'static str,
+    path: String,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct InitDiagnosticsResult {
     ok: bool,
     dry_run: bool,
@@ -132,43 +208,166 @@ pub fn skill(path: Option<&Path>, force: bool, agents_path: bool, json: bool) ->
     })
 }
 
+/// Installs every packaged canvas extension. Without `--force`, extensions that already exist
+/// are left alone and only missing ones are written; it fails only when nothing is missing.
 pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
     let root = path
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir().context("failed to resolve current directory")?);
-    let output = GITHUB_EXTENSION_RELATIVE_PATH
-        .iter()
-        .fold(root, |path, segment| path.join(segment));
-    let existed = output.exists();
-    if existed && !force {
+    let targets = [(
+        "auditaur-drills",
+        GITHUB_DRILLS_EXTENSION_RELATIVE_DIR,
+        AUDITAUR_DRILLS_EXTENSION_FILES,
+    )]
+    .map(|(name, relative, files)| {
+        let dir = relative
+            .iter()
+            .fold(root.clone(), |path, segment| path.join(segment));
+        let output = dir.join("extension.mjs");
+        let present = files
+            .iter()
+            .filter(|(file, _)| file_path(&dir, file).is_file())
+            .count();
+        (
+            name,
+            output,
+            (dir, files),
+            (present == files.len(), present > 0),
+        )
+    });
+    let legacy = retire_legacy_gate(&root)?;
+    if legacy.is_none() && !force && targets.iter().all(|(_, _, _, (complete, _))| *complete) {
         return Err(anyhow!(
-            "Auditaur gate canvas extension already exists at {}. Pass --force to overwrite it.",
-            output.display()
+            "Auditaur canvas extensions already exist at {}. Pass --force to overwrite them.",
+            targets
+                .iter()
+                .map(|(_, output, _, _)| output.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
 
-    let parent = output
-        .parent()
-        .ok_or_else(|| anyhow!("invalid extension output path: {}", output.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create extension directory {}", parent.display()))?;
-    fs::write(&output, AUDITAUR_GATE_EXTENSION)
-        .with_context(|| format!("failed to write extension file {}", output.display()))?;
-    let result = InitSkillResult {
+    let mut extensions = Vec::new();
+    for (name, output, (dir, files), (complete, partial)) in &targets {
+        // Missing files mean an interrupted or older install: without --force, only those
+        // files are written so local edits survive.
+        let status = match (complete, partial, force) {
+            (true, _, false) => "skipped",
+            (_, true, true) => "overwritten",
+            (false, true, false) => "repaired",
+            (_, false, _) => "installed",
+        };
+        if status != "skipped" {
+            write_extension_files(dir, files, force)?;
+        }
+        extensions.push(InitExtension {
+            name,
+            path: output.to_string_lossy().to_string(),
+            status,
+        });
+    }
+    extensions.extend(legacy);
+    let result = InitExtensionResult {
         ok: true,
-        path: output.to_string_lossy().to_string(),
-        overwritten: existed,
+        path: extensions[0].path.clone(),
+        overwritten: extensions[0].status == "overwritten",
+        extensions,
     };
     read::print_json_or_table(json, &result, || {
-        println!(
-            "Installed Auditaur gate canvas extension at {}",
-            output.display()
-        );
-        if existed {
-            println!("Existing extension was overwritten.");
+        for ext in &result.extensions {
+            match ext.status {
+                "installed" => println!("Installed {} canvas extension at {}", ext.name, ext.path),
+                "overwritten" => {
+                    println!("Overwrote {} canvas extension at {}", ext.name, ext.path)
+                }
+                "repaired" => println!(
+                    "Restored missing files of the {} canvas extension at {}",
+                    ext.name, ext.path
+                ),
+                "removed" => println!(
+                    "Removed the retired {} prototype at {}; the drills canvas has a Gate page",
+                    ext.name, ext.path
+                ),
+                "retired" => println!(
+                    "The retired {} prototype at {} was edited, so it was kept; delete it, the drills canvas has a Gate page",
+                    ext.name, ext.path
+                ),
+                _ => println!(
+                    "Kept existing {} canvas extension at {} (pass --force to overwrite)",
+                    ext.name, ext.path
+                ),
+            }
         }
         Ok(())
     })
+}
+
+/// Removes the gate canvas prototype when it is exactly what Auditaur wrote ("removed");
+/// an edited copy, or one with other files, is kept and reported ("retired").
+fn retire_legacy_gate(root: &Path) -> Result<Option<InitExtension>> {
+    let dir = LEGACY_GATE_EXTENSION_RELATIVE_DIR
+        .iter()
+        .fold(root.to_path_buf(), |path, segment| path.join(segment));
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let entry = dir.join("extension.mjs");
+    let only_entry = fs::read_dir(&dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
+        .map(|item| item.map(|item| item.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        == ["extension.mjs"];
+    let shipped = only_entry
+        && fs::read(&entry)
+            .is_ok_and(|bytes| legacy_fingerprint(&bytes) == LEGACY_GATE_EXTENSION_FNV);
+    if shipped {
+        // File, then the (now empty) folder: anything added meanwhile makes this fail, not vanish.
+        fs::remove_file(&entry)
+            .and_then(|()| fs::remove_dir(&dir))
+            .with_context(|| format!("failed to remove {}", dir.display()))?;
+    }
+    Ok(Some(InitExtension {
+        name: "auditaur-gate",
+        path: entry.to_string_lossy().to_string(),
+        status: if shipped { "removed" } else { "retired" },
+    }))
+}
+
+/// FNV-1a 64 over the text with CRLF read as LF, so a checkout's line endings don't matter.
+fn legacy_fingerprint(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            continue;
+        }
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn file_path(dir: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(dir.to_path_buf(), |path, segment| path.join(segment))
+}
+
+/// Writes the entry point last, so an interrupted install never looks complete.
+fn write_extension_files(dir: &Path, files: &[(&str, &str)], overwrite: bool) -> Result<()> {
+    for (relative, contents) in files.iter().rev() {
+        let output = file_path(dir, relative);
+        if !overwrite && output.is_file() {
+            continue;
+        }
+        let parent = output
+            .parent()
+            .ok_or_else(|| anyhow!("invalid extension output path: {}", output.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create extension directory {}", parent.display())
+        })?;
+        fs::write(&output, contents)
+            .with_context(|| format!("failed to write extension file {}", output.display()))?;
+    }
+    Ok(())
 }
 
 pub fn diagnostics(path: Option<&Path>, force: bool, dry_run: bool, json: bool) -> Result<()> {
@@ -334,7 +533,7 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  skill  Install the Auditaur debug agent skill into a repository");
-    println!("  extension  Install the Auditaur gate canvas extension into a repository");
+    println!("  extension  Install the Auditaur drills canvas extension into a repository");
     println!("  diagnostics  Install optional generic diagnostics config and guidance");
 }
 
@@ -344,10 +543,47 @@ fn print_skill_help() {
 
 fn print_extension_help() {
     println!("Usage: auditaur init extension [--path <repo-root>] [--force] [--json]");
+    println!();
+    println!("Installs .github/extensions/auditaur-drills (drill tests, runs, traces, and manual gates).");
+    println!("Existing extensions are kept unless --force is passed.");
 }
 
 fn print_diagnostics_help() {
     println!(
         "Usage: auditaur init diagnostics [--path <repo-root>] [--dry-run] [--force] [--json]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::AUDITAUR_DRILLS_EXTENSION_FILES;
+
+    fn tree(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                tree(root, &path, out);
+            } else {
+                let relative = path.strip_prefix(root).unwrap();
+                out.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+
+    #[test]
+    fn drills_extension_file_list_matches_packaged_assets() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/auditaur-drills");
+        let mut on_disk = Vec::new();
+        tree(&root, &root, &mut on_disk);
+        on_disk.sort();
+        let mut listed: Vec<String> = AUDITAUR_DRILLS_EXTENSION_FILES
+            .iter()
+            .map(|(path, _)| path.to_string())
+            .collect();
+        assert_eq!(listed[0], "extension.mjs");
+        listed.sort();
+        assert_eq!(listed, on_disk);
+    }
 }

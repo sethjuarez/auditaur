@@ -19,10 +19,14 @@ auditaur-collector = { version = "0.4.8", path = "../auditaur-collector" }
 auditaur-core = { version = "0.4.8", path = "../auditaur-core" }
 base64.workspace = true
 clap.workspace = true
+ctrlc = "3"
+png = "0.18"
+regex = "1"
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+jsonschema = { version = "0.60.1", default-features = false }
 tempfile.workspace = true

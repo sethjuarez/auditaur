@@ -1,6 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { ariaSnapshot } from './aria-snapshot';
 import type { AuditaurExporter } from './exporter';
+import {
+  describeLocator,
+  elementText as locatorText,
+  isLocatorSelector,
+  parseLocator,
+  queryLocator,
+  resolveLocator,
+} from './locator';
+import { generateLocator } from './locator-gen';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -117,7 +127,7 @@ async function pollOnce(exporter: AuditaurExporter, windowLabel: string | undefi
     selector: request.selector,
     windowLabel: request.windowLabel,
   });
-  const response = await responseForRequest(request);
+  const response = await responseForRequest(request, exporter);
   recordDriveBridgeTelemetry(exporter, request, response);
   await invoke(COMPLETE_COMMAND, { response });
   console.debug('Auditaur drive bridge completed request', {
@@ -193,9 +203,12 @@ function sleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-async function responseForRequest(request: DriveBridgeRequest): Promise<DriveBridgeResponse> {
+async function responseForRequest(
+  request: DriveBridgeRequest,
+  exporter: AuditaurExporter,
+): Promise<DriveBridgeResponse> {
   try {
-    const payload = await executeDriveBridgeRequest(request);
+    const payload = await executeDriveBridgeRequest(request, exporter);
     return {
       schemaVersion: 1,
       protocolVersion: PROTOCOL_VERSION,
@@ -224,7 +237,10 @@ async function responseForRequest(request: DriveBridgeRequest): Promise<DriveBri
   }
 }
 
-export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Promise<Record<string, unknown>> {
+export async function executeDriveBridgeRequest(
+  request: DriveBridgeRequest,
+  exporter?: Pick<AuditaurExporter, 'flush'>,
+): Promise<Record<string, unknown>> {
   if (request.protocolVersion !== PROTOCOL_VERSION) {
     throw new Error(
       `unsupported drive bridge protocol version: ${request.protocolVersion}; expected ${PROTOCOL_VERSION}`,
@@ -257,6 +273,15 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
       const el = requireSelector(request.selector, request.visibleOnly);
       el.scrollIntoView?.({ block: 'center', inline: 'center' });
       (el as HTMLElement).click?.();
+      return { ok: true, visibleOnly: request.visibleOnly };
+    }
+    case 'dblclick': {
+      const el = requireSelector(request.selector, request.visibleOnly);
+      el.scrollIntoView?.({ block: 'center', inline: 'center' });
+      (el as HTMLElement).click?.();
+      (el as HTMLElement).click?.();
+      const DblClick = typeof MouseEvent === 'function' ? MouseEvent : Event;
+      el.dispatchEvent(new DblClick('dblclick', { bubbles: true, cancelable: true, detail: 2 } as MouseEventInit));
       return { ok: true, visibleOnly: request.visibleOnly };
     }
     case 'hover': {
@@ -303,8 +328,28 @@ export async function executeDriveBridgeRequest(request: DriveBridgeRequest): Pr
     case 'snapshot': {
       return captureSnapshot(request.selector);
     }
+    case 'inspect': {
+      return inspectSelector(request.selector);
+    }
+    case 'ariaSnapshot': {
+      const root = request.selector ? requireSelector(request.selector, false) : document.body;
+      return { snapshot: ariaSnapshot(root) };
+    }
+    case 'flush': {
+      if (!exporter) {
+        throw new Error('flush needs the Auditaur exporter');
+      }
+      await exporter.flush();
+      return { ok: true };
+    }
     case 'screenshot': {
-      return captureScreenshot(request.selector, request.windowLabel);
+      return captureScreenshot(request.selector, request.windowLabel, {
+        masks: request.values ?? [],
+        stabilize: request.value === 'expect',
+      });
+    }
+    case 'locate': {
+      return locateSelector(request.selector);
     }
     default:
       throw new Error(`unsupported drive bridge action: ${request.action}`);
@@ -315,8 +360,100 @@ function resolveSelector(selector: string | undefined, visibleOnly: boolean): El
   if (!selector) {
     return undefined;
   }
+  if (isLocatorSelector(selector)) {
+    return resolveLocator(parseLocator(selector), visibleOnly, isVisible);
+  }
   const matches = Array.from(document.querySelectorAll(selector));
   return visibleOnly ? matches.find(isVisible) : matches[0];
+}
+
+/**
+ * Everything a drill assertion needs about a target, without throwing: how many
+ * elements match, a strict-mode message when the locator is ambiguous, and the
+ * resolved element's state.
+ */
+function inspectSelector(selector: string | undefined): Record<string, unknown> {
+  if (!selector) {
+    throw new Error('inspect needs a selector');
+  }
+  let matches: Element[];
+  let strict: string | undefined;
+  if (isLocatorSelector(selector)) {
+    const spec = parseLocator(selector);
+    const all = queryLocator(spec);
+    if (spec.nth !== undefined) {
+      matches = pickNth(all, spec.nth);
+    } else {
+      matches = all;
+      if (all.length > 1) {
+        strict = `strict mode violation: \`${describeLocator(spec)}\` resolved to ${all.length} elements; add \`nth\` or narrow the locator`;
+      }
+    }
+  } else {
+    matches = Array.from(document.querySelectorAll(selector));
+  }
+  const el = strict ? undefined : matches[0];
+  return {
+    count: matches.length,
+    ...(strict ? { strict } : {}),
+    element: el
+      ? {
+          visible: isVisible(el),
+          text: locatorText(el),
+          value: valueOf(el),
+          checked: checkedOf(el),
+        }
+      : null,
+  };
+}
+
+const MAX_LOCATED = 20;
+
+function pickNth(all: Element[], nth: number): Element[] {
+  const el = nth < 0 ? all[all.length + nth] : all[nth];
+  return el ? [el] : [];
+}
+
+/** Suggested drill locators for every element a CSS selector or locator matches. */
+function locateSelector(selector: string | undefined): Record<string, unknown> {
+  if (!selector) {
+    throw new Error('locate needs a selector');
+  }
+  let matches: Element[];
+  if (isLocatorSelector(selector)) {
+    const spec = parseLocator(selector);
+    const all = queryLocator(spec);
+    matches = spec.nth === undefined ? all : pickNth(all, spec.nth);
+  } else {
+    matches = Array.from(document.querySelectorAll(selector));
+  }
+  return {
+    count: matches.length,
+    elements: matches.slice(0, MAX_LOCATED).map((el) => ({
+      locator: generateLocator(el),
+      tag: el.tagName.toLowerCase(),
+      text: locatorText(el).slice(0, 80),
+      visible: isVisible(el),
+    })),
+  };
+}
+
+function valueOf(el: Element): string | null {
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    return el.value;
+  }
+  return null;
+}
+
+function checkedOf(el: Element): boolean | 'mixed' | null {
+  if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+    return el.indeterminate ? 'mixed' : el.checked;
+  }
+  const aria = el.getAttribute('aria-checked');
+  if (aria === 'true' || aria === 'false') {
+    return aria === 'true';
+  }
+  return aria === 'mixed' ? 'mixed' : null;
 }
 
 function requireSelector(selector: string | undefined, visibleOnly: boolean): Element {
@@ -515,8 +652,11 @@ function setNativeValue(
   }
 }
 
-function captureSnapshot(selector: string | undefined): Record<string, unknown> {
-  const selected = selector ? document.querySelector(selector) : null;
+function captureSnapshot(
+  selector: string | undefined,
+  resolved?: Element,
+): Record<string, unknown> {
+  const selected = resolved ?? (selector ? resolveSelector(selector, false) : null);
   return {
     title: document.title,
     url: location.href,
@@ -529,34 +669,126 @@ function captureSnapshot(selector: string | undefined): Record<string, unknown> 
   };
 }
 
+interface ScreenshotOptions {
+  /** Selectors whose matches are painted over (all matches, like Playwright's `mask`). */
+  masks: string[];
+  /** Finish animations and hide the caret so repeated captures are comparable. */
+  stabilize: boolean;
+}
+
 async function captureScreenshot(
   selector: string | undefined,
   windowLabel: string | undefined,
+  options: ScreenshotOptions = { masks: [], stabilize: false },
 ): Promise<Record<string, unknown>> {
-  const target = selector ? document.querySelector(selector) : document.documentElement;
+  const target = selector ? resolveSelector(selector, false) : document.documentElement;
   if (!target) {
     throw new Error('selector not found');
   }
   if (selector) {
     await scrollTargetIntoViewForScreenshot(target);
   }
-  const snapshot = captureSnapshot(selector);
-  const targetRect = selector ? screenshotTargetRect(target) : undefined;
+  const snapshot = captureSnapshot(selector, selector ? target : undefined);
+  const cleanup: Array<() => void> = [];
   try {
-    const nativeScreenshot = await nativeScreenshotInvoker({ windowLabel, targetRect });
-    return {
-      ...nativeScreenshot,
-      selector,
-      screenshotScope: nativeScreenshot.screenshotScope ?? (targetRect ? 'selector' : 'webview'),
-      selectorRect: targetRect,
-      snapshot,
-    };
-  } catch (error) {
-    return {
-      ...captureDomSummaryScreenshot(target, selector, snapshot),
-      nativeScreenshotError: errorMessage(error),
-    };
+    const prepared = options.stabilize || options.masks.length > 0;
+    if (options.stabilize) {
+      cleanup.push(stabilizePage());
+    }
+    const masked = maskElements(options.masks, cleanup);
+    if (prepared) {
+      await waitForScrollSettle();
+    }
+    const extra = prepared ? { masked, stabilized: options.stabilize } : {};
+    const targetRect = selector ? screenshotTargetRect(target) : undefined;
+    try {
+      const nativeScreenshot = await nativeScreenshotInvoker({ windowLabel, targetRect });
+      return {
+        ...nativeScreenshot,
+        selector,
+        screenshotScope: nativeScreenshot.screenshotScope ?? (targetRect ? 'selector' : 'webview'),
+        selectorRect: targetRect,
+        snapshot,
+        ...extra,
+      };
+    } catch (error) {
+      return {
+        ...captureDomSummaryScreenshot(target, selector, snapshot),
+        nativeScreenshotError: errorMessage(error),
+        ...extra,
+      };
+    }
+  } finally {
+    for (const undo of cleanup.reverse()) {
+      undo();
+    }
   }
+}
+
+const MASK_COLOR = '#FF00FF';
+const STABILIZE_CSS = '*, *::before, *::after { transition: none !important; caret-color: transparent !important; }';
+
+/** Finish finite animations, cancel infinite ones, and freeze transitions and the caret. */
+function stabilizePage(): () => void {
+  // As in Playwright: finite animations jump to their end state, infinite ones reset and
+  // play again once the screenshot is taken.
+  const cancelled: Animation[] = [];
+  for (const animation of document.getAnimations?.() ?? []) {
+    if (animation.effect?.getTiming().iterations === Infinity) {
+      if (animation.playState === 'running') {
+        cancelled.push(animation);
+      }
+      animation.cancel();
+    } else {
+      animation.finish();
+    }
+  }
+  const style = document.createElement('style');
+  style.setAttribute('data-auditaur-screenshot', 'stabilize');
+  style.textContent = STABILIZE_CSS;
+  (document.head ?? document.documentElement).appendChild(style);
+  return () => {
+    style.remove();
+    for (const animation of cancelled) {
+      try {
+        animation.play();
+      } catch {
+        // The animation's element may be gone.
+      }
+    }
+  };
+}
+
+/** Cover every visible match of each mask selector with a solid box; returns how many. */
+function maskElements(selectors: string[], cleanup: Array<() => void>): number {
+  let masked = 0;
+  for (const selector of selectors) {
+    const matches = isLocatorSelector(selector)
+      ? queryLocator(parseLocator(selector))
+      : Array.from(document.querySelectorAll(selector));
+    for (const el of matches) {
+      if (!isVisible(el)) {
+        continue;
+      }
+      const rect = el.getBoundingClientRect();
+      const box = document.createElement('div');
+      box.setAttribute('data-auditaur-screenshot', 'mask');
+      Object.assign(box.style, {
+        position: 'fixed',
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+        background: MASK_COLOR,
+        zIndex: '2147483647',
+        pointerEvents: 'none',
+      });
+      document.documentElement.appendChild(box);
+      cleanup.push(() => box.remove());
+      masked += 1;
+    }
+  }
+  return masked;
 }
 
 async function scrollTargetIntoViewForScreenshot(target: Element): Promise<void> {

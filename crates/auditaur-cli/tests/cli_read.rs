@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use auditaur_collector::exporter_sqlite::{SqliteStore, SQLITE_SCHEMA_VERSION};
 use auditaur_core::{
     discovery::DiscoveryFile,
@@ -9,7 +11,7 @@ use auditaur_core::{
 use serde_json::{json, Value};
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -805,6 +807,388 @@ fn simplified_drill_and_inspect_use_config_and_session_file() {
 }
 
 #[test]
+fn drill_list_and_validate_suite_files() {
+    let temp = TempDir::new().unwrap();
+    let drills = temp.path().join(".auditaur").join("drills");
+    fs::create_dir_all(drills.join("nested")).unwrap();
+    fs::write(
+        drills.join("greet.drill.json"),
+        serde_json::to_vec_pretty(&json!({
+            "tags": ["@smoke"],
+            "tests": [
+                { "name": "greets", "tags": ["fast"], "steps": [
+                    { "fill": { "testId": "name" }, "value": "Seth" },
+                    { "click": { "role": "button", "name": "Greet" } },
+                    { "expect": "#output", "toContainText": "Hello" }
+                ] },
+                { "name": "later", "fixme": "needs auth" }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        drills.join("nested").join("errors.drill.json"),
+        r##"{ "tests": [{ "name": "fails", "steps": [{ "expectIpc": "failing_command", "status": "error" }] }] }"##,
+    )
+    .unwrap();
+
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+        command.args(args).current_dir(temp.path());
+        command
+    };
+
+    let listed = run_json_command(&mut run(&["drill", "list", "--json"]));
+    assert_eq!(listed["totals"]["suites"], 2);
+    assert_eq!(listed["totals"]["tests"], 3);
+    let greet = &listed["suites"][0];
+    assert_eq!(greet["suite"], "greet");
+    assert_eq!(greet["path"], ".auditaur/drills/greet.drill.json");
+    assert_eq!(greet["tests"][0]["title"], "greet > greets");
+    assert_eq!(greet["tests"][0]["tags"], json!(["smoke", "fast"]));
+    assert_eq!(
+        greet["tests"][0]["steps"][1]["title"],
+        "click role=button[name=\"Greet\"i]"
+    );
+    assert_eq!(greet["tests"][1]["mode"], "fixme");
+    let id = greet["tests"][0]["id"].as_str().unwrap();
+    assert!(
+        id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()),
+        "{id}"
+    );
+    assert_ne!(greet["tests"][1]["id"], greet["tests"][0]["id"]);
+
+    let tagged = run_json_command(&mut run(&["drill", "list", "--tag", "fast", "--json"]));
+    assert_eq!(tagged["totals"]["tests"], 1);
+    let filtered = run_json_command(&mut run(&["drill", "list", "errors", "--json"]));
+    assert_eq!(filtered["suites"][0]["suite"], "errors");
+    let text = run_command(&mut run(&["drill", "list"]));
+    assert!(text.contains("greets  (3 steps)  @fast"), "{text}");
+    assert!(text.contains("[fixme: needs auth]"), "{text}");
+    assert!(text.contains("3 tests in 2 suites"), "{text}");
+
+    let valid = run_json_command(&mut run(&["drill", "validate", "--json"]));
+    assert_eq!(valid["valid"], true);
+    assert_eq!(valid["files"], 2);
+
+    fs::write(
+        drills.join("broken.drill.json"),
+        r##"{ "tests": [{ "name": "a", "steps": [{ "clik": "#x" }] }] }"##,
+    )
+    .unwrap();
+    let invalid = run_failure_command(&mut run(&["drill", "validate"]));
+    assert!(invalid.contains("broken.drill.json"), "{invalid}");
+    assert!(invalid.contains("did you mean `click`"), "{invalid}");
+    let listed_with_invalid = run_failure_command(&mut run(&["drill", "list"]));
+    assert!(
+        listed_with_invalid.contains("1 invalid drill file"),
+        "{listed_with_invalid}"
+    );
+    let explicit = run_json_command(&mut run(&[
+        "drill",
+        "validate",
+        ".auditaur/drills/greet.drill.json",
+        "--json",
+    ]));
+    assert_eq!(explicit["files"], 1);
+    let missing = run_failure_command(&mut run(&["drill", "validate", "nope"]));
+    assert!(missing.contains("does not exist"), "{missing}");
+    let misplaced = run_failure_command(&mut run(&["drill", "test", "-u", "none"]));
+    let upper = run_failure_command(&mut run(&["drill", "test", "-u", "ALL"]));
+    assert!(upper.contains("`--update-snapshots=ALL`"), "{upper}");
+    assert!(
+        misplaced.contains("`--update-snapshots=none`"),
+        "{misplaced}"
+    );
+}
+
+#[test]
+fn drill_runs_and_show_read_run_folders() {
+    let temp = TempDir::new().unwrap();
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_auditaur"));
+        command.args(args).current_dir(temp.path());
+        command
+    };
+    let empty = run_command(&mut run(&["drill", "runs"]));
+    assert!(empty.contains("No drill runs"), "{empty}");
+    let none = run_failure_command(&mut run(&["drill", "show"]));
+    assert!(none.contains("no drill runs"), "{none}");
+
+    let root = temp.path().join(".auditaur").join("drill-runs");
+    let report = |id: &str, status: &str, failed: usize| {
+        json!({
+            "schemaVersion": 1, "runId": id, "status": status, "seq": 9,
+            "startedAt": "2026-01-01T00:00:00Z", "endedAt": "2026-01-01T00:00:02Z",
+            "durationMs": 2500, "pid": 1, "workspace": "/w",
+            "invocation": { "args": [], "patterns": [], "grep": null, "grepInvert": null, "tags": [] },
+            "environment": { "os": "windows", "arch": "x86_64", "auditaurVersion": "0.0.0" },
+            "totals": { "tests": 2, "passed": 2 - failed, "failed": failed, "flaky": 0, "skipped": 0, "notRun": 0 },
+            "suites": [{
+                "id": "00112233445566ff", "suite": "smoke", "path": ".auditaur/drills/smoke.drill.json",
+                "status": status, "startedAt": null, "durationMs": 2400, "app": null, "error": null, "hooks": [],
+                "tests": [
+                    { "id": "0123456789abcdef", "name": "loads", "title": "smoke > loads", "tags": [],
+                      "mode": "run", "modeReason": null, "expectedStatus": "passed", "status": "passed",
+                      "outcome": "expected", "durationMs": 40, "attempts": [] },
+                    { "id": "fedcba9876543210", "name": "clicks", "title": "smoke > clicks", "tags": [],
+                      "mode": "run", "modeReason": null, "expectedStatus": "passed", "status": status,
+                      "outcome": if failed > 0 { "unexpected" } else { "expected" }, "durationMs": 1200,
+                      "attempts": [{ "attempt": 0, "status": status, "startedAt": "2026-01-01T00:00:00Z",
+                        "durationMs": 1200, "dir": "tests/fedcba9876543210/attempt-0",
+                        "error": if failed > 0 { json!({ "message": "#go not visible", "step": 1 }) } else { json!(null) } }] }
+                ]
+            }]
+        })
+    };
+    for (id, status, failed) in [
+        ("20260101-000000-000", "passed", 0),
+        ("20260102-000000-000", "failed", 1),
+    ] {
+        fs::create_dir_all(root.join(id)).unwrap();
+        fs::write(
+            root.join(id).join("run.json"),
+            serde_json::to_vec(&report(id, status, failed)).unwrap(),
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(root.join("20260103-000000-000")).unwrap();
+
+    let listed = run_json_command(&mut run(&["drill", "runs", "--json"]));
+    assert_eq!(listed["runs"][0]["runId"], "20260102-000000-000");
+    assert_eq!(listed["runs"][1]["totals"]["passed"], 2);
+    assert_eq!(listed["unreadable"][0]["runId"], "20260103-000000-000");
+    let text = run_command(&mut run(&["drill", "runs"]));
+    assert!(
+        text.contains("20260102-000000-000  failed       1 passed, 1 failed  (2.5s)"),
+        "{text}"
+    );
+
+    // Latest is the newest folder, here unreadable; an explicit id still works.
+    let broken = run_failure_command(&mut run(&["drill", "show"]));
+    assert!(broken.contains("20260103-000000-000"), "{broken}");
+    let explicit = run_command(&mut run(&["drill", "show", "20260102-000000-000"]));
+    assert!(explicit.contains("Run 20260102-000000-000"), "{explicit}");
+    let ambiguous = run_failure_command(&mut run(&["drill", "show", "2026"]));
+    assert!(ambiguous.contains("matches 3 runs"), "{ambiguous}");
+    fs::remove_dir(root.join("20260103-000000-000")).unwrap();
+    let shown = run_command(&mut run(&["drill", "show"]));
+    assert!(
+        shown.contains("Run 20260102-000000-000  failed  (2.5s)"),
+        "{shown}"
+    );
+    assert!(shown.contains("failed       clicks  (1.2s)"), "{shown}");
+    assert!(shown.contains("step 2: #go not visible"), "{shown}");
+    let json_shown = run_json_command(&mut run(&["drill", "show", "20260101", "--json"]));
+    assert_eq!(json_shown["status"], "passed");
+    assert_eq!(
+        json_shown["dir"],
+        ".auditaur/drill-runs/20260101-000000-000"
+    );
+}
+
+#[test]
+fn mcp_drill_tools_list_run_show_and_cancel() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("ws");
+    let drills = workspace.join(".auditaur").join("drills");
+    fs::create_dir_all(&drills).unwrap();
+    fs::write(
+        drills.join("smoke.drill.json"),
+        r##"{ "tests": [
+            { "name": "loads", "tags": ["fast"], "steps": [{ "expect": "#app", "toBeVisible": true }] },
+            { "name": "clicks", "steps": [{ "click": "#go" }] }
+        ] }"##,
+    )
+    .unwrap();
+    let cwd = workspace.to_str().unwrap();
+
+    // A finished run with one attempt on disk, and a run "owned" by this live test process.
+    let root = workspace.join(".auditaur").join("drill-runs");
+    let attempt_dir = "tests/fedcba9876543210/attempt-0";
+    let report = |id: &str, status: &str, pid: u32| {
+        json!({
+            "schemaVersion": 1, "runId": id, "status": status, "seq": 9,
+            "startedAt": "2026-01-01T00:00:00Z", "endedAt": null, "durationMs": 2500,
+            "pid": pid, "workspace": "/w",
+            "invocation": { "args": [], "patterns": [], "grep": null, "grepInvert": null, "tags": [] },
+            "environment": { "os": "windows", "arch": "x86_64", "auditaurVersion": "0.0.0" },
+            "totals": { "tests": 1, "passed": 0, "failed": 1, "flaky": 0, "skipped": 0, "notRun": 0 },
+            "suites": [{
+                "id": "00112233445566ff", "suite": "smoke", "path": ".auditaur/drills/smoke.drill.json",
+                "status": status, "startedAt": null, "durationMs": 2400, "app": null, "error": null, "hooks": [],
+                "tests": [{ "id": "fedcba9876543210", "name": "clicks", "title": "smoke > clicks", "tags": [],
+                    "mode": "run", "modeReason": null, "expectedStatus": "passed", "status": "failed",
+                    "outcome": "unexpected", "durationMs": 1200,
+                    "attempts": [{ "attempt": 0, "status": "failed", "startedAt": "2026-01-01T00:00:00Z",
+                        "durationMs": 1200, "dir": attempt_dir,
+                        "error": { "message": "#go not visible", "step": 0 } }] }]
+            }]
+        })
+    };
+    let finished = root.join("20260101-000000-000");
+    fs::create_dir_all(finished.join(attempt_dir)).unwrap();
+    fs::write(
+        finished.join("run.json"),
+        serde_json::to_vec(&report("20260101-000000-000", "failed", 1)).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        finished.join(attempt_dir).join("attempt.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1, "testId": "fedcba9876543210", "title": "smoke > clicks", "attempt": 0,
+            "status": "failed", "startedAt": "2026-01-01T00:00:00Z", "durationMs": 1200,
+            "error": { "message": "#go not visible", "step": 0 },
+            "steps": [], "attachments": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let running = root.join("20260102-000000-000");
+    fs::create_dir_all(&running).unwrap();
+    fs::write(
+        running.join("run.json"),
+        serde_json::to_vec(&report(
+            "20260102-000000-000",
+            "running",
+            std::process::id(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let calls = [
+        json!({ "name": "drill_list", "arguments": { "cwd": cwd, "tags": ["fast"] } }),
+        json!({ "name": "drill_validate", "arguments": { "cwd": cwd } }),
+        json!({ "name": "drill_runs", "arguments": { "cwd": cwd } }),
+        json!({ "name": "drill_show", "arguments": { "cwd": cwd, "runId": "20260101" } }),
+        json!({ "name": "drill_show", "arguments": { "cwd": cwd, "runId": "20260101", "test": "clicks" } }),
+        json!({ "name": "drill_cancel", "arguments": { "cwd": cwd, "runId": "20260101" } }),
+        json!({ "name": "drill_cancel", "arguments": { "cwd": cwd, "runId": "20260102" } }),
+        json!({ "name": "drill_list", "arguments": { "cwd": cwd, "filter": ["x"] } }),
+        json!({ "name": "drill_list", "arguments": { "cwd": cwd, "filters": ["--attach"] } }),
+        json!({ "name": "drill_test", "arguments": { "cwd": cwd, "filters": ["nothing-matches"] } }),
+        json!({ "name": "drill_test", "arguments": {
+            "cwd": cwd, "app": "auditaur-mcp-missing-app", "attach": true, "tags": ["fast"],
+            "timeoutSeconds": 1, "updateSnapshots": "none"
+        } }),
+    ];
+    let responses = mcp_session(&temp, &calls);
+    let text = |index: usize| -> String {
+        let result = &responses[index]["result"];
+        result["content"][0]["text"].as_str().unwrap().to_string()
+    };
+    let ok = |index: usize| -> Value {
+        assert_eq!(
+            responses[index]["result"]["isError"],
+            false,
+            "call {index}: {}",
+            text(index)
+        );
+        serde_json::from_str(&text(index)).unwrap()
+    };
+    let err = |index: usize| -> String {
+        assert_eq!(responses[index]["result"]["isError"], true, "call {index}");
+        text(index)
+    };
+
+    let listed = ok(0);
+    assert_eq!(listed["totals"]["tests"], 1);
+    assert_eq!(listed["suites"][0]["tests"][0]["name"], "loads");
+    assert_eq!(ok(1)["valid"], true);
+    let runs = ok(2);
+    assert_eq!(runs["runs"][0]["runId"], "20260102-000000-000");
+    assert_eq!(runs["runs"][0]["status"], "running");
+    assert_eq!(ok(3)["dir"], ".auditaur/drill-runs/20260101-000000-000");
+    let detail = ok(4);
+    assert_eq!(detail["test"]["title"], "smoke > clicks");
+    assert_eq!(detail["test"]["attempts"][0]["testId"], "fedcba9876543210");
+    assert_eq!(detail["test"]["attempts"][0]["dir"], attempt_dir);
+    assert!(err(5).contains("is not running"));
+    assert_eq!(ok(6)["cancelRequested"], true);
+    assert!(running.join("cancel.request").exists());
+    assert!(err(7).contains("does not take `filter`"), "{}", text(7));
+    assert!(err(8).contains("cannot start with `-`"), "{}", text(8));
+    let early = err(9);
+    assert!(early.contains("before starting a run"), "{early}");
+    assert!(early.contains("No tests found"), "{early}");
+
+    // A real background run: attaching to an app that does not exist fails the suite.
+    let started = ok(10);
+    assert_eq!(started["started"], true, "{started}");
+    let run_id = started["runId"].as_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let shown = loop {
+        let shown = run_json_command(
+            Command::new(env!("CARGO_BIN_EXE_auditaur"))
+                .args(["drill", "show", &run_id, "--json"])
+                .current_dir(&workspace),
+        );
+        if shown["status"] != "running" || Instant::now() > deadline {
+            break shown;
+        }
+        thread::sleep(Duration::from_millis(200));
+    };
+    let run_log = || {
+        let moved = workspace
+            .join(".auditaur")
+            .join("drill-runs")
+            .join(&run_id)
+            .join("drill-test.log");
+        fs::read_to_string(&moved)
+            .or_else(|_| fs::read_to_string(started["log"].as_str().unwrap_or_default()))
+            .unwrap_or_else(|error| format!("<no run log: {error}>"))
+    };
+    assert_eq!(
+        shown["status"],
+        "failed",
+        "{shown}\nrun log:\n{}",
+        run_log()
+    );
+    assert_eq!(shown["totals"]["tests"], 1);
+    assert_eq!(
+        shown["invocation"]["args"],
+        json!([
+            "drill",
+            "test",
+            "--tag=fast",
+            "--app=auditaur-mcp-missing-app",
+            "--attach",
+            "--timeout-seconds=1",
+            "--update-snapshots=none"
+        ])
+    );
+}
+
+/// Send `tools/call` requests to `auditaur mcp` and return one response per call.
+fn mcp_session(temp: &TempDir, calls: &[Value]) -> Vec<Value> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut server = Command::new(env!("CARGO_BIN_EXE_auditaur"))
+        .arg("mcp")
+        .env("AUDITAUR_DATA_DIR", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = server.stdin.take().unwrap();
+    for (id, call) in calls.iter().enumerate() {
+        let request = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": call });
+        writeln!(stdin, "{request}").unwrap();
+    }
+    drop(stdin);
+    // Read exactly one line per call: background runs may hold the pipe open past exit.
+    let mut lines = BufReader::new(server.stdout.take().unwrap()).lines();
+    let responses = calls
+        .iter()
+        .map(|_| serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap())
+        .collect();
+    let _ = server.wait();
+    responses
+}
+
+#[test]
 fn init_skill_installs_auditaur_debug_skill() {
     let repo = TempDir::new().unwrap();
     let skill_path = repo
@@ -883,52 +1267,41 @@ fn packaged_init_skill_matches_repo_skill() {
 }
 
 #[test]
-fn init_extension_installs_auditaur_gate_canvas() {
+fn init_extension_installs_drills_canvas() {
     let repo = TempDir::new().unwrap();
-    let extension_path = repo
-        .path()
-        .join(".github")
-        .join("extensions")
-        .join("auditaur-gate")
-        .join("extension.mjs");
+    let extensions = repo.path().join(".github").join("extensions");
+    let drills_path = extensions.join("auditaur-drills").join("extension.mjs");
+    let root = repo.path().to_str().unwrap();
 
-    let installed = run_json([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--json",
-    ]);
+    let installed = run_json(["init", "extension", "--path", root, "--json"]);
     assert_eq!(installed["ok"], true);
     assert_eq!(installed["overwritten"], false);
-    let extension = fs::read_to_string(&extension_path).unwrap();
-    assert!(extension.contains("id: \"auditaur-human-gate\""));
-    assert!(extension.contains("respond"));
-
-    let failure = run_failure([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--json",
-    ]);
-    assert!(failure.contains("already exists"));
-
-    fs::write(&extension_path, "stale").unwrap();
-    let overwritten = run_json([
-        "init",
-        "extension",
-        "--path",
-        repo.path().to_str().unwrap(),
-        "--force",
-        "--json",
-    ]);
-    assert_eq!(overwritten["overwritten"], true);
-    assert!(fs::read_to_string(extension_path)
+    assert_eq!(installed["extensions"].as_array().unwrap().len(), 1);
+    assert_eq!(installed["extensions"][0]["name"], "auditaur-drills");
+    assert_eq!(installed["extensions"][0]["status"], "installed");
+    assert!(fs::read_to_string(&drills_path)
         .unwrap()
-        .contains("Auditaur Manual Gate"));
-}
+        .contains("id: CANVAS_ID"));
+    // Manual gates are a page of the drills canvas; there is no separate gate extension.
+    assert!(extensions
+        .join("auditaur-drills")
+        .join("features")
+        .join("gate")
+        .join("index.mjs")
+        .is_file());
+    assert!(!extensions.join("auditaur-gate").exists());
 
+    let failure = run_failure(["init", "extension", "--path", root, "--json"]);
+    assert!(failure.contains("already exist"));
+
+    fs::write(&drills_path, "customized").unwrap();
+    let overwritten = run_json(["init", "extension", "--path", root, "--force", "--json"]);
+    assert_eq!(overwritten["overwritten"], true);
+    assert_eq!(overwritten["extensions"][0]["status"], "overwritten");
+    assert!(fs::read_to_string(&drills_path)
+        .unwrap()
+        .contains("id: CANVAS_ID"));
+}
 #[test]
 fn init_diagnostics_installs_versioned_config_and_guidance() {
     let repo = TempDir::new().unwrap();
@@ -1029,12 +1402,105 @@ fn init_diagnostics_installs_versioned_config_and_guidance() {
 }
 
 #[test]
-fn packaged_init_extension_matches_repo_extension() {
-    let repo_extension = include_str!("../../../.github/extensions/auditaur-gate/extension.mjs")
-        .replace("\r\n", "\n");
-    let packaged_extension =
-        include_str!("../assets/auditaur-gate-extension.mjs").replace("\r\n", "\n");
-    assert_eq!(packaged_extension, repo_extension);
+fn init_extension_restores_missing_files_without_touching_edits() {
+    let repo = TempDir::new().unwrap();
+    let args = [
+        "init",
+        "extension",
+        "--path",
+        repo.path().to_str().unwrap(),
+        "--json",
+    ];
+    run_json(args);
+    let drills = repo.path().join(".github/extensions/auditaur-drills");
+    fs::remove_file(drills.join("ui").join("app.js")).unwrap();
+    fs::write(drills.join("extension.mjs"), "customized").unwrap();
+
+    let repaired = run_json(args);
+    assert_eq!(repaired["extensions"].as_array().unwrap().len(), 1);
+    assert_eq!(repaired["extensions"][0]["status"], "repaired");
+    assert!(drills.join("ui").join("app.js").exists());
+    assert_eq!(
+        fs::read_to_string(drills.join("extension.mjs")).unwrap(),
+        "customized"
+    );
+    assert!(run_failure(args).contains("already exist"));
+
+    fs::remove_file(drills.join("extension.mjs")).unwrap();
+    let [a, b, c, d, e] = args;
+    let overwritten = run_json([a, b, c, d, e, "--force"]);
+    assert_eq!(overwritten["extensions"][0]["status"], "overwritten");
+}
+
+#[test]
+fn init_extension_removes_only_the_unedited_legacy_gate_prototype() {
+    let shipped = include_str!("fixtures/auditaur-gate-extension.mjs").replace("\r\n", "\n");
+    for (contents, expected) in [
+        (shipped.clone(), "removed"),
+        (shipped.replace('\n', "\r\n"), "removed"),
+        (
+            shipped.replace("Auditaur Manual Gate", "Our Gate"),
+            "retired",
+        ),
+    ] {
+        let repo = TempDir::new().unwrap();
+        let legacy = repo.path().join(".github/extensions/auditaur-gate");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("extension.mjs"), &contents).unwrap();
+        let args = [
+            "init",
+            "extension",
+            "--path",
+            repo.path().to_str().unwrap(),
+            "--json",
+        ];
+
+        let result = run_json(args);
+        assert_eq!(result["extensions"][0]["name"], "auditaur-drills");
+        assert_eq!(result["extensions"][1]["name"], "auditaur-gate");
+        assert_eq!(result["extensions"][1]["status"], expected);
+        assert_eq!(legacy.exists(), expected == "retired");
+
+        // A kept prototype is reported on every run; a removed one leaves nothing to do.
+        if expected == "retired" {
+            assert_eq!(run_json(args)["extensions"][0]["status"], "skipped");
+        } else {
+            assert!(run_failure(args).contains("already exist"));
+        }
+    }
+}
+
+fn read_tree(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, String>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            read_tree(root, &path, out);
+        } else {
+            let relative = path.strip_prefix(root).unwrap();
+            let contents = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+            out.insert(relative.to_string_lossy().replace('\\', "/"), contents);
+        }
+    }
+}
+
+#[test]
+fn packaged_init_drills_extension_matches_repo_extension() {
+    let target = TempDir::new().unwrap();
+    run_json([
+        "init",
+        "extension",
+        "--path",
+        target.path().to_str().unwrap(),
+        "--json",
+    ]);
+    let installed_dir = target.path().join(".github/extensions/auditaur-drills");
+    let repo_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/extensions/auditaur-drills");
+    let (mut installed, mut repo) = (Default::default(), Default::default());
+    read_tree(&installed_dir, &installed_dir, &mut installed);
+    read_tree(&repo_dir, &repo_dir, &mut repo);
+    assert!(installed.contains_key("ui/app.js"));
+    assert_eq!(installed, repo);
 }
 
 #[test]
