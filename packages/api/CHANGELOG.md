@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/sethjuarez/auditaur/compare/api-v0.7.0...api-v0.7.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **drills:** api 0.7.1 bridge fixes and CutReady follow-ups (AR-7/8/9) ([#89](https://github.com/sethjuarez/auditaur/issues/89)) ([e56582f](https://github.com/sethjuarez/auditaur/commit/e56582f6fe840d9a26b09e6df338a3a892292df6))
+
 ## [0.7.0](https://github.com/sethjuarez/auditaur/compare/api-v0.6.1...api-v0.7.0) (2026-10-29)
 
 
