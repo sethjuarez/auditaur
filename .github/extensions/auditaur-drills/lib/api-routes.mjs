@@ -65,7 +65,7 @@ export function apiRoutes(panel, openPanel) {
         "GET /api/route": () => panel.route,
         "POST /api/route": async (_url, req) => panel.navigate(stringField(await readBody(req), "path")),
         "GET /api/events": eventStream(panel),
-        "GET /api/health": async () => ({ ...(await health()), route: panel.route }),
+        "GET /api/health": async () => ({ ...(await health(panel.shared.cli)), route: panel.route }),
         "GET /api/file": (url) => serveAttachment(panel.shared, url),
         "POST /api/cancel": async (_url, req) => cancelRun(panel.shared, stringField(await readBody(req), "runId")),
         "POST /api/panels": async (_url, req) => openPanel(panel, stringField(await readBody(req), "route")),

@@ -26,7 +26,7 @@ auditaur init extension
 auditaur init diagnostics
 ```
 
-`init skill` installs the Auditaur debugging workflow for agents. `init extension` installs the `auditaur-drills` Copilot canvas: drill tests, live runs, traces, snapshots, coverage, and a Gate page that renders human gates as action cards. `init diagnostics` writes optional versioned `.auditaur\diagnostics.json` and `.auditaur\diagnostics.md` files with generic failure-signal and checkpoint guidance; use `--dry-run` before writing or `--force` to overwrite. Use `--path <repo-root>` to target another repository.
+`init skill` installs the Auditaur debugging workflow for agents. `init extension` commits the `auditaur-drills` Copilot canvas to the repo: drill tests, live runs, traces, snapshots, coverage, and a Gate page that renders human gates as action cards. The Auditaur Copilot plugin ships the same skill and canvas plus the MCP server without committing files; see [Drill tests](/getting-started/drill-tests/#in-the-copilot-app). `init diagnostics` writes optional versioned `.auditaur\diagnostics.json` and `.auditaur\diagnostics.md` files with generic failure-signal and checkpoint guidance; use `--dry-run` before writing or `--force` to overwrite. Use `--path <repo-root>` to target another repository.
 
 ## Inspect the latest active app
 
@@ -120,7 +120,7 @@ Use drill mode when Auditaur should start the app, wait for a fresh session, che
 auditaur drill run --app my-tauri-app --require-drive-bridge --script .auditaur\drills\github-login.json -- npm run tauri dev
 ```
 
-Use a human gate when the flow requires OAuth consent, OS permissions, elevation, browser handoff, or hardware-key approval. The gate runs after Auditaur pins the spawned app session and before final evidence collection, so the report stays tied to one session. A tester can answer in the terminal, through `list_pending_human_gates`/`respond_human_gate` over MCP, or on the Gate page of the `auditaur-drills` canvas installed by `auditaur init extension`.
+Use a human gate when the flow requires OAuth consent, OS permissions, elevation, browser handoff, or hardware-key approval. The gate runs after Auditaur pins the spawned app session and before final evidence collection, so the report stays tied to one session. A tester can answer in the terminal, through `list_pending_human_gates`/`respond_human_gate` over MCP, or on the Gate page of the `auditaur-drills` canvas (the Auditaur Copilot plugin or `auditaur init extension`).
 
 ## Verify the Tauri-native drive bridge
 

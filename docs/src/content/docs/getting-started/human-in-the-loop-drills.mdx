@@ -9,13 +9,13 @@ The important property is continuity. Auditaur starts the normal app command, wa
 
 ## Install the optional canvas
 
-In a consuming repo, install the project extension if testers will respond through the Copilot app UI:
+If testers will respond through the Copilot app UI, install the Auditaur Copilot plugin (see [Drill tests](/getting-started/drill-tests/#in-the-copilot-app)), or commit the canvas to the consuming repo:
 
 ```powershell
 auditaur init extension
 ```
 
-This writes `.github/extensions/auditaur-drills/`. When a gate is pending, agents can show it on the Gate page of the `auditaur-drills` canvas, with its instructions, choices, and required inputs. Terminal and MCP responses remain available when a canvas is not.
+Either way, when a gate is pending, agents can show it on the Gate page of the `auditaur-drills` canvas, with its instructions, choices, and required inputs. Terminal and MCP responses remain available when a canvas is not.
 
 ## Write a gate script
 

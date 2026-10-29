@@ -2,6 +2,7 @@
 // killed or edited extension keeps serving its old code until extensions reload, so the page and
 // the `health` action say so instead of silently showing stale behavior.
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
@@ -59,15 +60,46 @@ export function reportFailedPages(failed) {
     failedPages = failed;
 }
 
-export async function health() {
+const VERSION_TTL_MS = 60_000;
+const cliVersions = new Map();
+
+function runVersion(cli) {
+    return new Promise((done) => {
+        execFile(cli, ["--version"], { timeout: 10_000, windowsHide: true }, (error, stdout) => {
+            const version = /\d+\.\d+\.\d+\S*/.exec(stdout ?? "")?.[0] ?? null;
+            done(version ? { version, error: null } : { version: null, error: (error?.message ?? "no version").trim() });
+        });
+    });
+}
+
+// `<cli> --version`, cached briefly so the half-minute health poll doesn't spawn a process each time.
+export function cliVersion(cli, run = runVersion, now = Date.now()) {
+    const cached = cliVersions.get(cli);
+    if (cached && now - cached.at < VERSION_TTL_MS) return cached.value;
+    const value = run(cli);
+    cliVersions.set(cli, { at: now, value });
+    return value;
+}
+
+// The plugin's canvas and the CLI it drives ship together; a different CLI may not read what the
+// canvas expects. Null when either version is unknown (a committed copy has no plugin version).
+export function versionSkew(plugin, cli) {
+    return plugin && cli && plugin !== cli ? { plugin, cli } : null;
+}
+
+export async function health(cli) {
     const build = await running;
     const onDisk = await fingerprint().catch(() => build);
+    const plugin = await version;
+    const cliInfo = cli ? await cliVersion(cli) : { version: null, error: null };
     return {
         build,
         onDisk,
         stale: onDisk !== build,
         install: INSTALL,
-        version: await version,
+        version: plugin,
+        cli: { path: cli ?? null, ...cliInfo },
+        skew: versionSkew(plugin, cliInfo.version),
         startedAt,
         pid: process.pid,
         failedPages,

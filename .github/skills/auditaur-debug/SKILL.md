@@ -212,7 +212,7 @@ auditaur drill locate 'li button' --app <app>  # suggest role/label/test-id loca
 - Assert telemetry, not just UI: a passing click whose IPC failed is still a bug.
 - Snapshot baselines go in `__snapshots__/` beside the suite. A missing baseline is written and fails; review it before committing. Use `--update-snapshots=changed` (the `=` is required) only for intended UI changes.
 - Read failures from `.auditaur/drill-runs/<runId>/` (`run.json`, `tests/<id>/attempt-<n>/attempt.json`), not by rerunning blindly.
-- When the user wants to see drills, open the `auditaur-drills` canvas (installed by `auditaur init extension`) instead of pasting result tables, and use its `navigate` action to switch pages: `tests`, `run` (watch a run and answer its `gate` steps), `trace`, `snapshots`, `coverage`. To debug a failed test step by step, rerun with `--trace on` (or MCP `trace: "on"`) and navigate to `trace`.
+- When the user wants to see drills, open the `auditaur-drills` canvas (from the Auditaur Copilot plugin or `auditaur init extension`) instead of pasting result tables, and use its `navigate` action to switch pages: `tests`, `run` (watch a run and answer its `gate` steps), `trace`, `snapshots`, `coverage`. To debug a failed test step by step, rerun with `--trace on` (or MCP `trace: "on"`) and navigate to `trace`.
 - A `gate` step in a drill test pauses for a human. `drill test` never reads the terminal: surface the gate on the `run` page of `auditaur-drills` (or answer with `respond_human_gate` when the user tells you to). Gate waits are off the test clock; the gate's own `timeoutMs` (default 5 minutes) bounds them.
 
 ## Human gates in drills
@@ -248,7 +248,7 @@ When a gate requires a manual response, Auditaur also publishes a session-local 
 auditaur mcp
 ```
 
-Use `list_pending_human_gates` to find pending gates and `respond_human_gate` with the `requestId`, optional `choiceId`, optional `inputs`, and a clear `responder` value. Run the MCP server with the same Auditaur data directory as the drill so it can see the session-local request files. If the Copilot canvas extension is installed with `auditaur init extension`, open the `auditaur-drills` canvas with `input.gate` set to the pending gate (or call `show_gate` on an open one) so the user gets an action card on its Gate page and can click a response. Terminal ENTER/choice input remains the fallback when no MCP or canvas client is available.
+Use `list_pending_human_gates` to find pending gates and `respond_human_gate` with the `requestId`, optional `choiceId`, optional `inputs`, and a clear `responder` value. Run the MCP server with the same Auditaur data directory as the drill so it can see the session-local request files. If the `auditaur-drills` canvas is installed (the Auditaur Copilot plugin or `auditaur init extension`), open the `auditaur-drills` canvas with `input.gate` set to the pending gate (or call `show_gate` on an open one) so the user gets an action card on its Gate page and can click a response. Terminal ENTER/choice input remains the fallback when no MCP or canvas client is available.
 
 ## Common failure patterns
 

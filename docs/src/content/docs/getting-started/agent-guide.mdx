@@ -62,9 +62,9 @@ gh skill publish .github --dry-run
 
 `gh skill preview` reads from GitHub, so previewing `sethjuarez/auditaur` will only find `auditaur-debug` after the branch containing `.github/skills/auditaur-debug/SKILL.md` is pushed/merged.
 
-## Install the canvas extensions
+## Install the canvas
 
-If the repo uses Copilot app canvases, install the Auditaur canvas extensions alongside the skill:
+In the Copilot app, prefer the Auditaur Copilot plugin: it ships the skill, the `auditaur-drills` canvas, and the MCP server without committing files (see [Drill tests](/getting-started/drill-tests/#in-the-copilot-app)). To commit the canvas to the consuming repo instead:
 
 ```powershell
 auditaur init extension

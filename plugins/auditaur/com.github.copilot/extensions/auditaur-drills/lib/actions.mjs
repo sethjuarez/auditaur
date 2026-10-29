@@ -92,9 +92,9 @@ function appActions(features, openPanel) {
         },
         {
             name: "health",
-            description: "Which build the canvas runs, whether its files changed on disk since (then extensions need a reload), and the panel's route.",
+            description: "Which build the canvas runs, whether its files changed on disk since (then extensions need a reload), its install and plugin version, the CLI version and any mismatch, and the panel's route.",
             readOnly: true,
-            handler: async (panel) => ({ ...(await health()), route: panel.route }),
+            handler: async (panel) => ({ ...(await health(panel.shared.cli)), route: panel.route }),
         },
         {
             name: "cancel",
