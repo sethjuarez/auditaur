@@ -127,6 +127,8 @@ pub fn test(options: TestOptions) -> Result<i32> {
         ready_timeout: Duration::from_secs(timeout_seconds),
         workspace_root: workspace.clone(),
         cancel: Arc::clone(&cancel),
+        log_dir: None,
+        launches: 0,
     };
 
     let filters = &options.filters;
@@ -150,6 +152,7 @@ pub fn test(options: TestOptions) -> Result<i32> {
         },
         &plan,
     )?;
+    host.log_dir = Some(writer.dir().to_path_buf());
     let started = Instant::now();
     let mut reporter = LineReporter {
         // Keep stdout clean for the JSON report.

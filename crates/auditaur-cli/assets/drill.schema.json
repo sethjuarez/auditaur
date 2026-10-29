@@ -318,7 +318,7 @@
         "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
         "run": { "$ref": "#/$defs/text", "description": "Program to run, without a shell." },
         "args": { "type": "array", "items": { "type": "string" } },
-        "cwd": { "$ref": "#/$defs/text", "description": "Working directory inside the workspace (default: the workspace root)." },
+        "cwd": { "$ref": "#/$defs/text", "description": "Working directory inside the workspace (default: the workspace root), or one built from a ${NAME} drill env variable, which may be anywhere." },
         "exitCode": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "description": "Expected exit code (default 0)." },
         "stdout": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stdout must contain." },
         "stderr": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stderr must contain." }
@@ -385,7 +385,7 @@
         "run": { "$ref": "#/$defs/text" },
         "args": { "type": "array", "items": { "type": "string" } },
         "timeoutMs": { "type": "integer", "minimum": 1, "default": 30000 },
-        "cwd": { "type": "string", "description": "Must stay inside the workspace." },
+        "cwd": { "type": "string", "description": "Must stay inside the workspace unless built from a ${NAME} drill env variable." },
         "always": { "type": "boolean", "description": "Run even after a failure." }
       }
     },

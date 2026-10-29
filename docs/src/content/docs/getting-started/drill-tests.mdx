@@ -85,7 +85,7 @@ Every step accepts `name` and `timeoutMs`.
 
 | Kind | Steps |
 | --- | --- |
-| Actions | `click`, `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`), `hover`, `select` + `value` or `values`, `check`, `uncheck` |
+| Actions | `click`, `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `select` + `value` or `values`, `check`, `uncheck` |
 | Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload` |
 | Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
@@ -102,7 +102,7 @@ Assertions retry until they pass or `expectTimeoutMs` (default 5s) runs out. Add
 
 Telemetry assertions only see what the app recorded after the test started. Negative, exact-count, `expectNoTelemetry`, and `expectNoErrors` assertions check what has been recorded so far, so place them after the actions they cover.
 
-`expectIpc` and `expectSpan` take a name or `{ "pattern": "regex" }`. `attributes` maps attribute keys to exact values or `{ "pattern": "regex" }`. `expectNoTelemetry` fails if any log, span, IPC call, or event (narrow with `in`) contains the text or pattern anywhere in its data, which makes a privacy guard:
+`expectIpc` and `expectSpan` take a name or `{ "pattern": "regex" }`. A backend `#[auditaur::command]` span is named after its Rust function, so `"expectSpan": "save_project"` checks a command even when the frontend doesn't instrument it. `attributes` maps attribute keys to exact values or `{ "pattern": "regex" }`. `expectNoTelemetry` fails if any log, span, IPC call, or event (narrow with `in`) contains the text or pattern anywhere in its data, which makes a privacy guard:
 
 ```json
 { "expectSpan": "chat.send", "status": "ok", "attributes": { "harness": "prompty" } },
@@ -112,8 +112,10 @@ Telemetry assertions only see what the app recorded after the test started. Nega
 `run` runs a program (no shell) mid-test, with the same `args` and workspace-contained `cwd` as hooks, bounded by the step's `timeoutMs`. It passes when the exit code is `exitCode` (default 0) and `stdout`/`stderr` contain the given text or `{ "pattern": "regex" }`. Its output is attached to the step, as with hooks, so don't print secrets:
 
 ```json
-{ "run": "git", "args": ["log", "-1", "--format=%an <%ae>"], "cwd": "fixture", "stdout": "Ada <ada@example.com>" }
+{ "run": "git", "args": ["log", "-1", "--format=%an <%ae>"], "cwd": "${APP_PROJECT}", "stdout": "Ada <ada@example.com>" }
 ```
+
+`${NAME}` in `args` and `cwd` (hooks and `run` steps) expands from suite `env` and `$AUDITAUR_DRILL_ENV_FILE`; other `${…}` text passes through to the command. A literal `cwd` is relative to the workspace and must stay inside it; a `cwd` built from a drill variable, such as a temp fixture, may be anywhere.
 
 ### Human gates
 
@@ -129,7 +131,7 @@ A `gate` step pauses the test until a person acts. It takes the same object as a
     ] } }
 ```
 
-Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait is off the test clock, as with Playwright's `page.pause()`: the gate's own `timeoutMs` (default 5 minutes) or a step `timeoutMs` bounds it, and the test's remaining budget is unchanged when it resumes.
+Custom `choices` replace the default Continue, so include one with `"outcome": "continue"` or the test can't proceed. Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait is off the test clock, as with Playwright's `page.pause()`: the gate's own `timeoutMs` (default 5 minutes) or a step `timeoutMs` bounds it, and the test's remaining budget is unchanged when it resumes.
 
 ### Locators
 
@@ -190,7 +192,7 @@ A missing baseline is written and the test still fails, so review the new baseli
 
 ## Run folders
 
-Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress.
+Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes the redacted end of it.
 
 ```text
 run.json                         run report, updated as the run progresses

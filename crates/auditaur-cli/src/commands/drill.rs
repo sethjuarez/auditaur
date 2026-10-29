@@ -445,7 +445,7 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
     }
 
     let spawn_start = Instant::now();
-    let mut child = match spawn_command(&options.command, &options.environment) {
+    let mut child = match spawn_command(&options.command, &options.environment, None) {
         Ok(child) => {
             let root_pid = child.id();
             report.command.root_pid = Some(root_pid);
@@ -592,7 +592,7 @@ fn load_script(options: &DrillRunOptions) -> Result<Option<ResolvedDrillScript>>
         .and_then(|dir| {
             dunce::canonicalize(dir).context("failed to canonicalize current workspace")
         })?;
-    let script_path = resolve_existing_path(&workspace_root, path)
+    let script_path = resolve_existing_path(&workspace_root, path, false)
         .with_context(|| format!("invalid script path `{}`", path.display()))?;
     let contents = fs::read_to_string(&script_path)
         .with_context(|| format!("failed to read `{}`", script_path.display()))?;
@@ -783,14 +783,17 @@ fn resolve_hooks(
 ) -> Result<Vec<ResolvedDrillHook>> {
     hooks
         .into_iter()
-        .map(|hook| resolve_hook(workspace_root, hook, lifecycle))
+        .map(|hook| resolve_hook(workspace_root, hook, lifecycle, false))
         .collect()
 }
 
+/// `cwd_from_env` lets a cwd computed from a drill env var (e.g. a temp fixture made in
+/// setup) leave the workspace; literal paths must stay inside it so suites stay portable.
 fn resolve_hook(
     workspace_root: &Path,
     hook: DrillHook,
     lifecycle: DrillHookLifecycle,
+    cwd_from_env: bool,
 ) -> Result<ResolvedDrillHook> {
     if hook.timeout_ms == 0 {
         return Err(anyhow!(
@@ -806,14 +809,15 @@ fn resolve_hook(
             hook.name
         ));
     }
-    let cwd = resolve_existing_path(workspace_root, &hook.cwd).with_context(|| {
-        format!(
-            "{} hook `{}` has invalid cwd `{}`",
-            lifecycle_name(lifecycle),
-            hook.name,
-            hook.cwd.display()
-        )
-    })?;
+    let cwd =
+        resolve_existing_path(workspace_root, &hook.cwd, cwd_from_env).with_context(|| {
+            format!(
+                "{} hook `{}` has invalid cwd `{}`",
+                lifecycle_name(lifecycle),
+                hook.name,
+                hook.cwd.display()
+            )
+        })?;
     if !cwd.is_dir() {
         return Err(anyhow!(
             "{} hook `{}` cwd `{}` is not a directory",
@@ -837,7 +841,11 @@ fn resolve_hook(
 /// checked on `std` canonical (verbatim on Windows) forms of both sides so a plain root still
 /// matches; the result is then simplified so hooks get a normal cwd where possible (`cmd.exe`
 /// refuses `\\?\` cwds).
-fn resolve_existing_path(workspace_root: &Path, path: &Path) -> Result<PathBuf> {
+fn resolve_existing_path(
+    workspace_root: &Path,
+    path: &Path,
+    allow_outside: bool,
+) -> Result<PathBuf> {
     let root = workspace_root.canonicalize().with_context(|| {
         format!(
             "failed to canonicalize workspace `{}`",
@@ -856,7 +864,7 @@ fn resolve_existing_path(workspace_root: &Path, path: &Path) -> Result<PathBuf> 
             workspace_root.display()
         )
     })?;
-    if !resolved.starts_with(&root) {
+    if !allow_outside && !resolved.starts_with(&root) {
         return Err(anyhow!(
             "`{}` resolves outside workspace `{}`",
             path.display(),
@@ -1550,8 +1558,13 @@ fn apply_gate_queue_response(
         .unwrap_or(DEFAULT_MANUAL_CHOICE_ID);
     let Some(choice) = select_gate_choice(gate, choice_line)? else {
         return Err(anyhow!(
-            "human gate response `{}` did not select a valid choice",
-            request.request_id
+            "human gate response `{}` did not select a valid choice ({}; valid: {})",
+            request.request_id,
+            response
+                .choice_id
+                .as_deref()
+                .map_or("no choiceId".to_string(), |id| format!("got `{id}`")),
+            valid_choice_ids(gate)
         ));
     };
     if choice.outcome == DrillGateChoiceOutcome::Retry {
@@ -1908,6 +1921,17 @@ fn apply_gate_response(
 }
 
 const DEFAULT_MANUAL_CHOICE_ID: &str = "__manual_continue";
+
+fn valid_choice_ids(gate: &ResolvedDrillGate) -> String {
+    if gate.choices.is_empty() {
+        return "none; this gate takes no choice".to_string();
+    }
+    gate.choices
+        .iter()
+        .map(|choice| format!("`{}`", choice.id))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 fn select_gate_choice(gate: &ResolvedDrillGate, line: &str) -> Result<Option<DrillGateChoice>> {
     let input = line.trim();
@@ -2356,8 +2380,13 @@ pub(crate) fn run_hook_json(
     } else {
         DrillHookLifecycle::Setup
     };
-    let hook: DrillHook = serde_json::from_value(value.clone())?;
-    let mut resolved = resolve_hook(workspace_root, hook, lifecycle)?;
+    let mut hook: DrillHook = serde_json::from_value(value.clone())?;
+    for arg in &mut hook.args {
+        *arg = expand_drill_env(arg, env).0;
+    }
+    let (cwd, cwd_from_env) = expand_drill_env(&hook.cwd.to_string_lossy(), env);
+    hook.cwd = PathBuf::from(cwd);
+    let mut resolved = resolve_hook(workspace_root, hook, lifecycle, cwd_from_env)?;
     resolved.env = env.to_vec();
     let report = execute_hook(&resolved, lifecycle);
     let kind = hook_exit_kind(&report);
@@ -2366,6 +2395,39 @@ pub(crate) fn run_hook_json(
         timed_out: kind == HookExitKind::TimedOut,
         report: serde_json::to_value(&report)?,
     })
+}
+
+/// Replace `${NAME}` with drill env values (suite `env` and `$AUDITAUR_DRILL_ENV_FILE`),
+/// returning whether anything expanded. Other text, including `${NAME}` for names outside the
+/// drill env, is left for the command itself, so shell-script arguments keep working.
+fn expand_drill_env(text: &str, env: &[(String, String)]) -> (String, bool) {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut expanded = false;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let value = after.find('}').and_then(|end| {
+            let name = &after[..end];
+            env.iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| (value, end))
+        });
+        match value {
+            Some((value, end)) => {
+                out.push_str(value);
+                rest = &after[end + 1..];
+                expanded = true;
+            }
+            None => {
+                out.push_str("${");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    (out, expanded)
 }
 
 fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> DrillHookReport {
@@ -2880,17 +2942,31 @@ fn wait_for_debug_ready(
     }
 }
 
-pub(crate) fn spawn_command(command: &[String], environment: &[(String, String)]) -> Result<Child> {
+/// Spawn the app command. Its stdout and stderr go to `log` when given (a file, so a chatty
+/// app can never block on a full pipe), otherwise nowhere.
+pub(crate) fn spawn_command(
+    command: &[String],
+    environment: &[(String, String)],
+    log: Option<&Path>,
+) -> Result<Child> {
     if command.is_empty() {
         return Err(anyhow!("drill run requires a command after `--`"));
     }
+    let (stdout, stderr) = match log {
+        Some(path) => {
+            let file = fs::File::create(path)
+                .with_context(|| format!("failed to create `{}`", path.display()))?;
+            (Stdio::from(file.try_clone()?), Stdio::from(file))
+        }
+        None => (Stdio::null(), Stdio::null()),
+    };
     let mut child_command = Command::new(&command[0]);
     child_command
         .args(&command[1..])
         .envs(environment.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(stdout)
+        .stderr(stderr);
     #[cfg(windows)]
     child_command.creation_flags(0x0800_0000);
     #[cfg(not(windows))]
@@ -3617,6 +3693,32 @@ mod tests {
     }
 
     #[test]
+    fn lists_valid_gate_choice_ids() {
+        let choice = |id: &str, outcome| DrillGateChoice {
+            id: id.to_string(),
+            label: id.to_string(),
+            outcome,
+        };
+        let mut gate = ResolvedDrillGate {
+            name: "Approve".to_string(),
+            instructions: String::new(),
+            selector: None,
+            expect_text: None,
+            timeout_ms: 1_000,
+            manual_continue: false,
+            choices: vec![
+                choice("done", DrillGateChoiceOutcome::Continue),
+                choice("blocked", DrillGateChoiceOutcome::Fail),
+            ],
+            inputs: Vec::new(),
+            clipboard: None,
+        };
+        assert_eq!(valid_choice_ids(&gate), "`done`, `blocked`");
+        gate.choices.clear();
+        assert!(valid_choice_ids(&gate).contains("no choice"));
+    }
+
+    #[test]
     fn redacts_sensitive_clipboard_reports() {
         let clipboard = DrillGateClipboard {
             label: "Device code".to_string(),
@@ -3668,9 +3770,55 @@ mod tests {
             always: false,
         };
 
-        let error = resolve_hook(&workspace_root, hook, DrillHookLifecycle::Setup).unwrap_err();
+        let error =
+            resolve_hook(&workspace_root, hook, DrillHookLifecycle::Setup, false).unwrap_err();
 
         assert!(error.to_string().contains("invalid cwd"));
+    }
+
+    #[test]
+    fn expands_only_drill_env_vars() {
+        let env = [("FIXTURE".to_string(), "/tmp/fx".to_string())];
+        assert_eq!(
+            expand_drill_env("${FIXTURE}/repo", &env),
+            ("/tmp/fx/repo".to_string(), true)
+        );
+        for literal in ["${HOME}", "${env:PATH}", "$FIXTURE", "${FIXTURE", "plain"] {
+            assert_eq!(
+                expand_drill_env(literal, &env),
+                (literal.to_string(), false)
+            );
+        }
+    }
+
+    #[test]
+    fn env_expanded_hook_cwd_may_leave_the_workspace() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let env = [(
+            "FIXTURE".to_string(),
+            outside.path().to_string_lossy().into_owned(),
+        )];
+        let hook = serde_json::json!({
+            "name": "Fixture",
+            "run": "git",
+            "args": ["--version"],
+            "cwd": "${FIXTURE}",
+            "timeoutMs": 30_000,
+        });
+
+        let run = run_hook_json(workspace.path(), &hook, false, &env).unwrap();
+        assert!(run.passed, "{}", run.report);
+
+        let mut literal = hook.clone();
+        literal["cwd"] = Value::String(outside.path().to_string_lossy().into_owned());
+        let Err(error) = run_hook_json(workspace.path(), &literal, false, &env) else {
+            panic!("a literal cwd outside the workspace must be rejected");
+        };
+        assert!(
+            format!("{error:#}").contains("outside workspace"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -3686,7 +3834,8 @@ mod tests {
         };
 
         // `drill test` passes `current_dir()` as-is, which is never verbatim on Windows.
-        let resolved = resolve_hook(workspace.path(), hook, DrillHookLifecycle::Setup).unwrap();
+        let resolved =
+            resolve_hook(workspace.path(), hook, DrillHookLifecycle::Setup, false).unwrap();
 
         assert_eq!(resolved.cwd, dunce::canonicalize(workspace.path()).unwrap());
         assert!(!resolved.cwd.to_string_lossy().starts_with(r"\\?\"));
@@ -3706,7 +3855,7 @@ mod tests {
             always: false,
         };
 
-        let error = resolve_hook(&workspace, hook, DrillHookLifecycle::Setup).unwrap_err();
+        let error = resolve_hook(&workspace, hook, DrillHookLifecycle::Setup, false).unwrap_err();
 
         assert!(format!("{error:#}").contains("outside workspace"));
     }

@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createSingleFlightPoller,
   drainPendingRequests,
   executeDriveBridgeRequest,
+  parseKeyChord,
   setDriveBridgeNativeScreenshotInvokerForTests,
 } from './drive-bridge';
 import type { DriveBridgeRequest } from './types';
@@ -163,6 +167,75 @@ describe('drive bridge selector operations', () => {
       visibleOnly: false,
       text: 'Bridge ready',
     });
+  });
+
+  it('reports a missing selector as not found instead of throwing', async () => {
+    installDom([]);
+
+    await expect(executeDriveBridgeRequest(request('exists', '#later'))).resolves.toEqual({
+      exists: false,
+      visibleOnly: false,
+      error: 'Selector `#later` was not found.',
+    });
+    await expect(executeDriveBridgeRequest(request('text', '#later'))).resolves.toMatchObject({
+      found: false,
+      error: 'Selector `#later` was not found.',
+    });
+  });
+
+  it('declares no functions inside blocks, which bundlers lower to TDZ-prone `let`', () => {
+    const file = fileURLToPath(new URL('./drive-bridge.ts', import.meta.url));
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true);
+    const offenders: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isFunctionDeclaration(node) && (ts.isBlock(node.parent) || ts.isCaseClause(node.parent) || ts.isDefaultClause(node.parent))) {
+        const parentIsFunctionBody = ts.isBlock(node.parent) && ts.isFunctionLike(node.parent.parent);
+        if (!parentIsFunctionBody) {
+          offenders.push(node.name?.text ?? '<anonymous>');
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(offenders).toEqual([]);
+  });
+
+  it('presses chords with modifier flags, releasing modifiers in reverse', async () => {
+    class RecordingKeyboardEvent extends Event {
+      constructor(type: string, readonly init: KeyboardEventInit) {
+        super(type, init);
+      }
+    }
+    const events: string[] = [];
+    const editor = new FakeElement('#editor');
+    editor.dispatchEvent = (event: Event) => {
+      const { key, ctrlKey, shiftKey } = (event as RecordingKeyboardEvent).init;
+      events.push(`${event.type} ${key}${ctrlKey ? ' ctrl' : ''}${shiftKey ? ' shift' : ''}`);
+      return true;
+    };
+    installDom([editor]);
+    Object.defineProperty(globalThis, 'KeyboardEvent', { value: RecordingKeyboardEvent, configurable: true });
+
+    await executeDriveBridgeRequest(request('press', '#editor', 'Control+Shift+s'));
+    expect(events).toEqual([
+      'keydown Control ctrl',
+      'keydown Shift ctrl shift',
+      'keydown s ctrl shift',
+      'keyup s ctrl shift',
+      'keyup Shift ctrl',
+      'keyup Control',
+    ]);
+  });
+
+  it('parses key chords like Playwright', () => {
+    expect(parseKeyChord('Enter')).toEqual({ modifiers: [], key: 'Enter' });
+    expect(parseKeyChord('+')).toEqual({ modifiers: [], key: '+' });
+    expect(parseKeyChord('Shift++')).toEqual({ modifiers: ['Shift'], key: '+' });
+    expect(parseKeyChord('ControlOrMeta+a', true)).toEqual({ modifiers: ['Meta'], key: 'a' });
+    expect(parseKeyChord('ControlOrMeta+a', false)).toEqual({ modifiers: ['Control'], key: 'a' });
+    expect(() => parseKeyChord('Ctrl+s')).toThrow('unknown modifier `Ctrl`');
+    expect(() => parseKeyChord('Control+')).toThrow('invalid key chord');
+    expect(() => parseKeyChord('')).toThrow('invalid key chord');
   });
 
   it('clicks and fills selector targets', async () => {

@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    fs,
     path::{Path, PathBuf},
     process::Child,
     sync::{
@@ -14,7 +15,10 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use auditaur_collector::exporter_sqlite::SqliteStore;
-use auditaur_core::storage::{RelatedTelemetry, RelatedTelemetryQuery};
+use auditaur_core::{
+    redaction::redact_json,
+    storage::{RelatedTelemetry, RelatedTelemetryQuery},
+};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
@@ -53,6 +57,8 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The per-attempt telemetry slice is best effort; don't stall the run on a gone app.
 const SLICE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 const RELOAD_POLL_TIMEOUT: Duration = Duration::from_secs(2);
+/// How much of the app's output a launch failure quotes; the full log stays in the run.
+const LAUNCH_OUTPUT_SHOWN: usize = 2_000;
 
 /// How each suite gets its app.
 #[derive(Debug, Clone)]
@@ -73,6 +79,10 @@ pub struct RealHost {
     pub workspace_root: PathBuf,
     /// Set by Ctrl+C or `cancel.request`; stops the readiness wait early.
     pub cancel: Arc<AtomicBool>,
+    /// Where each launch's stdout/stderr go, as `app-<n>.log` (the run directory).
+    pub log_dir: Option<PathBuf>,
+    /// Launches so far, numbering the logs.
+    pub launches: usize,
 }
 
 impl Host for RealHost {
@@ -148,17 +158,22 @@ impl RealHost {
     }
 
     fn spawn(
-        &self,
+        &mut self,
         command: &[String],
         environment: &[(String, String)],
     ) -> Result<Box<dyn AppDriver>> {
+        self.launches += 1;
+        let log = self
+            .log_dir
+            .as_ref()
+            .map(|dir| dir.join(format!("app-{}.log", self.launches)));
         let preexisting = drill::matching_sessions(&self.app)?;
         let preexisting_ids: HashSet<&str> = preexisting
             .iter()
             .map(|app| app.instance_id.as_str())
             .collect();
         let started_at = OffsetDateTime::now_utc();
-        let mut child = drill::spawn_command(command, environment)?;
+        let mut child = drill::spawn_command(command, environment, log.as_deref())?;
         let deadline = Instant::now() + self.ready_timeout;
         let ready = self.wait_until_ready(&mut child, started_at, &preexisting_ids, deadline);
         let session = ready.and_then(|app| {
@@ -170,7 +185,10 @@ impl RealHost {
             Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child)))),
             Err(error) => {
                 let _ = drill::cleanup_child_tree(&mut child);
-                Err(error)
+                match log {
+                    Some(log) => Err(anyhow!("{error:#}\n{}", output_tail(&log))),
+                    None => Err(error),
+                }
             }
         }
     }
@@ -377,14 +395,39 @@ fn about(target: &Locator, error: String) -> String {
     }
 }
 
+/// The redacted end of a launch log, for a launch failure message.
+fn output_tail(log: &Path) -> String {
+    let text = match fs::read(log) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => return format!("could not read app output `{}`: {error}", log.display()),
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return format!("the app printed nothing (`{}`)", log.display());
+    }
+    let start = text
+        .char_indices()
+        .rev()
+        .nth(LAUNCH_OUTPUT_SHOWN - 1)
+        .map_or(0, |(at, _)| at);
+    let shown = redact_json(&Value::String(text[start..].to_string()), &[]).value;
+    let shown = shown.as_str().unwrap_or_default();
+    let ellipsis = if start > 0 { "…" } else { "" };
+    format!("app output (`{}`):\n{ellipsis}{shown}", log.display())
+}
+
 /// First `@auditaur/api` release whose drive bridge understands `locator:` selectors and the
-/// drill actions (`dblclick`, `inspect`).
-const MIN_DRILL_API_VERSION: &str = "0.7.0";
+/// drill actions (`dblclick`, `inspect`), and reports a missing element without throwing once
+/// bundled (0.7.0 threw, so every auto-wait failed at once).
+const MIN_DRILL_API_VERSION: &str = "0.7.1";
+
+/// Matches nothing, so the probe exercises the bridge's not-found reply.
+const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
 
 /// Fail the launch, not step 1, when the app's bridge predates drill locators. Only a known
 /// stale-bridge reply fails; anything else is left for the steps to report.
 fn check_drill_support(session: &BridgeSession) -> Result<()> {
-    let probe = bridge_selector(&Locator::Css("html".to_string()));
+    let probe = bridge_selector(&Locator::Css(MISSING_PROBE.to_string()));
     let reply = session.request(
         "exists",
         Some(probe),
@@ -419,12 +462,13 @@ fn clip_value(value: &Value) -> String {
 fn is_stale_bridge(error: &str) -> bool {
     (error.contains("is not a valid selector") && error.contains(LOCATOR_PREFIX))
         || error.contains("unsupported drive bridge action")
+        || error.contains("'selectorNotFoundMessage' before initialization")
 }
 
 fn explain(error: String) -> String {
     if is_stale_bridge(&error) {
         format!(
-            "{error}\nThis app's @auditaur/api predates `auditaur drill test`; upgrade it to {MIN_DRILL_API_VERSION} or newer to drive this app with drills."
+            "{error}\nThis app's @auditaur/api is too old for `auditaur drill test`; upgrade it to {MIN_DRILL_API_VERSION} or newer to drive this app with drills."
         )
     } else {
         error
@@ -1523,6 +1567,53 @@ fn file_safe(name: &str) -> String {
 }
 
 #[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn launch_failure_quotes_the_app_output() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let command: Vec<String> = if cfg!(windows) {
+            ["cmd", "/c", "echo panicked at src/main.rs & exit 101"]
+        } else {
+            ["sh", "-c", "echo panicked at src/main.rs; exit 101"]
+        }
+        .map(String::from)
+        .to_vec();
+        let mut host = RealHost {
+            app: "auditaur-launch-log-test-no-such-app".into(),
+            source: LaunchSource::Command(command.clone()),
+            require_frontend: false,
+            ready_timeout: Duration::from_secs(30),
+            workspace_root: dir.path().to_path_buf(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            log_dir: Some(dir.path().to_path_buf()),
+            launches: 0,
+        };
+
+        let Err(error) = host.spawn(&command, &[]) else {
+            panic!("the app exits before it is ready");
+        };
+
+        let message = format!("{error:#}");
+        assert!(message.contains("exited"), "{message}");
+        assert!(message.contains("panicked at src/main.rs"), "{message}");
+        assert!(message.contains("app-1.log"), "{message}");
+    }
+
+    #[test]
+    fn output_tail_keeps_the_end() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log = dir.path().join("app-1.log");
+        fs::write(&log, format!("{}END", "x".repeat(LAUNCH_OUTPUT_SHOWN))).unwrap();
+        let tail = output_tail(&log);
+        assert!(tail.contains("…") && tail.ends_with("END"), "{tail}");
+        fs::write(&log, "  \n").unwrap();
+        assert!(output_tail(&log).contains("printed nothing"));
+    }
+}
+
+#[cfg(test)]
 mod selector_tests {
     use super::*;
 
@@ -1600,7 +1691,11 @@ mod selector_tests {
     #[test]
     fn explains_old_bridges() {
         let error = "click failed: 'locator:{}' is not a valid selector".to_string();
-        assert!(explain(error).contains("upgrade it to 0.7.0 or newer"));
+        assert!(explain(error).contains("upgrade it to 0.7.1 or newer"));
+        assert!(explain(
+            "ReferenceError: Cannot access 'selectorNotFoundMessage' before initialization".into()
+        )
+        .contains("upgrade it"));
         assert!(explain("unsupported drive bridge action: inspect".into()).contains("upgrade it"));
         assert_eq!(explain("selector not found".into()), "selector not found");
     }
