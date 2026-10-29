@@ -1417,6 +1417,44 @@ fn init_extension_restores_missing_files_without_touching_edits() {
     assert_eq!(overwritten["extensions"][0]["status"], "overwritten");
 }
 
+#[test]
+fn init_extension_removes_only_the_unedited_legacy_gate_prototype() {
+    let shipped = include_str!("fixtures/auditaur-gate-extension.mjs").replace("\r\n", "\n");
+    for (contents, expected) in [
+        (shipped.clone(), "removed"),
+        (shipped.replace('\n', "\r\n"), "removed"),
+        (
+            shipped.replace("Auditaur Manual Gate", "Our Gate"),
+            "retired",
+        ),
+    ] {
+        let repo = TempDir::new().unwrap();
+        let legacy = repo.path().join(".github/extensions/auditaur-gate");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("extension.mjs"), &contents).unwrap();
+        let args = [
+            "init",
+            "extension",
+            "--path",
+            repo.path().to_str().unwrap(),
+            "--json",
+        ];
+
+        let result = run_json(args);
+        assert_eq!(result["extensions"][0]["name"], "auditaur-drills");
+        assert_eq!(result["extensions"][1]["name"], "auditaur-gate");
+        assert_eq!(result["extensions"][1]["status"], expected);
+        assert_eq!(legacy.exists(), expected == "retired");
+
+        // A kept prototype is reported on every run; a removed one leaves nothing to do.
+        if expected == "retired" {
+            assert_eq!(run_json(args)["extensions"][0]["status"], "skipped");
+        } else {
+            assert!(run_failure(args).contains("already exist"));
+        }
+    }
+}
+
 fn read_tree(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, String>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

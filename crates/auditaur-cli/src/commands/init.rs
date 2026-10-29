@@ -16,6 +16,11 @@ const AGENTS_SKILL_RELATIVE_PATH: [&str; 4] = [".agents", "skills", "auditaur-de
 const GITHUB_DRILLS_EXTENSION_RELATIVE_DIR: [&str; 3] =
     [".github", "extensions", "auditaur-drills"];
 
+/// The gate canvas prototype that `init extension` wrote before the drills canvas, whose Gate page
+/// replaces it. Only the shipped, unedited file is removed: FNV-1a 64 of its LF-normalized text.
+const LEGACY_GATE_EXTENSION_RELATIVE_DIR: [&str; 3] = [".github", "extensions", "auditaur-gate"];
+const LEGACY_GATE_EXTENSION_FNV: u64 = 0x4694_631c_8ad1_f50b;
+
 /// Embeds files from `assets/auditaur-drills` under their path relative to the extension folder.
 macro_rules! drills_extension_files {
     ($($path:literal,)*) => {
@@ -230,7 +235,8 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
             (present == files.len(), present > 0),
         )
     });
-    if !force && targets.iter().all(|(_, _, _, (complete, _))| *complete) {
+    let legacy = retire_legacy_gate(&root)?;
+    if legacy.is_none() && !force && targets.iter().all(|(_, _, _, (complete, _))| *complete) {
         return Err(anyhow!(
             "Auditaur canvas extensions already exist at {}. Pass --force to overwrite them.",
             targets
@@ -260,6 +266,7 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
             status,
         });
     }
+    extensions.extend(legacy);
     let result = InitExtensionResult {
         ok: true,
         path: extensions[0].path.clone(),
@@ -277,6 +284,14 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
                     "Restored missing files of the {} canvas extension at {}",
                     ext.name, ext.path
                 ),
+                "removed" => println!(
+                    "Removed the retired {} prototype at {}; the drills canvas has a Gate page",
+                    ext.name, ext.path
+                ),
+                "retired" => println!(
+                    "The retired {} prototype at {} was edited, so it was kept; delete it, the drills canvas has a Gate page",
+                    ext.name, ext.path
+                ),
                 _ => println!(
                     "Kept existing {} canvas extension at {} (pass --force to overwrite)",
                     ext.name, ext.path
@@ -285,6 +300,49 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
         }
         Ok(())
     })
+}
+
+/// Removes the gate canvas prototype when it is exactly what Auditaur wrote ("removed");
+/// an edited copy, or one with other files, is kept and reported ("retired").
+fn retire_legacy_gate(root: &Path) -> Result<Option<InitExtension>> {
+    let dir = LEGACY_GATE_EXTENSION_RELATIVE_DIR
+        .iter()
+        .fold(root.to_path_buf(), |path, segment| path.join(segment));
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let entry = dir.join("extension.mjs");
+    let only_entry = fs::read_dir(&dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
+        .map(|item| item.map(|item| item.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        == ["extension.mjs"];
+    let shipped = only_entry
+        && fs::read(&entry)
+            .is_ok_and(|bytes| legacy_fingerprint(&bytes) == LEGACY_GATE_EXTENSION_FNV);
+    if shipped {
+        // File, then the (now empty) folder: anything added meanwhile makes this fail, not vanish.
+        fs::remove_file(&entry)
+            .and_then(|()| fs::remove_dir(&dir))
+            .with_context(|| format!("failed to remove {}", dir.display()))?;
+    }
+    Ok(Some(InitExtension {
+        name: "auditaur-gate",
+        path: entry.to_string_lossy().to_string(),
+        status: if shipped { "removed" } else { "retired" },
+    }))
+}
+
+/// FNV-1a 64 over the text with CRLF read as LF, so a checkout's line endings don't matter.
+fn legacy_fingerprint(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            continue;
+        }
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn file_path(dir: &Path, relative: &str) -> PathBuf {
