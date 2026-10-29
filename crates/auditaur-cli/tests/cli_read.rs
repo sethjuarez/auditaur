@@ -1130,7 +1130,22 @@ fn mcp_drill_tools_list_run_show_and_cancel() {
         }
         thread::sleep(Duration::from_millis(200));
     };
-    assert_eq!(shown["status"], "failed", "{shown}");
+    let run_log = || {
+        let moved = workspace
+            .join(".auditaur")
+            .join("drill-runs")
+            .join(&run_id)
+            .join("drill-test.log");
+        fs::read_to_string(&moved)
+            .or_else(|_| fs::read_to_string(started["log"].as_str().unwrap_or_default()))
+            .unwrap_or_else(|error| format!("<no run log: {error}>"))
+    };
+    assert_eq!(
+        shown["status"],
+        "failed",
+        "{shown}\nrun log:\n{}",
+        run_log()
+    );
     assert_eq!(shown["totals"]["tests"], 1);
     assert_eq!(
         shown["invocation"]["args"],
