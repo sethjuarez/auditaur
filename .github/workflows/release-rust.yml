@@ -33,6 +33,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify skill asset matches repo skill
         run: python scripts/check-skill-drift.py
+      - name: Verify @auditaur/api changes are released
+        run: python scripts/check-api-released.py
       - name: Verify Rust release graph
         run: |
           python - <<'PY'
@@ -123,6 +125,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify skill asset matches repo skill
         run: python scripts/check-skill-drift.py
+      - name: Verify @auditaur/api changes are released
+        run: python scripts/check-api-released.py
       - name: Verify Rust release graph
         run: |
           python - <<'PY'

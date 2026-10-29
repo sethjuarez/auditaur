@@ -96,3 +96,5 @@ Before releasing, run:
 ```powershell
 .\scripts\preflight-release.ps1
 ```
+
+Release `@auditaur/api` before the Rust crates whenever `packages/api/src` changed: run the **Release Frontend API** workflow, merge its release PR, then run it again to publish. The Rust release and preflight fail until that's done (`scripts/check-api-released.py`).
