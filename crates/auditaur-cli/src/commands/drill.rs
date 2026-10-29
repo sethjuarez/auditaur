@@ -445,7 +445,7 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
     }
 
     let spawn_start = Instant::now();
-    let mut child = match spawn_command(&options.command, &options.environment) {
+    let mut child = match spawn_command(&options.command, &options.environment, None) {
         Ok(child) => {
             let root_pid = child.id();
             report.command.root_pid = Some(root_pid);
@@ -2926,17 +2926,31 @@ fn wait_for_debug_ready(
     }
 }
 
-pub(crate) fn spawn_command(command: &[String], environment: &[(String, String)]) -> Result<Child> {
+/// Spawn the app command. Its stdout and stderr go to `log` when given (a file, so a chatty
+/// app can never block on a full pipe), otherwise nowhere.
+pub(crate) fn spawn_command(
+    command: &[String],
+    environment: &[(String, String)],
+    log: Option<&Path>,
+) -> Result<Child> {
     if command.is_empty() {
         return Err(anyhow!("drill run requires a command after `--`"));
     }
+    let (stdout, stderr) = match log {
+        Some(path) => {
+            let file = fs::File::create(path)
+                .with_context(|| format!("failed to create `{}`", path.display()))?;
+            (Stdio::from(file.try_clone()?), Stdio::from(file))
+        }
+        None => (Stdio::null(), Stdio::null()),
+    };
     let mut child_command = Command::new(&command[0]);
     child_command
         .args(&command[1..])
         .envs(environment.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(stdout)
+        .stderr(stderr);
     #[cfg(windows)]
     child_command.creation_flags(0x0800_0000);
     #[cfg(not(windows))]

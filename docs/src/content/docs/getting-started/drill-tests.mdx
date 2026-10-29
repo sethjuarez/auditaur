@@ -192,7 +192,7 @@ A missing baseline is written and the test still fails, so review the new baseli
 
 ## Run folders
 
-Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress.
+Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes the redacted end of it.
 
 ```text
 run.json                         run report, updated as the run progresses
