@@ -86,7 +86,7 @@ Every step accepts `name` and `timeoutMs`.
 | Kind | Steps |
 | --- | --- |
 | Actions | `click` (+ optional `button`: `left`, `right` or `middle`), `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `drag` + `to`, `paste` (+ optional `target`; text, or `{ text, html, files }`), `select` + `value` or `values`, `check`, `uncheck` |
-| Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload` |
+| Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload`, `clearStorage` |
 | Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop), `dialog` + `respond` (answer a [native dialog](#native-dialogs)) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
 | Value assertions | `expectValue` (JavaScript) + one of `toEqual` (deep JSON equality), `toContain` (substring or array element), `toMatch` (regex string) |
@@ -241,6 +241,14 @@ A locator is a CSS string or an object:
 
 Add `nth` to pick one element when several match.
 
+Add `within` (any locator) to search only inside another element, like Playwright's chained `locator.locator()`:
+
+```json
+{ "click": { "role": "button", "name": "Delete", "within": { "role": "listitem", "name": "Draft 2" } } }
+```
+
+The container may match several elements (give it its own `nth` to pick one); matches inside any of them count. `nth` and strict mode apply to the inner locator, and errors name the chain as `outer >> inner`. Needs @auditaur/api 0.15.0 or newer. With an older bridge, which would ignore `within` and search the whole page, the step fails and says to upgrade.
+
 To find a good locator, point `drill locate` at a running app with a CSS selector. It suggests the most readable locator that matches only that element: test id, then role + name, label, placeholder, text, `#id`, and a CSS path last.
 
 ```bash
@@ -281,12 +289,14 @@ fs.appendFileSync(process.env.AUDITAUR_DRILL_ENV_FILE, `APP_PROJECT=${dir}\n`);
 
 Each suite launches the app once; its tests, retries included, share that instance, and the app closes before the next suite starts. That keeps suites fast, so state carries between tests:
 
-- Reset what a test depends on in `beforeEach`: navigate home, clear storage, or `run` a script that resets fixtures.
+- Reset what a test depends on in `beforeEach`: navigate home, `{ "clearStorage": true }`, or `run` a script that resets fixtures.
 - Put work that needs a fresh process, such as first-run flows or startup flags in `env`, in its own suite.
 - For full per-test isolation, give each test its own single-test suite, at the cost of a launch per test.
 - When tests must build on each other's state, mark the suite `"serial": true`, like Playwright's `describe.serial`. After a failure the rest are skipped, `--retries` doesn't apply, and `--last-failed` reruns the whole suite.
 
 If the app exits or restarts mid-suite, the suite's remaining tests stop rather than running against a different instance.
+
+The webview keeps its storage between launches, so state a suite leaves in `localStorage` (a saved layout, say) carries into later suites. `{ "clearStorage": true }` in `beforeAll` or `beforeEach` clears localStorage, sessionStorage, IndexedDB, Cache Storage and script-visible cookies, then reloads the page so the app starts from empty storage. It doesn't touch HttpOnly cookies, the HTTP cache, or files the app's backend wrote. Needs @auditaur/api 0.15.0 or newer.
 
 Closing the app ends its whole process tree. On Windows, WebView2's browser and GPU processes can take a minute or more to exit and release the app's data folder, and an app launched before then fails with "The requested resource is in use". So the next launch waits up to 120 s for them and notes the wait at the top of its app log. If they're still running after that, the suite fails and names the process.
 
@@ -311,7 +321,7 @@ drill-test.log                   console output, for runs started by the MCP dri
 
 Failed steps attach (where `<n>` is the 1-based step number shown in reports) `step-<n>-failure.png`, `step-<n>-failure-dom.json`, `step-<n>-failure-aria.yml`, the last 64K characters of app output (`step-<n>-failure-app-output.log`), and `step-<n>-failure-evidence.json`, which lists what was captured and why anything is missing. Evidence is captured even when the app crashed, so its output survives. If the app dies or is relaunched mid-run (for example a `tauri dev` rebuild), the test fails with `app exited: it restarted mid-run (pid A → B …)` and the remaining tests stop, instead of every step timing out against the old instance. With `--trace`, other steps attach `step-<n>-trace.png` and `step-<n>-trace-dom.json`; capture time is not counted in step durations. `on-first-retry` traces only the first retry, so passing runs stay cheap.
 
-The format is versioned by [`drill-run.schema.json`](/schemas/drill-run.schema.json). `drill show`, MCP tools, and canvases read it without recomputing anything.
+The format is versioned by [`drill-run.schema.json`](/schemas/drill-run.schema.json). `drill show`, MCP tools, and canvases read it without recomputing anything. Commands that take a run (`drill show`, `drill coverage`, …) accept `latest`, a run id or unique prefix, or the run folder's path.
 
 A running test command stops gracefully, like Ctrl+C, when a `cancel.request` file appears in its run folder.
 

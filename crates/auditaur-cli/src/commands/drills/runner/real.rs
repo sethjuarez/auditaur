@@ -309,6 +309,8 @@ pub struct BridgeDriver {
     store: Option<SqliteStore>,
     /// Cleared once the bridge says it has no `flush` action.
     can_flush: bool,
+    /// Set once the bridge is known to honor `within` (older ones ignore it and search the page).
+    within_supported: bool,
 }
 
 impl BridgeDriver {
@@ -319,8 +321,51 @@ impl BridgeDriver {
             log,
             store: None,
             can_flush: true,
+            within_supported: false,
         }
     }
+
+    /// Before the first step that scopes a locator with `within`, make sure the bridge honors
+    /// it: an older one ignores the key and would silently match across the whole page.
+    fn require_within(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepOutcome {
+        if self.within_supported || !step.kind.uses_within() {
+            return Ok(());
+        }
+        let reply = self.call(
+            ctx,
+            "exists",
+            Some(within_probe_selector()),
+            None,
+            Vec::new(),
+        );
+        let ignored = match reply {
+            Ok(reply) => bridge_ignores_within(&reply.payload),
+            // Couldn't ask; let the step run and ask again next time.
+            Err(_) => return Ok(()),
+        };
+        if ignored {
+            return Err(failed(within_upgrade_message()));
+        }
+        self.within_supported = true;
+        Ok(())
+    }
+}
+
+/// An `exists` probe for `html` inside a container that can't exist: a bridge that honors
+/// `within` finds nothing, one that ignores it finds the page.
+pub fn within_probe_selector() -> String {
+    bridge_selector(&Locator::Within {
+        locator: Box::new(Locator::Css("html".to_string())),
+        within: Box::new(Locator::Css(MISSING_PROBE.to_string())),
+    })
+}
+
+pub fn bridge_ignores_within(probe_payload: &Value) -> bool {
+    probe_payload.get("exists") == Some(&json!(true))
+}
+
+pub fn within_upgrade_message() -> String {
+    format!("this app's @auditaur/api ignores `within`; upgrade it to {MIN_WITHIN_API_VERSION} or newer to scope locators")
 }
 
 impl Drop for BridgeDriver {
@@ -340,6 +385,9 @@ impl AppDriver for BridgeDriver {
     }
 
     fn run_step(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepResult {
+        if let Err(failure) = self.require_within(step, ctx) {
+            return failure;
+        }
         match self.step(step, ctx) {
             Ok(()) => StepResult::Passed,
             Err(failure) => failure,
@@ -474,12 +522,21 @@ const OPTION_NOT_FOUND: &str = "option not found";
 const OPTION_DISABLED: &str = "option is disabled";
 
 pub(crate) fn bridge_selector(locator: &Locator) -> String {
+    format!("{LOCATOR_PREFIX}{}", locator_spec(locator))
+}
+
+fn locator_spec(locator: &Locator) -> Value {
     fn put<T: serde::Serialize>(spec: &mut Value, key: &str, value: Option<T>) {
         if let Some(value) = value {
             spec[key] = json!(value);
         }
     }
     let (kind, value, name, exact, nth) = match locator {
+        Locator::Within { locator, within } => {
+            let mut spec = locator_spec(locator);
+            spec["within"] = locator_spec(within);
+            return spec;
+        }
         Locator::Css(css) => ("css", css, None, false, None),
         Locator::CssNth { css, nth } => ("css", css, None, false, Some(*nth)),
         Locator::Role {
@@ -501,7 +558,7 @@ pub(crate) fn bridge_selector(locator: &Locator) -> String {
     put(&mut spec, "name", name);
     put(&mut spec, "exact", exact.then_some(true));
     put(&mut spec, "nth", nth);
-    format!("{LOCATOR_PREFIX}{spec}")
+    spec
 }
 
 /// Name the target in an error unless the bridge already did.
@@ -690,6 +747,9 @@ const MIN_BUTTON_CLICK_API_VERSION: &str = "0.12.0";
 const MIN_DRAG_API_VERSION: &str = "0.13.0";
 /// First `@auditaur/api` release with the `paste` bridge action.
 const MIN_PASTE_API_VERSION: &str = "0.14.0";
+/// First `@auditaur/api` release with `within` locators and the `clearStorage` bridge action.
+const MIN_WITHIN_API_VERSION: &str = "0.15.0";
+const MIN_CLEAR_STORAGE_API_VERSION: &str = MIN_WITHIN_API_VERSION;
 
 /// Matches nothing, so the probe exercises the bridge's not-found reply.
 const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
@@ -751,6 +811,7 @@ fn explain_action(action: &str, error: String) -> String {
         "clickButton" => Some(("`click` with `button`", MIN_BUTTON_CLICK_API_VERSION)),
         "dragTo" => Some(("`drag`", MIN_DRAG_API_VERSION)),
         "paste" => Some(("`paste`", MIN_PASTE_API_VERSION)),
+        "clearStorage" => Some(("`clearStorage`", MIN_CLEAR_STORAGE_API_VERSION)),
         _ => None,
     };
     match needs {
@@ -914,6 +975,10 @@ impl BridgeDriver {
                 .call(ctx, "evaluate", None, Some(expression.clone()), Vec::new())
                 .map(drop),
             StepKind::Reload => self.reload(ctx),
+            StepKind::ClearStorage => {
+                self.call(ctx, "clearStorage", None, None, Vec::new())?;
+                self.reload(ctx)
+            }
             StepKind::Sleep(ms) => {
                 let wait = Duration::from_millis(*ms);
                 if wait > ctx.remaining() {
@@ -2231,6 +2296,50 @@ mod selector_tests {
             spec(locator),
             json!({"kind": "role", "value": "button", "name": "Save \"it\"", "exact": true, "nth": 2})
         );
+    }
+
+    #[test]
+    fn within_nests_the_container_spec() {
+        let parsed = crate::commands::drills::model::parse_locator_value(
+            &json!({ "role": "button", "name": "Delete", "within": { "css": "li", "nth": 1, "within": "#list" } }),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.to_string(),
+            "#list >> li >> nth=1 >> role=button[name=\"Delete\"i]"
+        );
+        assert_eq!(
+            spec(parsed),
+            json!({
+                "kind": "role", "value": "button", "name": "Delete",
+                "within": { "kind": "css", "value": "li", "nth": 1, "within": { "kind": "css", "value": "#list" } }
+            })
+        );
+    }
+
+    #[test]
+    fn detects_within_only_in_locators() {
+        use crate::commands::drills::model::{parse_locator_value, StepKind};
+        let scoped = parse_locator_value(&json!({ "css": "button", "within": "#panel" })).unwrap();
+        let plain = Locator::Css("button".into());
+        assert!(StepKind::Drag {
+            source: plain.clone(),
+            to: scoped.clone()
+        }
+        .uses_within());
+        assert!(StepKind::Press {
+            key: "Enter".into(),
+            target: Some(scoped)
+        }
+        .uses_within());
+        assert!(!StepKind::Fill {
+            target: plain,
+            value: "Within { not a locator }".into()
+        }
+        .uses_within());
+        assert!(!StepKind::Evaluate("Within {".into()).uses_within());
+        assert!(bridge_ignores_within(&json!({ "exists": true })));
+        assert!(!bridge_ignores_within(&json!({ "exists": false })));
     }
 
     #[test]

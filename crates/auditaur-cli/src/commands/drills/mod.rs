@@ -1009,6 +1009,18 @@ mod tests {
             ),
             (Valid, json!({ "sleep": 10, "name": "settle" })),
             (Valid, json!({ "reload": true })),
+            (Valid, json!({ "clearStorage": true })),
+            (Invalid, json!({ "clearStorage": false })),
+            (
+                Valid,
+                json!({ "click": { "role": "button", "name": "Delete", "within": { "testId": "drafts", "nth": 0 } } }),
+            ),
+            (
+                Valid,
+                json!({ "expect": { "text": "x", "within": { "css": "li", "within": "#list" } }, "toBeVisible": true }),
+            ),
+            (Invalid, json!({ "click": { "css": "b", "within": {} } })),
+            (Invalid, json!({ "click": { "css": "b", "within": "" } })),
             (Valid, json!({ "screenshot": "home", "target": "#a" })),
             (Valid, json!({ "evaluate": "1 + 1", "timeoutMs": 100 })),
             (Invalid, json!({ "clik": "#a" })),

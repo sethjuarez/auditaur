@@ -9,7 +9,12 @@ use std::{path::PathBuf, time::Duration};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
-use super::{model, runner::real::bridge_selector};
+use super::{
+    model,
+    runner::real::{
+        bridge_ignores_within, bridge_selector, within_probe_selector, within_upgrade_message,
+    },
+};
 use crate::commands::{
     drive::{BridgeSession, DriveAppSelector},
     workflow,
@@ -25,11 +30,26 @@ pub struct LocateOptions {
 }
 
 pub fn locate(options: LocateOptions) -> Result<()> {
-    let selector = target_selector(&options.target)?;
+    let locator = target_locator(&options.target)?;
     let session = connect(&options)?;
+    if locator.uses_within() {
+        let probe = session.request(
+            "exists",
+            Some(within_probe_selector()),
+            None,
+            Vec::new(),
+            false,
+            None,
+            None,
+            BRIDGE_TIMEOUT,
+        )?;
+        if bridge_ignores_within(&probe.payload) {
+            bail!("{}", within_upgrade_message());
+        }
+    }
     let reply = session.request(
         "locate",
-        Some(selector),
+        Some(bridge_selector(&locator)),
         None,
         Vec::new(),
         false,
@@ -53,18 +73,22 @@ pub fn locate(options: LocateOptions) -> Result<()> {
 }
 
 /// A drill locator (JSON object) or a CSS selector, as a bridge selector string.
-pub fn target_selector(target: &str) -> Result<String> {
+#[cfg(test)]
+fn target_selector(target: &str) -> Result<String> {
+    Ok(bridge_selector(&target_locator(target)?))
+}
+
+fn target_locator(target: &str) -> Result<model::Locator> {
     let trimmed = target.trim();
     let value = if trimmed.starts_with('{') {
         serde_json::from_str(trimmed).map_err(|error| anyhow!("invalid locator JSON: {error}"))?
     } else {
         Value::String(target.to_string())
     };
-    let locator = model::parse_locator_value(&value).map_err(|issues| {
+    model::parse_locator_value(&value).map_err(|issues| {
         let messages: Vec<String> = issues.iter().map(ToString::to_string).collect();
         anyhow!("invalid locator: {}", messages.join("; "))
-    })?;
-    Ok(bridge_selector(&locator))
+    })
 }
 
 fn connect(options: &LocateOptions) -> Result<BridgeSession> {

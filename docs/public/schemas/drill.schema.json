@@ -92,6 +92,7 @@
         { "$ref": "#/$defs/stepWaitFor" },
         { "$ref": "#/$defs/stepEvaluate" },
         { "$ref": "#/$defs/stepReload" },
+        { "$ref": "#/$defs/stepClearStorage" },
         { "$ref": "#/$defs/stepSleep" },
         { "$ref": "#/$defs/stepScreenshot" },
         { "$ref": "#/$defs/stepGate" },
@@ -192,6 +193,10 @@
     "stepReload": {
       "type": "object", "additionalProperties": false, "required": ["reload"],
       "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "reload": { "const": true } }
+    },
+    "stepClearStorage": {
+      "type": "object", "additionalProperties": false, "required": ["clearStorage"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "clearStorage": { "const": true, "description": "Clear localStorage, sessionStorage, IndexedDB, Cache Storage and script-visible cookies, then reload. Needs @auditaur/api 0.15.0." } }
     },
     "stepSleep": {
       "type": "object", "additionalProperties": false, "required": ["sleep"],
@@ -419,7 +424,8 @@
             "placeholder": { "$ref": "#/$defs/text" },
             "name": { "$ref": "#/$defs/text", "description": "Accessible name; role only." },
             "exact": { "type": "boolean", "description": "Case-sensitive whole-string match." },
-            "nth": { "type": "integer", "description": "Pick one match; negative counts from the end." }
+            "nth": { "type": "integer", "description": "Pick one match; negative counts from the end." },
+            "within": { "$ref": "#/$defs/locator", "description": "Search only inside what this locator matches. Needs @auditaur/api 0.15.0." }
           }
         }
       ]

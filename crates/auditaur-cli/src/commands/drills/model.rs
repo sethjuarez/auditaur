@@ -65,6 +65,7 @@ pub const ACTION_KEYS: &[&str] = &[
     "waitFor",
     "evaluate",
     "reload",
+    "clearStorage",
     "sleep",
     "screenshot",
     "gate",
@@ -141,6 +142,7 @@ pub const LOCATOR_KEYS: &[&str] = &[
     "name",
     "exact",
     "nth",
+    "within",
 ];
 
 const LOCATOR_KINDS: &[&str] = &["css", "role", "text", "testId", "label", "placeholder"];
@@ -289,6 +291,8 @@ pub enum StepKind {
     },
     Evaluate(String),
     Reload,
+    /// Clear the page's web storage, then reload.
+    ClearStorage,
     Sleep(u64),
     Screenshot {
         name: String,
@@ -755,6 +759,52 @@ pub enum Locator {
         exact: bool,
         nth: Option<i64>,
     },
+    /// `locator` searched only inside what `within` matches (Playwright's `locator.locator()`).
+    Within {
+        locator: Box<Locator>,
+        within: Box<Locator>,
+    },
+}
+
+impl Locator {
+    pub fn uses_within(&self) -> bool {
+        matches!(self, Self::Within { .. })
+    }
+}
+
+impl StepKind {
+    /// Whether any locator in the step is scoped with `within`.
+    pub fn uses_within(&self) -> bool {
+        let any = |targets: &[Option<&Locator>]| targets.iter().flatten().any(|l| l.uses_within());
+        match self {
+            Self::Click { target, .. }
+            | Self::Fill { target, .. }
+            | Self::Type { target, .. }
+            | Self::Select { target, .. }
+            | Self::WaitFor { target, .. }
+            | Self::Dblclick(target)
+            | Self::Hover(target)
+            | Self::Check(target)
+            | Self::Uncheck(target) => target.uses_within(),
+            Self::Press { target, .. } | Self::Screenshot { target, .. } => any(&[target.as_ref()]),
+            Self::Paste(paste) => any(&[paste.target.as_ref()]),
+            Self::Drag { source, to } => any(&[Some(source), Some(to)]),
+            Self::Expect(expect) => {
+                expect.target.uses_within()
+                    || matches!(&expect.matcher, Matcher::ToHaveScreenshot(shot)
+                        if shot.mask.iter().any(Locator::uses_within))
+            }
+            Self::Evaluate(_)
+            | Self::Reload
+            | Self::ClearStorage
+            | Self::Sleep(_)
+            | Self::Gate(_)
+            | Self::ExpectValue(_)
+            | Self::Telemetry(_)
+            | Self::Run(_)
+            | Self::Dialog(_) => false,
+        }
+    }
 }
 
 impl fmt::Display for Locator {
@@ -815,6 +865,7 @@ impl fmt::Display for Locator {
                 write!(f, "placeholder={placeholder:?}{}", flag(*exact))?;
                 nth(f, n)
             }
+            Self::Within { locator, within } => write!(f, "{within} >> {locator}"),
         }
     }
 }
@@ -1635,6 +1686,13 @@ fn parse_step_kind(
                 return None;
             }
             StepKind::Reload
+        }
+        "clearStorage" => {
+            if raw != &Value::Bool(true) {
+                ctx.err(path, "expected `true`");
+                return None;
+            }
+            StepKind::ClearStorage
         }
         "sleep" => match raw.as_u64() {
             Some(ms) if (1..=60_000).contains(&ms) => StepKind::Sleep(ms),
@@ -2493,11 +2551,14 @@ fn parse_locator(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Locator> {
     if map.contains_key("exact") && kind == "role" && !map.contains_key("name") {
         ctx.err(&join(path, "exact"), "requires `name`");
     }
+    let within = map
+        .get("within")
+        .and_then(|value| parse_locator(ctx, value, &join(path, "within")));
     if ctx.issues.len() > before {
         return None;
     }
     let value = value?;
-    Some(match kind {
+    let locator = match kind {
         "css" => match nth {
             Some(nth) => Locator::CssNth { css: value, nth },
             None => Locator::Css(value),
@@ -2525,6 +2586,13 @@ fn parse_locator(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Locator> {
             nth,
         },
         _ => unreachable!("locator kinds are exhaustive"),
+    };
+    Some(match within {
+        Some(within) => Locator::Within {
+            locator: Box::new(locator),
+            within: Box::new(within),
+        },
+        None => locator,
     })
 }
 
@@ -2575,6 +2643,7 @@ pub fn describe(kind: &StepKind) -> String {
         }
         StepKind::Evaluate(expression) => format!("evaluate {}", clip(expression, 60)),
         StepKind::Reload => "reload page".to_string(),
+        StepKind::ClearStorage => "clear storage and reload".to_string(),
         StepKind::Sleep(ms) => format!("sleep {ms}ms"),
         StepKind::Screenshot { name, .. } => format!("screenshot {name}"),
         StepKind::Gate(gate) => format!(
