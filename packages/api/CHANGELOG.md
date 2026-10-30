@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/sethjuarez/auditaur/compare/api-v0.13.0...api-v0.14.0) (2026-10-30)
+
+
+### Features
+
+* **api:** add a paste bridge action ([#172](https://github.com/sethjuarez/auditaur/issues/172)) ([edba321](https://github.com/sethjuarez/auditaur/commit/edba321c966528c3aca05327b7ff24a871578a36))
+
 ## [0.13.0](https://github.com/sethjuarez/auditaur/compare/api-v0.12.3...api-v0.13.0) (2026-10-30)
 
 
