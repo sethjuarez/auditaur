@@ -92,7 +92,7 @@ Every step accepts `name` and `timeoutMs`.
 | Value assertions | `expectValue` (JavaScript) + one of `toEqual` (deep JSON equality), `toContain` (substring or array element), `toMatch` (regex string) |
 | Telemetry assertions | `expectIpc` (+ `status`, `count`, `maxMs`), `expectEvent` (+ `count`), `expectLog` (+ `level`, `attributes`, `count`), `expectSpan` (+ `status`, `attributes`, `count`), `expectNoTelemetry` (+ `in`), `expectNoErrors` (+ `ignore`) |
 
-Assertions retry until they pass or `expectTimeoutMs` (default 5s) runs out. Add `"soft": true` to record a failure and keep going. Add `"not": true` to negate any assertion except snapshots and `expectNoErrors`. `toHaveText` and `toHaveValue` take a string or `{ "pattern": "regex" }`; `toContainText` takes a string.
+Assertions retry until they pass or their retry window runs out: the suite's `expectTimeoutMs` (default 5s), or the step's own `timeoutMs`, like Playwright's `expect(..., { timeout })`. Add `"soft": true` to record a failure and keep going. Add `"not": true` to negate any assertion except snapshots and `expectNoErrors`. `toHaveText` and `toHaveValue` take a string or `{ "pattern": "regex" }`; `toContainText` takes a string.
 
 `expectValue` re-evaluates its expression until the matcher passes, like Playwright's `expect.poll`; a throw counts as a miss. Use it for app state the DOM doesn't show:
 

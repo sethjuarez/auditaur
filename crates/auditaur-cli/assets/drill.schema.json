@@ -12,7 +12,7 @@
     "description": { "$ref": "#/$defs/text" },
     "tags": { "$ref": "#/$defs/tags" },
     "timeoutMs": { "type": "integer", "minimum": 1, "description": "Default per-test timeout." },
-    "expectTimeoutMs": { "type": "integer", "minimum": 1, "description": "How long expect steps keep retrying before failing." },
+    "expectTimeoutMs": { "type": "integer", "minimum": 1, "description": "How long assertions keep retrying before failing (default 5000). Override one step with its timeoutMs." },
     "retries": { "$ref": "#/$defs/retries" },
     "env": {
       "type": "object", "additionalProperties": { "type": "string", "pattern": "^[^\\u0000]*$" },
@@ -104,7 +104,7 @@
       ]
     },
     "stepName": { "$ref": "#/$defs/text", "description": "Custom step title." },
-    "stepTimeout": { "type": "integer", "minimum": 1 },
+    "stepTimeout": { "type": "integer", "minimum": 1, "description": "On assertions, how long this step retries (overrides the suite's expectTimeoutMs); on actions, how long the step may take." },
     "stepClick": {
       "type": "object", "additionalProperties": false, "required": ["click"],
       "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "click": { "$ref": "#/$defs/locator" } }
