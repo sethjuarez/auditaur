@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.28](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.27...auditaur-cli-v0.4.28) - 2026-10-30
+
+### Added
+
+- *(drill)* add serial suites whose tests build on each other ([#166](https://github.com/sethjuarez/auditaur/pull/166))
+
+### Fixed
+
+- *(plugin)* record command spans when they start so coverage counts long-running commands ([#165](https://github.com/sethjuarez/auditaur/pull/165))
+- *(drill)* quote run-step stdout on exit failures and name stray drill files ([#164](https://github.com/sethjuarez/auditaur/pull/164))
+
 ## [0.4.27](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.26...auditaur-cli-v0.4.27) - 2026-10-30
 
 ### Fixed
