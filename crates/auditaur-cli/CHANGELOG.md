@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.26](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.25...auditaur-cli-v0.4.26) - 2026-10-30
+
+### Fixed
+
+- *(drive)* wait for enabled and editable targets like Playwright ([#154](https://github.com/sethjuarez/auditaur/pull/154))
+
 ## [0.4.25](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.24...auditaur-cli-v0.4.25) - 2026-10-30
 
 ### Added
