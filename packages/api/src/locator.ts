@@ -19,6 +19,8 @@ export interface LocatorSpec {
   exact?: boolean;
   /** Pick one match; negative counts from the end. */
   nth?: number;
+  /** Search only inside the elements this locator matches, like Playwright's `locator.locator()`. */
+  within?: LocatorSpec;
 }
 
 const KINDS: readonly LocatorKind[] = ['css', 'role', 'text', 'testId', 'label', 'placeholder'];
@@ -40,6 +42,10 @@ export function parseLocator(selector: string): LocatorSpec {
   } catch (error) {
     throw new Error(`invalid locator: ${error instanceof Error ? error.message : String(error)}`);
   }
+  return validateLocator(spec);
+}
+
+function validateLocator(spec: unknown): LocatorSpec {
   const candidate = spec as Partial<LocatorSpec> | null;
   if (!candidate || typeof candidate !== 'object' || !KINDS.includes(candidate.kind as LocatorKind)) {
     throw new Error(`invalid locator: unknown kind ${JSON.stringify(candidate?.kind)}`);
@@ -49,6 +55,9 @@ export function parseLocator(selector: string): LocatorSpec {
   }
   if (candidate.nth !== undefined && !Number.isInteger(candidate.nth)) {
     throw new Error('invalid locator: `nth` must be an integer');
+  }
+  if (candidate.within !== undefined) {
+    validateLocator(candidate.within);
   }
   return candidate as LocatorSpec;
 }
@@ -69,11 +78,29 @@ export function describeLocator(spec: LocatorSpec): string {
     default:
       text = `${spec.kind}=${JSON.stringify(spec.value)}${flag}`;
   }
-  return spec.nth !== undefined ? `${text} >> nth=${spec.nth}` : text;
+  const own = spec.nth !== undefined ? `${text} >> nth=${spec.nth}` : text;
+  return spec.within ? `${describeLocator(spec.within)} >> ${own}` : own;
 }
 
-/** Every element the locator matches, in document order, before `nth`. */
+/**
+ * Every element the locator matches, in document order, before `nth`. With `within`, it searches
+ * inside each element the container matches (after the container's own `nth`), as Playwright's
+ * chained locators do: the container needn't be unique and is never a match itself.
+ */
 export function queryLocator(spec: LocatorSpec, root: ParentNode = document): Element[] {
+  if (spec.within) {
+    const containers = pickNth(queryLocator(spec.within, root), spec.within.nth);
+    const inner: LocatorSpec = { ...spec, within: undefined };
+    const found = new Set<Element>();
+    for (const container of containers) {
+      for (const el of queryLocator(inner, container)) {
+        found.add(el);
+      }
+    }
+    return Array.from(found).sort((a, b) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    );
+  }
   switch (spec.kind) {
     case 'css':
       return Array.from(root.querySelectorAll(spec.value));
@@ -122,6 +149,14 @@ export function resolveLocator(
     el = matches[0];
   }
   return el && (!visibleOnly || isVisible(el)) ? el : undefined;
+}
+
+function pickNth(matches: Element[], nth: number | undefined): Element[] {
+  if (nth === undefined) {
+    return matches;
+  }
+  const el = nth < 0 ? matches[matches.length + nth] : matches[nth];
+  return el ? [el] : [];
 }
 
 export function normalizeText(value: string): string {
