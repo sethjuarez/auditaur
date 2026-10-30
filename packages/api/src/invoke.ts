@@ -1,8 +1,8 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { AuditaurExporter } from './exporter';
 import type { AuditaurInvokeArgs, AuditaurTraceContextCarrier, SpanRecord, TauriIpcCallRecord } from './types';
-import { recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
-import { currentWindowLabel, errorRecordFields, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
+import { recordErrorMessage, recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
+import { currentWindowLabel, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
 
 export const AUDITAUR_TRACE_CONTEXT_ARG = 'auditaurTraceContext';
 export const AUDITAUR_TRACEPARENT_HEADER = 'traceparent';
@@ -39,11 +39,11 @@ export async function instrumentedInvoke<T>(
     exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, recordedArgs, recordedResult.summary));
     return result;
   } catch (error) {
-    const fields = errorRecordFields(error);
+    const message = recordErrorMessage(policy, command, error);
     const end = nowUnixNanos();
     const recordedArgs = recordPayload(policy, 'invokeArgs', command, args ?? {});
-    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, recordedArgs));
-    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, recordedArgs, undefined));
+    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'ERROR', message, windowLabel, recordedArgs));
+    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', message, windowLabel, recordedArgs, undefined));
     throw error;
   }
 }

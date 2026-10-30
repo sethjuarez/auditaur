@@ -1,5 +1,10 @@
-import type { AuditaurFrontendConfig, AuditaurPayloadKind, AuditaurRedactPayload } from './types';
-import { maybePayload, summarizePayload } from './utils';
+import type {
+  AuditaurFrontendConfig,
+  AuditaurPayloadKind,
+  AuditaurRedactErrorMessage,
+  AuditaurRedactPayload,
+} from './types';
+import { errorRecordFields, maybePayload, summarizePayload } from './utils';
 
 /** Keep in sync with `DEFAULT_REDACTION_KEYS` in crates/auditaur-core/src/redaction.rs (a test checks). */
 export const DEFAULT_REDACTION_KEYS = [
@@ -31,6 +36,7 @@ export interface PayloadPolicy {
   readonly summaries: boolean;
   readonly keys: ReadonlySet<string>;
   readonly hook?: AuditaurRedactPayload;
+  readonly errorHook?: AuditaurRedactErrorMessage;
 }
 
 export function payloadPolicy(config: Partial<AuditaurFrontendConfig> = {}): PayloadPolicy {
@@ -40,6 +46,7 @@ export function payloadPolicy(config: Partial<AuditaurFrontendConfig> = {}): Pay
     summaries: config.payloadSummaries ?? true,
     keys: new Set([...DEFAULT_REDACTION_KEYS, ...(config.redactKeys ?? [])].map((key) => key.toLowerCase())),
     hook: config.redactPayload,
+    errorHook: config.redactErrorMessage,
   };
 }
 
@@ -68,6 +75,35 @@ export function recordPayload(
   } catch {
     return { summary: policy.summaries ? REDACTED : undefined, json: policy.full ? REDACTED : undefined };
   }
+}
+
+/** A failed invoke's or emit's error message as it may be recorded: key redaction (object errors), then the app's hook. */
+export function recordErrorMessage(policy: PayloadPolicy, name: string, error: unknown): string {
+  try {
+    const message = errorRecordFields(redactKeys(error, policy.keys)).message;
+    if (!policy.errorHook) {
+      return message;
+    }
+    const shown = policy.errorHook(message, { name });
+    return typeof shown === 'string' ? shown : REDACTED;
+  } catch {
+    return REDACTED;
+  }
+}
+
+/** What recording would keep of `value` under `config`, for testing an app's redaction settings. */
+export function recordedPayload(
+  config: Partial<AuditaurFrontendConfig>,
+  kind: AuditaurPayloadKind,
+  name: string,
+  value: unknown,
+): RecordedPayload {
+  return recordPayload(payloadPolicy(config), kind, name, value);
+}
+
+/** The message recording would keep when command or event `name` fails with `error` under `config`. */
+export function recordedErrorMessage(config: Partial<AuditaurFrontendConfig>, name: string, error: unknown): string {
+  return recordErrorMessage(payloadPolicy(config), name, error);
 }
 
 /** Objects and arrays visited before the rest of a payload is recorded as `[Truncated]`. */

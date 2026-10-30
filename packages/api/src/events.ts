@@ -5,9 +5,9 @@ import {
   type Event,
 } from '@tauri-apps/api/event';
 import type { AuditaurExporter } from './exporter';
-import { recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
+import { recordErrorMessage, recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
 import type { AuditaurEvent, SpanRecord, TauriEventRecord } from './types';
-import { currentWindowLabel, errorRecordFields, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
+import { currentWindowLabel, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
 
 export async function instrumentedEmit(
   exporter: AuditaurExporter,
@@ -48,7 +48,7 @@ async function emitAndRecord(
     await send();
     record('OK');
   } catch (error) {
-    record('ERROR', errorRecordFields(error).message);
+    record('ERROR', recordErrorMessage(policy, event, error));
     throw error;
   }
 }
