@@ -30,14 +30,15 @@ description: Auditaur plugin and frontend configuration.
 | `payloadSummaries` | `true` | Store text summaries of invoke args/results and event payloads. Set `false` to store no payload content. |
 | `redactKeys` | `[]` | Extra keys to redact, on top of the defaults (`password`, `token`, `key`, `session`, …). Case-insensitive, any depth. |
 | `redactPayload` | none | `(payload, { kind, name }) => unknown` rewrites a payload before key redaction; `kind` is `invokeArgs`, `invokeResult`, or `eventPayload`. If it throws, the payload is stored as `[REDACTED]`. |
-| `redactErrorMessage` | none | `(message, { name }) => string` rewrites a failed invoke's or emit's error message before it is stored (object errors are key-redacted first). If it throws or returns a non-string, the message is stored as `[REDACTED]`. |
+| `redactErrorMessage` | none | `(message, { name }) => string` rewrites an error message before it is stored: failed invokes and emits (`name` is the command or event), uncaught errors (`window.error`), unhandled rejections (`unhandledrejection`), and errors passed to `console` (`console.<level>`). Object errors are key-redacted first; the stack is kept only if it visibly carries the rewritten message. If it throws or returns a non-string, the message is stored as `[REDACTED]`. |
+| `redactConsole` | none | `(body, { level }) => string` rewrites a console call's text after its arguments are key-redacted and joined. If it throws or returns a non-string, the body is stored as `[REDACTED]`. |
 | `maxPayloadBytes` | `16384` | Bounds captured payload summaries and payload values. |
 | `batchIntervalMs` | `1000` | Flush cadence. |
 | `maxBatchSize` | `64` | Flush when the in-memory batch reaches this size. |
 | `onExportError` | none | Callback for failed exports with attempted, queued, retained, and dropped record counts. |
 | `driveBridge` | `false` | Enables the debug/test in-app drive bridge. Pass `true` or `{ windowLabel, pollIntervalMs }`. |
 
-Important defaults: redaction is enabled (payload summaries are key-redacted before they leave the webview; console log bodies and invoke/emit error strings are not, unless you set `redactErrorMessage`), full payload capture is disabled in the frontend package, retention defaults to 256 MiB, and release builds are blocked unless explicitly allowed.
+Important defaults: redaction is enabled (payloads and console arguments are key-redacted before they leave the webview; free-text messages are rewritten only by `redactErrorMessage` and `redactConsole`), a console call's object argument is stored as JSON only with `captureFullPayloads`, full payload capture is disabled in the frontend package, retention defaults to 256 MiB, and release builds are blocked unless explicitly allowed.
 
 Default redaction keys cover credentials only. Summaries still contain other values, such as chat text or emails. Name those fields, or rewrite whole payloads:
 
@@ -47,11 +48,12 @@ initAuditaur({
   redactKeys: ['email', 'transcript'],
   redactPayload: (payload, { name }) => (name === 'save_chat_session' ? '[omitted]' : payload),
   redactErrorMessage: (message) => message.replace(/\S+@\S+/g, '<email>'),
+  redactConsole: (body) => body.replace(/\S+@\S+/g, '<email>'),
   // or record no payload content at all: payloadSummaries: false
 });
 ```
 
-To unit-test these settings without a running app, `recordedPayload(config, kind, name, value)` and `recordedErrorMessage(config, name, error)` return exactly what recording would keep:
+To unit-test these settings without a running app, `recordedPayload(config, kind, name, value)`, `recordedErrorMessage(config, name, error)`, `recordedError(config, name, error)`, and `recordedConsole(config, level, args)` return exactly what recording would keep:
 
 ```ts
 import { recordedErrorMessage, recordedPayload } from '@auditaur/api';

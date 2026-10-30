@@ -1,6 +1,7 @@
 import type {
   AuditaurFrontendConfig,
   AuditaurPayloadKind,
+  AuditaurRedactConsole,
   AuditaurRedactErrorMessage,
   AuditaurRedactPayload,
 } from './types.js';
@@ -37,6 +38,7 @@ export interface PayloadPolicy {
   readonly keys: ReadonlySet<string>;
   readonly hook?: AuditaurRedactPayload;
   readonly errorHook?: AuditaurRedactErrorMessage;
+  readonly consoleHook?: AuditaurRedactConsole;
 }
 
 export function payloadPolicy(config: Partial<AuditaurFrontendConfig> = {}): PayloadPolicy {
@@ -47,6 +49,7 @@ export function payloadPolicy(config: Partial<AuditaurFrontendConfig> = {}): Pay
     keys: new Set([...DEFAULT_REDACTION_KEYS, ...(config.redactKeys ?? [])].map((key) => key.toLowerCase())),
     hook: config.redactPayload,
     errorHook: config.redactErrorMessage,
+    consoleHook: config.redactConsole,
   };
 }
 
@@ -104,6 +107,87 @@ export function recordedPayload(
 /** The message recording would keep when command or event `name` fails with `error` under `config`. */
 export function recordedErrorMessage(config: Partial<AuditaurFrontendConfig>, name: string, error: unknown): string {
   return recordErrorMessage(payloadPolicy(config), name, error);
+}
+
+/** An uncaught or logged error as it may be recorded. */
+export interface RecordedError {
+  message: string;
+  stack?: string;
+  errorType?: string;
+}
+
+/**
+ * An error as it may be recorded: its message goes through {@link recordErrorMessage}, and the stack
+ * keeps only frames once the message is rewritten (V8 stacks repeat the message on their first line).
+ */
+export function recordError(policy: PayloadPolicy, name: string, error: unknown): RecordedError {
+  let fields: ReturnType<typeof errorRecordFields>;
+  try {
+    fields = errorRecordFields(error);
+  } catch {
+    return { message: REDACTED };
+  }
+  const message = recordErrorMessage(policy, name, error);
+  if (message === fields.message || !fields.stack) {
+    return { message, stack: fields.stack, errorType: fields.errorType };
+  }
+  // Fail closed: a stack that doesn't visibly contain the original message may hide it elsewhere.
+  const stack = fields.message && fields.stack.includes(fields.message)
+    ? fields.stack.replace(fields.message, () => message)
+    : undefined;
+  return { message, stack, errorType: fields.errorType };
+}
+
+/** What recording would keep of an uncaught error, a rejection, or an error passed to `console`. */
+export function recordedError(config: Partial<AuditaurFrontendConfig>, name: string, error: unknown): RecordedError {
+  return recordError(payloadPolicy(config), name, error);
+}
+
+/** A console call as it may be recorded. */
+export interface RecordedConsole {
+  body: string;
+  bodyJson?: unknown;
+  error?: RecordedError;
+}
+
+/**
+ * A console call as it may be recorded: each argument key-redacted and summarized, then the app's
+ * `redactConsole` hook over the joined text. The first object argument is kept as JSON only with
+ * `captureFullPayloads`, and an Error argument goes through {@link recordError}.
+ */
+export function recordConsole(policy: PayloadPolicy, level: string, args: unknown[]): RecordedConsole {
+  const name = `console.${level}`;
+  const errors = new Map<Error, RecordedError>();
+  for (const arg of args) {
+    if (arg instanceof Error && !errors.has(arg)) errors.set(arg, recordError(policy, name, arg));
+  }
+  const error = errors.values().next().value;
+  try {
+    const shown = args.map((arg) => (arg instanceof Error ? errorText(errors.get(arg)!) : redactKeys(arg, policy.keys)));
+    let body = shown.map((arg) => summarizePayload(arg, policy.maxBytes)).join(' ');
+    if (policy.consoleHook) {
+      const hooked = policy.consoleHook(body, { level });
+      body = typeof hooked === 'string' ? hooked : REDACTED;
+    }
+    const structured = shown.find((arg) => typeof arg === 'object' && arg !== null);
+    return {
+      body,
+      bodyJson: policy.full && structured !== undefined ? maybePayload(structured, true, policy.maxBytes) : undefined,
+      error,
+    };
+  } catch {
+    return { body: REDACTED, error };
+  }
+}
+
+/** What recording would keep of `console[level](...args)` under `config`. */
+export function recordedConsole(config: Partial<AuditaurFrontendConfig>, level: string, args: unknown[]): RecordedConsole {
+  return recordConsole(payloadPolicy(config), level, args);
+}
+
+// Matches how an Error argument was always summarized: `Type: message` then the stack.
+function errorText(recorded: RecordedError): string {
+  return `${recorded.errorType ?? 'Error'}: ${recorded.message}${recorded.stack ? `\n${recorded.stack}` : ''}`;
 }
 
 /** Objects and arrays visited before the rest of a payload is recorded as `[Truncated]`. */

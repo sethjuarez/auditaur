@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { consoleLogRecord } from './console.js';
+import { payloadPolicy } from './payload.js';
 import { errorRecordFields, maybePayload, summarizePayload } from './utils.js';
 
 describe('payload summaries', () => {
@@ -8,10 +9,11 @@ describe('payload summaries', () => {
   });
 
   it('summarizes console args', () => {
-    const record = consoleLogRecord('info', ['hello', { answer: 42 }], 100);
+    const record = consoleLogRecord('info', ['hello', { answer: 42 }], payloadPolicy({ maxPayloadBytes: 100 }));
     expect(record.severityText).toBe('INFO');
     expect(record.body).toContain('hello');
     expect(record.body).toContain('"answer":42');
+    expect(record.bodyJson).toBeUndefined();
   });
 
   it('extracts error fields', () => {

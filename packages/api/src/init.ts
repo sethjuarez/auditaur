@@ -17,7 +17,6 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
     throw new Error('Auditaur requires a non-empty serviceName.');
   }
 
-  const maxPayloadBytes = config.maxPayloadBytes ?? 16_384;
   const policy = payloadPolicy(config);
   const propagateTauriInvokeTraceContext = config.propagateTauriInvokeTraceContext ?? true;
   const exporter = new AuditaurExporter(
@@ -29,10 +28,10 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
   const cleanup: Array<() => void> = [];
 
   if (config.instrumentConsole ?? true) {
-    cleanup.push(instrumentConsole(exporter, maxPayloadBytes));
+    cleanup.push(instrumentConsole(exporter, policy));
   }
   if (config.instrumentErrors ?? true) {
-    cleanup.push(instrumentErrors(exporter));
+    cleanup.push(instrumentErrors(exporter, policy));
   }
   if (config.driveBridge) {
     cleanup.push(startDriveBridge(exporter, config.driveBridge));

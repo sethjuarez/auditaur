@@ -1,8 +1,9 @@
 import type { AuditaurExporter } from './exporter.js';
+import { payloadPolicy, recordError, type PayloadPolicy } from './payload.js';
 import type { FrontendErrorRecord } from './types.js';
-import { currentWindowLabel, errorRecordFields, nowUnixNanos } from './utils.js';
+import { currentWindowLabel, nowUnixNanos } from './utils.js';
 
-export function instrumentErrors(exporter: AuditaurExporter): () => void {
+export function instrumentErrors(exporter: AuditaurExporter, policy: PayloadPolicy): () => void {
   if (typeof window === 'undefined') {
     return () => {};
   }
@@ -12,10 +13,10 @@ export function instrumentErrors(exporter: AuditaurExporter): () => void {
       filename: event.filename,
       lineNumber: event.lineno,
       columnNumber: event.colno,
-    }));
+    }, policy, 'window.error'));
   };
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-    exporter.addFrontendError(frontendErrorRecord(event.reason));
+    exporter.addFrontendError(frontendErrorRecord(event.reason, {}, policy, 'unhandledrejection'));
   };
 
   window.addEventListener('error', onError);
@@ -30,8 +31,10 @@ export function instrumentErrors(exporter: AuditaurExporter): () => void {
 export function frontendErrorRecord(
   error: unknown,
   location: { filename?: string; lineNumber?: number; columnNumber?: number } = {},
+  policy: PayloadPolicy = payloadPolicy(),
+  name = 'window.error',
 ): FrontendErrorRecord {
-  const fields = errorRecordFields(error);
+  const fields = recordError(policy, name, error);
   return {
     sessionId: '',
     timestampUnixNanos: nowUnixNanos(),

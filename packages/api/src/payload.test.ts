@@ -5,6 +5,8 @@ import {
   DEFAULT_REDACTION_KEYS,
   MAX_REDACTION_NODES,
   payloadPolicy,
+  recordedConsole,
+  recordedError,
   recordedErrorMessage,
   recordedPayload,
   recordPayload,
@@ -138,5 +140,51 @@ describe('error message redaction', () => {
       summary: '{"author":"[REDACTED]","n":1}',
       json: undefined,
     });
+  });
+});
+
+describe('console and uncaught error redaction', () => {
+  const email = (m: string) => m.replace(/\S+@\S+/g, '<email>');
+
+  it('key-redacts console arguments and keeps their JSON only with captureFullPayloads', () => {
+    const args = ['saved', { user: 'ada', token: 't0k' }];
+    const plain = recordedConsole({}, 'log', args);
+    expect(plain.body).toBe(`saved {"user":"ada","token":"${REDACTED}"}`);
+    expect(plain.bodyJson).toBeUndefined();
+    expect(recordedConsole({ captureFullPayloads: true }, 'log', args).bodyJson).toEqual({ user: 'ada', token: REDACTED });
+  });
+
+  it('runs redactConsole over the joined body, failing closed', () => {
+    expect(recordedConsole({ redactConsole: (body, { level }) => `${level}:${email(body)}` }, 'warn', ['to ada@example.com']).body)
+      .toBe('warn:to <email>');
+    expect(recordedConsole({ redactConsole: () => { throw new Error('bug'); } }, 'log', ['secret']).body).toBe(REDACTED);
+    expect(recordedConsole({ redactConsole: (() => 1) as unknown as (b: string) => string }, 'log', ['secret']).body).toBe(REDACTED);
+  });
+
+  it('rewrites an error message in the message, the stack, and a console body', () => {
+    const error = new Error('no access for ada@example.com');
+    const name = vi.fn((m: string, _context: { name: string }) => email(m));
+    const recorded = recordedError({ redactErrorMessage: name }, 'unhandledrejection', error);
+    expect(name).toHaveBeenCalledWith('no access for ada@example.com', { name: 'unhandledrejection' });
+    expect(recorded.message).toBe('no access for <email>');
+    expect(recorded.stack).toContain('Error: no access for <email>');
+    expect(recorded.stack).not.toContain('ada@example.com');
+
+    const logged = recordedConsole({ redactErrorMessage: email }, 'error', ['failed:', error]);
+    expect(logged.body).not.toContain('ada@example.com');
+    expect(logged.error?.message).toBe('no access for <email>');
+  });
+
+  it('drops a stack that does not visibly carry the rewritten message', () => {
+    const error = new Error('ada@example.com');
+    error.stack = 'at save (app.js:1:1)\nada%40example.com';
+    const recorded = recordedError({ redactErrorMessage: email }, 'window.error', error);
+    expect(recorded).toEqual({ message: '<email>', stack: undefined, errorType: 'Error' });
+  });
+
+  it('leaves errors alone without a hook, and key-redacts object rejections', () => {
+    const error = new Error('plain');
+    expect(recordedError({}, 'window.error', error).stack).toBe(error.stack);
+    expect(recordedError({}, 'unhandledrejection', { reason: 'x', token: 't0k' }).message).toBe(`{"reason":"x","token":"${REDACTED}"}`);
   });
 });
