@@ -299,6 +299,11 @@ describe('drive bridge selector operations', () => {
     const input = new FakeInputElement('#check') as FakeInputElement & { checked: boolean; type: string };
     input.type = 'checkbox';
     input.checked = false;
+    const dispatch = input.dispatchEvent.bind(input);
+    input.dispatchEvent = (event: Event) => {
+      if (event.type === 'click') input.checked = !input.checked;
+      return dispatch(event);
+    };
     installDom([button, select, input]);
 
     await expect(executeDriveBridgeRequest(request('hover', '#button'))).resolves.toEqual({
