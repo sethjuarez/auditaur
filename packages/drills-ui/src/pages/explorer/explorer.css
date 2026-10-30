@@ -11,6 +11,7 @@
 .detail-steps li + li { margin-top: 2px; }
 
 .run-progress { margin-top: var(--base-size-8); }
+.gate-waiting-body { display: flex; flex-wrap: wrap; align-items: center; gap: var(--base-size-12); }
 
 @media (max-width: 480px) {
   .test .history { display: none; }

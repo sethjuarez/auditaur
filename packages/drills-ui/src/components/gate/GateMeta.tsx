@@ -1,6 +1,6 @@
 // What a gate asks: where it comes from, what to do, what it continues on by itself, and what it
 // put on the clipboard.
-import { ms } from "../../lib/format";
+import { GateCountdown } from "./GateCountdown";
 import type { Gate } from "./types";
 
 export function GateMeta({ gate }: { gate: Gate }) {
@@ -10,7 +10,7 @@ export function GateMeta({ gate }: { gate: Gate }) {
       <div className="gate-meta muted">
         {gate.test}
         {gate.since ? ` · waiting since ${new Date(gate.since).toLocaleTimeString()}` : ""}
-        {gate.timeoutMs ? ` · times out after ${ms(gate.timeoutMs)}` : ""}
+        {gate.timeoutMs ? <> · <GateCountdown since={gate.since} timeoutMs={gate.timeoutMs} /></> : null}
       </div>
       <p className="gate-instructions">{gate.instructions}</p>
       {gate.selector && (

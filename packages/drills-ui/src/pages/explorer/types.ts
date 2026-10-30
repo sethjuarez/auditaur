@@ -34,12 +34,19 @@ export interface ExplorerRun {
   startedAt?: string;
 }
 
+export interface ExplorerGate {
+  test: string;
+  name?: string;
+  since: string | null;
+  timeoutMs: number | null;
+}
+
 export interface ExplorerState {
   listError?: string | null;
   invalid: { path: string; errors?: { message?: string }[] }[];
   suites: ExplorerSuite[];
   runs: ExplorerRun[];
-  active: { runId: string; done: number; total: number; current?: string } | null;
+  active: { runId: string; done: number; total: number; current?: string; gates?: ExplorerGate[] } | null;
   launch: { exited: boolean; exitCode: number | null; output?: string } | null;
   ui: { filter: string; expanded: string[] };
 }
