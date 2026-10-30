@@ -1,4 +1,5 @@
 export { initAuditaur } from './init';
+export { DEFAULT_REDACTION_KEYS } from './payload';
 export {
   AUDITAUR_TRACE_CONTEXT_ARG,
   createAuditaurTraceContext,
@@ -31,6 +32,8 @@ export type {
   TauriIpcCallRecord,
   AuditaurExportFailure,
   AuditaurInvokeArgs,
+  AuditaurPayloadKind,
+  AuditaurRedactPayload,
   AuditaurTraceContextCarrier,
   DriveBridgeRequest,
   DriveBridgeResponse,

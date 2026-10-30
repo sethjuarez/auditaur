@@ -26,11 +26,25 @@ description: Auditaur plugin and frontend configuration.
 | `instrumentTauriInvoke` | `true` | Wrap Tauri command calls. |
 | `propagateTauriInvokeTraceContext` | `true` | Send W3C `traceparent` plus the reserved compatibility invoke argument through wrapped Tauri invokes. |
 | `instrumentTauriEvents` | `true` | Wrap event emit/listen calls. |
-| `captureFullPayloads` | `false` | Store full payloads when they fit within the size cap. |
+| `captureFullPayloads` | `false` | Store full invoke args and event payloads (key-redacted) when they fit within the size cap. |
+| `payloadSummaries` | `true` | Store text summaries of invoke args/results and event payloads. Set `false` to store no payload content. |
+| `redactKeys` | `[]` | Extra keys to redact, on top of the defaults (`password`, `token`, `key`, `session`, …). Case-insensitive, any depth. |
+| `redactPayload` | none | `(payload, { kind, name }) => unknown` rewrites a payload before key redaction; `kind` is `invokeArgs`, `invokeResult`, or `eventPayload`. If it throws, the payload is stored as `[REDACTED]`. |
 | `maxPayloadBytes` | `16384` | Bounds captured payload summaries and payload values. |
 | `batchIntervalMs` | `1000` | Flush cadence. |
 | `maxBatchSize` | `64` | Flush when the in-memory batch reaches this size. |
 | `onExportError` | none | Callback for failed exports with attempted, queued, retained, and dropped record counts. |
 | `driveBridge` | `false` | Enables the debug/test in-app drive bridge. Pass `true` or `{ windowLabel, pollIntervalMs }`. |
 
-Important defaults: redaction is enabled, full payload capture is disabled in the frontend package, retention defaults to 256 MiB, and release builds are blocked unless explicitly allowed. Auditaur is intended to be dev/debug first; production collection should be an explicit product decision with consent, redaction, retention, and export handling reviewed.
+Important defaults: redaction is enabled (payload summaries are key-redacted before they leave the webview; console log bodies and error messages are not), full payload capture is disabled in the frontend package, retention defaults to 256 MiB, and release builds are blocked unless explicitly allowed.
+
+Default redaction keys cover credentials only. Summaries still contain other values, such as chat text or emails. Name those fields, or rewrite whole payloads:
+
+```ts
+initAuditaur({
+  serviceName: 'my-app',
+  redactKeys: ['email', 'transcript'],
+  redactPayload: (payload, { name }) => (name === 'save_chat_session' ? '[omitted]' : payload),
+  // or record no payload content at all: payloadSummaries: false
+});
+``` Auditaur is intended to be dev/debug first; production collection should be an explicit product decision with consent, redaction, retention, and export handling reviewed.

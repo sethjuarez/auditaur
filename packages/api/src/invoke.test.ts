@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuditaurExporter } from './exporter';
 import { AUDITAUR_TRACE_CONTEXT_ARG, AUDITAUR_TRACEPARENT_HEADER, createAuditaurTraceContext, instrumentedInvoke } from './invoke';
+import { payloadPolicy } from './payload';
 import type { AuditaurInvokeArgs } from './types';
+
+const fullPayloads = payloadPolicy({ captureFullPayloads: true });
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -42,8 +45,7 @@ describe('instrumentedInvoke', () => {
       exporter,
       'successful_command',
       { message: 'hello' },
-      16_384,
-      true,
+      fullPayloads,
       true,
     );
     await exporter.flush();
@@ -104,7 +106,7 @@ describe('instrumentedInvoke', () => {
     mocks.invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
     const exporter = new AuditaurExporter(1_000_000, 64);
 
-    await instrumentedInvoke<void>(exporter, 'emit_backend_event', undefined, 16_384, true, true);
+    await instrumentedInvoke<void>(exporter, 'emit_backend_event', undefined, fullPayloads, true);
     await exporter.flush();
     await exporter.shutdown();
 
@@ -138,7 +140,7 @@ describe('instrumentedInvoke', () => {
       auditaurTraceContext: { user: true },
     } as unknown as AuditaurInvokeArgs;
 
-    await instrumentedInvoke<string>(exporter, 'successful_command', args, 16_384, true, true);
+    await instrumentedInvoke<string>(exporter, 'successful_command', args, fullPayloads, true);
     await exporter.flush();
     await exporter.shutdown();
 
@@ -151,7 +153,7 @@ describe('instrumentedInvoke', () => {
     const exporter = new AuditaurExporter(1_000_000, 64);
     const args = { message: 'hello' };
 
-    await instrumentedInvoke<string>(exporter, 'successful_command', args, 16_384, true, false);
+    await instrumentedInvoke<string>(exporter, 'successful_command', args, fullPayloads, false);
     await exporter.flush();
     await exporter.shutdown();
 

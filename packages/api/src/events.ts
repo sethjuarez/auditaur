@@ -5,29 +5,17 @@ import {
   type Event,
 } from '@tauri-apps/api/event';
 import type { AuditaurExporter } from './exporter';
+import { recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
 import type { AuditaurEvent, SpanRecord, TauriEventRecord } from './types';
-import { currentWindowLabel, errorRecordFields, maybePayload, nowUnixNanos, randomSpanId, randomTraceId, summarizePayload } from './utils';
+import { currentWindowLabel, errorRecordFields, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
 
 export async function instrumentedEmit(
   exporter: AuditaurExporter,
   event: string,
   payload: unknown,
-  maxPayloadBytes: number,
-  captureFullPayloads: boolean,
+  policy: PayloadPolicy,
 ): Promise<void> {
-  const start = nowUnixNanos();
-  const windowLabel = currentWindowLabel();
-  try {
-    await tauriEmit(event, payload);
-    const span = eventSpan(event, 'emit', 'OK', undefined, windowLabel, undefined, payload, maxPayloadBytes, captureFullPayloads, start);
-    exporter.addSpan(span);
-    exporter.addTauriEvent(eventRecord(event, 'emit', span, undefined, windowLabel, payload, maxPayloadBytes, captureFullPayloads));
-  } catch (error) {
-    const span = eventSpan(event, 'emit', 'ERROR', errorRecordFields(error).message, windowLabel, undefined, payload, maxPayloadBytes, captureFullPayloads, start);
-    exporter.addSpan(span);
-    exporter.addTauriEvent(eventRecord(event, 'emit', span, undefined, windowLabel, payload, maxPayloadBytes, captureFullPayloads));
-    throw error;
-  }
+  return emitAndRecord(exporter, event, undefined, payload, policy, () => tauriEmit(event, payload));
 }
 
 export async function instrumentedEmitTo(
@@ -35,20 +23,32 @@ export async function instrumentedEmitTo(
   target: string,
   event: string,
   payload: unknown,
-  maxPayloadBytes: number,
-  captureFullPayloads: boolean,
+  policy: PayloadPolicy,
+): Promise<void> {
+  return emitAndRecord(exporter, event, target, payload, policy, () => tauriEmitTo(target, event, payload));
+}
+
+async function emitAndRecord(
+  exporter: AuditaurExporter,
+  event: string,
+  target: string | undefined,
+  payload: unknown,
+  policy: PayloadPolicy,
+  send: () => Promise<void>,
 ): Promise<void> {
   const start = nowUnixNanos();
   const windowLabel = currentWindowLabel();
+  const record = (statusCode: 'OK' | 'ERROR', statusMessage?: string) => {
+    const recorded = eventPayload(policy, event, payload);
+    const span = eventSpan(event, 'emit', statusCode, statusMessage, windowLabel, target, recorded, start);
+    exporter.addSpan(span);
+    exporter.addTauriEvent(eventRecord(event, 'emit', span, target, windowLabel, recorded));
+  };
   try {
-    await tauriEmitTo(target, event, payload);
-    const span = eventSpan(event, 'emit', 'OK', undefined, windowLabel, target, payload, maxPayloadBytes, captureFullPayloads, start);
-    exporter.addSpan(span);
-    exporter.addTauriEvent(eventRecord(event, 'emit', span, target, windowLabel, payload, maxPayloadBytes, captureFullPayloads));
+    await send();
+    record('OK');
   } catch (error) {
-    const span = eventSpan(event, 'emit', 'ERROR', errorRecordFields(error).message, windowLabel, target, payload, maxPayloadBytes, captureFullPayloads, start);
-    exporter.addSpan(span);
-    exporter.addTauriEvent(eventRecord(event, 'emit', span, target, windowLabel, payload, maxPayloadBytes, captureFullPayloads));
+    record('ERROR', errorRecordFields(error).message);
     throw error;
   }
 }
@@ -57,28 +57,30 @@ export async function instrumentedListen<T>(
   exporter: AuditaurExporter,
   event: string,
   handler: (event: AuditaurEvent<T>) => void,
-  maxPayloadBytes: number,
-  captureFullPayloads: boolean,
+  policy: PayloadPolicy,
 ): Promise<() => void> {
   const windowLabel = currentWindowLabel();
   return tauriListen<T>(event, (received: Event<T>) => {
-    const span = eventSpan(event, 'receive', 'OK', undefined, windowLabel, undefined, received.payload, maxPayloadBytes, captureFullPayloads);
+    const recorded = eventPayload(policy, event, received.payload);
+    const span = eventSpan(event, 'receive', 'OK', undefined, windowLabel, undefined, recorded);
     exporter.addSpan(span);
-    exporter.addTauriEvent(eventRecord(event, 'receive', span, undefined, windowLabel, received.payload, maxPayloadBytes, captureFullPayloads));
+    exporter.addTauriEvent(eventRecord(event, 'receive', span, undefined, windowLabel, recorded));
     handler(received);
   });
+}
+
+function eventPayload(policy: PayloadPolicy, event: string, payload: unknown): RecordedPayload {
+  return payload === undefined ? {} : recordPayload(policy, 'eventPayload', event, payload);
 }
 
 function eventSpan(
   event: string,
   direction: 'emit' | 'receive',
   statusCode: 'OK' | 'ERROR',
-  statusMessage?: string,
-  windowLabel?: string,
-  target?: string,
-  payload?: unknown,
-  maxPayloadBytes = 16_384,
-  captureFullPayloads = false,
+  statusMessage: string | undefined,
+  windowLabel: string | undefined,
+  target: string | undefined,
+  payload: RecordedPayload,
   startTimeUnixNanos = nowUnixNanos(),
 ): SpanRecord {
   const endTimeUnixNanos = nowUnixNanos();
@@ -97,8 +99,8 @@ function eventSpan(
       'tauri.event.direction': direction,
       'tauri.event.target': target,
       'tauri.window.label': windowLabel,
-      'tauri.event.payload.summary': payload === undefined ? undefined : summarizePayload(payload, maxPayloadBytes),
-      'tauri.event.payload': payload === undefined ? undefined : maybePayload(payload, captureFullPayloads, maxPayloadBytes),
+      'tauri.event.payload.summary': payload.summary,
+      'tauri.event.payload': payload.json,
       'auditaur.source': 'frontend',
     },
     source: 'frontend',
@@ -111,9 +113,7 @@ function eventRecord(
   span: SpanRecord,
   target: string | undefined,
   windowLabel: string | undefined,
-  payload: unknown,
-  maxPayloadBytes: number,
-  captureFullPayloads: boolean,
+  payload: RecordedPayload,
 ): TauriEventRecord {
   return {
     sessionId: '',
@@ -124,8 +124,8 @@ function eventRecord(
     traceId: span.traceId,
     spanId: span.spanId,
     windowLabel,
-    payloadSummary: payload === undefined ? undefined : summarizePayload(payload, maxPayloadBytes),
-    payloadJson: payload === undefined ? undefined : maybePayload(payload, captureFullPayloads, maxPayloadBytes),
+    payloadSummary: payload.summary,
+    payloadJson: payload.json,
     payloadRedacted: true,
   };
 }
