@@ -118,6 +118,15 @@ describe.each(Object.keys(bundlers))('drive bridge bundled by %s', (name) => {
     });
     await execute('press', '#name', 'Control+s');
     expect(keys).toEqual(['Control+ctrl', 's+ctrl']);
+
+    const codes: string[] = [];
+    document.querySelector('#save')!.addEventListener('keydown', (event) => {
+      const { key, code, keyCode } = event as KeyboardEvent;
+      codes.push(`${JSON.stringify(key)} ${code} ${keyCode}`);
+    });
+    await expect(execute('press', '#save', 'Space')).resolves.toMatchObject({ code: 'Space', defaultAction: 'click' });
+    expect(codes).toEqual(['" " Space 32']);
+    expect(clicks).toBe(2);
   });
 
   it('snapshots the page', async () => {

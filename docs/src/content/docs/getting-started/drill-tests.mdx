@@ -94,6 +94,22 @@ Every step accepts `name` and `timeoutMs`.
 
 Assertions retry until they pass or their retry window runs out: the suite's `expectTimeoutMs` (default 5s), or the step's own `timeoutMs`, like Playwright's `expect(..., { timeout })`. Add `"soft": true` to record a failure and keep going. Add `"not": true` to negate any assertion except snapshots and `expectNoErrors`. `toHaveText` and `toHaveValue` take a string or `{ "pattern": "regex" }`; `toContainText` takes a string.
 
+### Keyboard input
+
+`press` sends the events Playwright's `press` does on a US layout: `key`, `code`, `keyCode` and `location` (so `Space` is `key: " "`, `code: "Space"`), `keydown`, `keypress` for keys that produce text, and `keyup`. Name a key by its value (`Enter`, `ArrowDown`, `a`, `!`) or its code (`KeyA`, `Digit1`). As in Playwright, Shift changes a key named by code (`Shift+KeyA` is `A`) but not one named by character (`Shift+a` is `a`).
+
+The events are synthetic (`isTrusted: false`), so the bridge also performs the browser's default action, unless the app calls `preventDefault()`:
+
+| Key | Default action |
+| --- | --- |
+| `Tab`, `Shift+Tab` | Moves focus in tab order, firing `blur` and `focus`; wraps at the ends instead of leaving the webview |
+| `Enter` | Clicks a button, link or `summary`; submits a text field's form; inserts a line break in a textarea or contenteditable |
+| `Space` | Clicks a button, checkbox or radio on `keyup` |
+| Text keys, `Backspace`, `Delete` | Edits a text field or contenteditable, with `beforeinput` first, as the browser's editing does |
+| `Control+a` / `Meta+a` | Selects a field's content |
+
+Other keys (arrows, `Home`, `End`, `PageUp`, `Escape`, …) only dispatch events: the bridge doesn't scroll, move a caret or close anything. That's enough for apps that handle those keys themselves, such as menus, lists and keyboard drag and drop. The reply reports `defaultAction` and `defaultPrevented`.
+
 `expectValue` re-evaluates its expression until the matcher passes, like Playwright's `expect.poll`; a throw counts as a miss. Use it for app state the DOM doesn't show:
 
 ```json
