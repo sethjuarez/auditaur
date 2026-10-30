@@ -110,6 +110,8 @@ The events are synthetic (`isTrusted: false`), so the bridge also performs the b
 
 Other keys (arrows, `Home`, `End`, `PageUp`, `Escape`, …) only dispatch events: the bridge doesn't scroll, move a caret or close anything. That's enough for apps that handle those keys themselves, such as menus, lists and keyboard drag and drop. The reply reports `defaultAction` and `defaultPrevented`.
 
+On Windows, a drill-driven page always acts as if its window had OS focus, like Playwright's pages. So `document.hasFocus()` is true, and `blur`, `focus` and `focusout` fire even while you work in another window. Without this, a background window's `blur()` fires nothing, and blur-to-save fields only save when the app happens to be in front. Auditaur turns this on (WebView2's `Emulation.setFocusEmulationEnabled`) the first time the drive bridge drives each window; on macOS and Linux, keep the app in front.
+
 `fill` on a contenteditable (CodeMirror, ProseMirror, Lexical, …) selects its content and lets the browser replace it, as Playwright does, so the editor updates its own state. The step fails if the element's text doesn't end up equal to `value`, rather than passing without effect. A child of an editor fills the whole editor. A plain contenteditable without `white-space: pre` collapses repeated spaces and tabs, so such values fail honestly. In those cases drive the editor with `click` and `type`, or set it through `evaluate`.
 
 `expectValue` re-evaluates its expression until the matcher passes, like Playwright's `expect.poll`; a throw counts as a miss. Use it for app state the DOM doesn't show:

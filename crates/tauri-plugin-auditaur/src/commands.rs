@@ -70,11 +70,20 @@ pub async fn register_drive_bridge<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn poll_drive_bridge_request(
+pub async fn poll_drive_bridge_request<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AuditaurState>,
     window_label: Option<String>,
 ) -> Result<Option<auditaur_core::drive_bridge::DriveBridgeRequest>, AuditaurError> {
-    state.poll_drive_bridge_request(window_label)
+    let request = state.poll_drive_bridge_request(window_label.clone())?;
+    if request.is_some() {
+        // Before the first action, make the page behave as focused (see `focus`).
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            crate::focus::emulate_for_drive(&app, window_label.as_deref())
+        })
+        .await;
+    }
+    Ok(request)
 }
 
 #[tauri::command]

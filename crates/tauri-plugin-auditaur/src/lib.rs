@@ -3,6 +3,7 @@ pub mod command_status;
 pub mod commands;
 pub mod desktop;
 pub mod error;
+mod focus;
 pub mod ipc;
 pub mod state;
 pub mod test_helpers;
@@ -153,7 +154,12 @@ fn capture_initial_windows<R: Runtime>(app: &tauri::AppHandle<R>, state: &state:
 
 fn register_window_lifecycle<R: Runtime>(window: Window<R>) {
     let listener_window = window.clone();
-    window.on_window_event(move |event| record_window_event(&listener_window, event));
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            focus::forget(listener_window.label());
+        }
+        record_window_event(&listener_window, event)
+    });
 }
 
 fn record_window_ready<R: Runtime>(window: &Window<R>) {
