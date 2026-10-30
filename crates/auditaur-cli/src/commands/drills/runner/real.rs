@@ -688,6 +688,8 @@ const MIN_DIALOG_API_VERSION: &str = "0.11.0";
 const MIN_BUTTON_CLICK_API_VERSION: &str = "0.12.0";
 /// First `@auditaur/api` release with the `dragTo` bridge action.
 const MIN_DRAG_API_VERSION: &str = "0.13.0";
+/// First `@auditaur/api` release with the `paste` bridge action.
+const MIN_PASTE_API_VERSION: &str = "0.14.0";
 
 /// Matches nothing, so the probe exercises the bridge's not-found reply.
 const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
@@ -748,6 +750,7 @@ fn explain_action(action: &str, error: String) -> String {
     let needs = match action {
         "clickButton" => Some(("`click` with `button`", MIN_BUTTON_CLICK_API_VERSION)),
         "dragTo" => Some(("`drag`", MIN_DRAG_API_VERSION)),
+        "paste" => Some(("`paste`", MIN_PASTE_API_VERSION)),
         _ => None,
     };
     match needs {
@@ -897,6 +900,15 @@ impl BridgeDriver {
             StepKind::Press { key, target: None } => self
                 .call(ctx, "press", None, Some(key.clone()), Vec::new())
                 .map(drop),
+            StepKind::Paste(paste) => {
+                let payload = super::paste::payload(paste, ctx.env).map_err(failed)?;
+                match &paste.target {
+                    Some(target) => self.act(ctx, "paste", target, Some(payload), Vec::new()),
+                    None => self
+                        .call(ctx, "paste", None, Some(payload), Vec::new())
+                        .map(drop),
+                }
+            }
             StepKind::WaitFor { target, state } => self.wait_for(ctx, target, *state),
             StepKind::Evaluate(expression) => self
                 .call(ctx, "evaluate", None, Some(expression.clone()), Vec::new())
@@ -1176,14 +1188,20 @@ impl BridgeDriver {
         let reply = self.request_full(ctx, action, selector, value, values, false, ctx.remaining());
         match reply {
             Ok(reply) if reply.ok => Ok(reply),
-            Ok(reply) => Err(failed(explain(format!(
-                "{action} failed: {}",
-                reply
-                    .error
-                    .unwrap_or_else(|| "bridge returned ok=false".to_string())
-            )))),
+            Ok(reply) => Err(failed(explain_action(
+                action,
+                format!(
+                    "{action} failed: {}",
+                    reply
+                        .error
+                        .unwrap_or_else(|| "bridge returned ok=false".to_string())
+                ),
+            ))),
             Err(_) if ctx.expired() => Err(timed_out(format!("{action}: step timed out"))),
-            Err(error) => Err(failed(explain(format!("{action} failed: {error:#}")))),
+            Err(error) => Err(failed(explain_action(
+                action,
+                format!("{action} failed: {error:#}"),
+            ))),
         }
     }
 

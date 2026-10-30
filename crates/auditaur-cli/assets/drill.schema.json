@@ -83,6 +83,7 @@
         { "$ref": "#/$defs/stepFill" },
         { "$ref": "#/$defs/stepType" },
         { "$ref": "#/$defs/stepPress" },
+        { "$ref": "#/$defs/stepPaste" },
         { "$ref": "#/$defs/stepHover" },
         { "$ref": "#/$defs/stepDrag" },
         { "$ref": "#/$defs/stepSelect" },
@@ -131,6 +132,28 @@
     "stepHover": {
       "type": "object", "additionalProperties": false, "required": ["hover"],
       "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "hover": { "$ref": "#/$defs/locator" } }
+    },
+    "stepPaste": {
+      "type": "object", "additionalProperties": false, "required": ["paste"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "paste": {
+          "description": "What the clipboard holds, pasted like Ctrl+V: the text, or { text, html, files }.",
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "object", "additionalProperties": false,
+              "anyOf": [{ "required": ["text"] }, { "required": ["html"] }, { "required": ["files"] }],
+              "properties": {
+                "text": { "type": "string", "minLength": 1 },
+                "html": { "type": "string", "minLength": 1 },
+                "files": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" }, "description": "Paths, relative to the workspace; ${NAME} expands from the drill env. 5 MiB in total at most." }
+              }
+            }
+          ]
+        },
+        "target": { "$ref": "#/$defs/locator", "description": "Element to paste into; the focused element when omitted." }
+      }
     },
     "stepDrag": {
       "type": "object", "additionalProperties": false, "required": ["drag", "to"],

@@ -85,14 +85,14 @@ Every step accepts `name` and `timeoutMs`.
 
 | Kind | Steps |
 | --- | --- |
-| Actions | `click` (+ optional `button`: `left`, `right` or `middle`), `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `drag` + `to`, `select` + `value` or `values`, `check`, `uncheck` |
+| Actions | `click` (+ optional `button`: `left`, `right` or `middle`), `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `drag` + `to`, `paste` (+ optional `target`; text, or `{ text, html, files }`), `select` + `value` or `values`, `check`, `uncheck` |
 | Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload` |
 | Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop), `dialog` + `respond` (answer a [native dialog](#native-dialogs)) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
 | Value assertions | `expectValue` (JavaScript) + one of `toEqual` (deep JSON equality), `toContain` (substring or array element), `toMatch` (regex string) |
 | Telemetry assertions | `expectIpc` (+ `status`, `count`, `maxMs`), `expectEvent` (+ `count`), `expectLog` (+ `level`, `attributes`, `count`), `expectSpan` (+ `status`, `attributes`, `count`), `expectNoTelemetry` (+ `in`), `expectNoErrors` (+ `ignore`) |
 
-Actions wait for their target, like Playwright's actionability checks. Every action waits for it to be visible. `click`, `dblclick`, `select`, `check`, `uncheck`, `fill` and `type` also wait for it to be enabled: not natively `disabled`, not in a disabled fieldset, and not inside `aria-disabled="true"`. `fill` and `type` also wait for it to be editable, meaning not `readonly` and not `aria-readonly="true"`. `hover` and `press` act on disabled targets, as in Playwright. A timeout names the condition, e.g. "timed out waiting for `…` to be editable". `type` requires editable, which Playwright doesn't; a real user can't type into a readonly field either. Needs @auditaur/api 0.12.1 and CLI 0.4.26 or newer. Older bridges skip the enabled and editable checks, and an older CLI fails at once on a readonly target instead of waiting.
+Actions wait for their target, like Playwright's actionability checks. Every action waits for it to be visible. `click`, `dblclick`, `select`, `check`, `uncheck`, a targeted `paste`, `fill` and `type` also wait for it to be enabled: not natively `disabled`, not in a disabled fieldset, and not inside `aria-disabled="true"`. `fill` and `type` also wait for it to be editable, meaning not `readonly` and not `aria-readonly="true"`. `hover` and `press` act on disabled targets, as in Playwright. A timeout names the condition, e.g. "timed out waiting for `…` to be editable". `type` requires editable, which Playwright doesn't; a real user can't type into a readonly field either. Needs @auditaur/api 0.12.1 and CLI 0.4.26 or newer. Older bridges skip the enabled and editable checks, and an older CLI fails at once on a readonly target instead of waiting.
 
 Assertions retry until they pass or their retry window runs out: the suite's `expectTimeoutMs` (default 5s), or the step's own `timeoutMs`, like Playwright's `expect(..., { timeout })`. Add `"soft": true` to record a failure and keep going. Add `"not": true` to negate any assertion except snapshots and `expectNoErrors`. `toHaveText` and `toHaveValue` take a string or `{ "pattern": "regex" }`; `toContainText` takes a string.
 
@@ -118,6 +118,18 @@ Assertions retry until they pass or their retry window runs out: the suite's `ex
 ```
 
 If the dragged element is inside `draggable="true"` and its `dragstart` isn't cancelled, the step sends Chromium's HTML5 sequence instead: `pointercancel`, then `drag`, `dragenter`, `dragleave` and `dragover` per move, `drop` if the last `dragover` was cancelled, and `dragend`. Events carry a `DataTransfer` the app can fill in `dragstart`. A refused drop doesn't fail the step, as in Playwright; assert the result. Events are synthetic, so pointer capture isn't available (dnd-kit listens on the document and doesn't need it), and an activation `delay` constraint never elapses between steps. For delay sensors, use dnd-kit's keyboard sensor with `press`. Needs @auditaur/api 0.13.0 or newer.
+
+### Paste
+
+`paste` pastes like Ctrl+V. It focuses `target` (or uses the focused element, without waiting for it) and fires a cancelable `paste` event whose `clipboardData` holds the text, HTML and files. Apps that read `clipboardData` and call `preventDefault()`, such as image drop zones and rich-text editors, handle it themselves. Otherwise the browser's default action runs. A text field gets the plain text at the caret, with line breaks flattened in an `<input>`. A contenteditable gets the HTML, or the text if there is no HTML, through `beforeinput` (`insertFromPaste`, with the clipboard on `dataTransfer`), so editors like ProseMirror and Lexical take it as a paste. A field gets nothing from HTML alone, and nothing is inserted into an element that isn't editable. Neither fails the step, so assert the result.
+
+```json
+{ "paste": "plain text", "target": { "label": "Title" } },
+{ "paste": { "html": "<b>bold</b>", "text": "bold" }, "target": ".editor" },
+{ "paste": { "files": ["fixtures/logo.png", "${RUN_DIR}/report.pdf"] }, "target": { "testId": "drop-zone" } }
+```
+
+`files` paths are relative to the workspace, and `${NAME}` expands from the drill env. Each file's `type` comes from its extension, and is empty for an unknown one, as in the browser. Files travel to the app base64-encoded, so their total is capped at 5 MiB. The system clipboard is never touched, and the step doesn't check it. Needs @auditaur/api 0.14.0 and CLI 0.4.30 or newer.
 
 ### Keyboard input
 
