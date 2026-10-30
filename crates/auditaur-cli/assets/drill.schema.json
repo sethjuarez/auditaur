@@ -83,6 +83,7 @@
         { "$ref": "#/$defs/stepFill" },
         { "$ref": "#/$defs/stepType" },
         { "$ref": "#/$defs/stepPress" },
+        { "$ref": "#/$defs/stepPaste" },
         { "$ref": "#/$defs/stepHover" },
         { "$ref": "#/$defs/stepDrag" },
         { "$ref": "#/$defs/stepSelect" },
@@ -91,6 +92,7 @@
         { "$ref": "#/$defs/stepWaitFor" },
         { "$ref": "#/$defs/stepEvaluate" },
         { "$ref": "#/$defs/stepReload" },
+        { "$ref": "#/$defs/stepClearStorage" },
         { "$ref": "#/$defs/stepSleep" },
         { "$ref": "#/$defs/stepScreenshot" },
         { "$ref": "#/$defs/stepGate" },
@@ -132,6 +134,28 @@
       "type": "object", "additionalProperties": false, "required": ["hover"],
       "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "hover": { "$ref": "#/$defs/locator" } }
     },
+    "stepPaste": {
+      "type": "object", "additionalProperties": false, "required": ["paste"],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "paste": {
+          "description": "What the clipboard holds, pasted like Ctrl+V: the text, or { text, html, files }.",
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "object", "additionalProperties": false,
+              "anyOf": [{ "required": ["text"] }, { "required": ["html"] }, { "required": ["files"] }],
+              "properties": {
+                "text": { "type": "string", "minLength": 1 },
+                "html": { "type": "string", "minLength": 1 },
+                "files": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" }, "description": "Paths, relative to the workspace; ${NAME} expands from the drill env. 5 MiB in total at most." }
+              }
+            }
+          ]
+        },
+        "target": { "$ref": "#/$defs/locator", "description": "Element to paste into; the focused element when omitted." }
+      }
+    },
     "stepDrag": {
       "type": "object", "additionalProperties": false, "required": ["drag", "to"],
       "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "drag": { "$ref": "#/$defs/locator", "description": "Element to press and drag, as in Playwright's dragTo." }, "to": { "$ref": "#/$defs/locator", "description": "Element whose center the drag is released over." } }
@@ -169,6 +193,10 @@
     "stepReload": {
       "type": "object", "additionalProperties": false, "required": ["reload"],
       "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "reload": { "const": true } }
+    },
+    "stepClearStorage": {
+      "type": "object", "additionalProperties": false, "required": ["clearStorage"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "clearStorage": { "const": true, "description": "Clear localStorage, sessionStorage, IndexedDB, Cache Storage and script-visible cookies, then reload. Needs @auditaur/api 0.15.0." } }
     },
     "stepSleep": {
       "type": "object", "additionalProperties": false, "required": ["sleep"],
@@ -396,7 +424,8 @@
             "placeholder": { "$ref": "#/$defs/text" },
             "name": { "$ref": "#/$defs/text", "description": "Accessible name; role only." },
             "exact": { "type": "boolean", "description": "Case-sensitive whole-string match." },
-            "nth": { "type": "integer", "description": "Pick one match; negative counts from the end." }
+            "nth": { "type": "integer", "description": "Pick one match; negative counts from the end." },
+            "within": { "$ref": "#/$defs/locator", "description": "Search only inside what this locator matches. Needs @auditaur/api 0.15.0." }
           }
         }
       ]

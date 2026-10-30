@@ -3,3 +3,4 @@ crates/tauri-plugin-auditaur/permissions/schemas/** text eol=lf
 # Built by packages/drills-ui (npm run build); committed so the extension and `auditaur init` need no Node build.
 .github/extensions/auditaur-drills/ui/app.* text eol=lf linguist-generated -diff
 crates/auditaur-cli/assets/auditaur-drills/ui/app.* text eol=lf linguist-generated -diff
+plugins/auditaur/com.github.copilot/extensions/auditaur-drills/ui/app.* text eol=lf linguist-generated -diff

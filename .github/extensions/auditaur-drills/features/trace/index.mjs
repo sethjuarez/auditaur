@@ -2,7 +2,8 @@
 
 import { field } from "../../lib/view-state.mjs";
 import { TELEMETRY_KINDS } from "../../lib/telemetry.mjs";
-import { traceSummary, traceView } from "./view.mjs";
+import { traceSummary } from "./summary.mjs";
+import { traceView } from "./view.mjs";
 
 export default {
     page: "trace",

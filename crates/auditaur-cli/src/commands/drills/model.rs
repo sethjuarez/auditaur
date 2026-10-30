@@ -56,6 +56,7 @@ pub const ACTION_KEYS: &[&str] = &[
     "fill",
     "type",
     "press",
+    "paste",
     "hover",
     "drag",
     "select",
@@ -64,6 +65,7 @@ pub const ACTION_KEYS: &[&str] = &[
     "waitFor",
     "evaluate",
     "reload",
+    "clearStorage",
     "sleep",
     "screenshot",
     "gate",
@@ -84,6 +86,9 @@ pub const DIALOG_KINDS: &[&str] = &["open", "save", "ask", "confirm", "message"]
 
 /// Matchers for `expectValue`, which asserts on a JavaScript expression's result.
 pub const VALUE_MATCHER_KEYS: &[&str] = &["toEqual", "toContain", "toMatch"];
+
+/// What `paste: { … }` puts on the clipboard.
+pub const PASTE_KEYS: &[&str] = &["text", "html", "files"];
 
 pub const MATCHER_KEYS: &[&str] = &[
     "toExist",
@@ -137,6 +142,7 @@ pub const LOCATOR_KEYS: &[&str] = &[
     "name",
     "exact",
     "nth",
+    "within",
 ];
 
 const LOCATOR_KINDS: &[&str] = &["css", "role", "text", "testId", "label", "placeholder"];
@@ -151,6 +157,7 @@ pub fn all_known_keys() -> Vec<&'static str> {
         ACTION_KEYS,
         MATCHER_KEYS,
         VALUE_MATCHER_KEYS,
+        PASTE_KEYS,
         SCREENSHOT_OPTION_KEYS,
         STEP_OPTION_KEYS,
         LOCATOR_KEYS,
@@ -265,6 +272,7 @@ pub enum StepKind {
         key: String,
         target: Option<Locator>,
     },
+    Paste(PasteStep),
     Hover(Locator),
     /// Press `source`, move to `to` with the button held, and release.
     Drag {
@@ -283,6 +291,8 @@ pub enum StepKind {
     },
     Evaluate(String),
     Reload,
+    /// Clear the page's web storage, then reload.
+    ClearStorage,
     Sleep(u64),
     Screenshot {
         name: String,
@@ -305,6 +315,16 @@ pub struct DialogStep {
     pub respond: Value,
     /// A deep-partial match on the options the app opened the dialog with.
     pub expect_options: Option<Value>,
+}
+
+/// `paste`: what goes on the clipboard, pasted into `target` or the focused element. Files are
+/// read when the step runs, after `${NAME}` in their paths expands from the drill env.
+#[derive(Debug, Clone)]
+pub struct PasteStep {
+    pub text: Option<String>,
+    pub html: Option<String>,
+    pub files: Vec<String>,
+    pub target: Option<Locator>,
 }
 
 /// `run`: a command run mid-test, with the same `cwd` rules as suite hooks.
@@ -739,6 +759,52 @@ pub enum Locator {
         exact: bool,
         nth: Option<i64>,
     },
+    /// `locator` searched only inside what `within` matches (Playwright's `locator.locator()`).
+    Within {
+        locator: Box<Locator>,
+        within: Box<Locator>,
+    },
+}
+
+impl Locator {
+    pub fn uses_within(&self) -> bool {
+        matches!(self, Self::Within { .. })
+    }
+}
+
+impl StepKind {
+    /// Whether any locator in the step is scoped with `within`.
+    pub fn uses_within(&self) -> bool {
+        let any = |targets: &[Option<&Locator>]| targets.iter().flatten().any(|l| l.uses_within());
+        match self {
+            Self::Click { target, .. }
+            | Self::Fill { target, .. }
+            | Self::Type { target, .. }
+            | Self::Select { target, .. }
+            | Self::WaitFor { target, .. }
+            | Self::Dblclick(target)
+            | Self::Hover(target)
+            | Self::Check(target)
+            | Self::Uncheck(target) => target.uses_within(),
+            Self::Press { target, .. } | Self::Screenshot { target, .. } => any(&[target.as_ref()]),
+            Self::Paste(paste) => any(&[paste.target.as_ref()]),
+            Self::Drag { source, to } => any(&[Some(source), Some(to)]),
+            Self::Expect(expect) => {
+                expect.target.uses_within()
+                    || matches!(&expect.matcher, Matcher::ToHaveScreenshot(shot)
+                        if shot.mask.iter().any(Locator::uses_within))
+            }
+            Self::Evaluate(_)
+            | Self::Reload
+            | Self::ClearStorage
+            | Self::Sleep(_)
+            | Self::Gate(_)
+            | Self::ExpectValue(_)
+            | Self::Telemetry(_)
+            | Self::Run(_)
+            | Self::Dialog(_) => false,
+        }
+    }
 }
 
 impl fmt::Display for Locator {
@@ -799,6 +865,7 @@ impl fmt::Display for Locator {
                 write!(f, "placeholder={placeholder:?}{}", flag(*exact))?;
                 nth(f, n)
             }
+            Self::Within { locator, within } => write!(f, "{within} >> {locator}"),
         }
     }
 }
@@ -1411,7 +1478,7 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
     let extra: &[&str] = match action {
         "click" => &["button"],
         "fill" | "type" => &["value"],
-        "press" | "screenshot" => &["target"],
+        "press" | "paste" | "screenshot" => &["target"],
         "select" => &["value", "values"],
         "waitFor" => &["state"],
         "expect" => &["not", "soft"],
@@ -1620,6 +1687,13 @@ fn parse_step_kind(
             }
             StepKind::Reload
         }
+        "clearStorage" => {
+            if raw != &Value::Bool(true) {
+                ctx.err(path, "expected `true`");
+                return None;
+            }
+            StepKind::ClearStorage
+        }
         "sleep" => match raw.as_u64() {
             Some(ms) if (1..=60_000).contains(&ms) => StepKind::Sleep(ms),
             _ => {
@@ -1651,7 +1725,91 @@ fn parse_step_kind(
         }
         "run" => StepKind::Run(parse_command_step(ctx, map, raw, parent, path)?),
         "dialog" => StepKind::Dialog(parse_dialog_step(ctx, map, raw, parent, path)?),
+        "paste" => StepKind::Paste(parse_paste_step(ctx, map, raw, parent, path)?),
         _ => StepKind::Telemetry(parse_telemetry(ctx, map, action, raw, parent, path)?),
+    })
+}
+
+/// `paste: "text"`, or `paste: { text?, html?, files? }` with at least one.
+fn parse_paste_step(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    raw: &Value,
+    parent: &str,
+    path: &str,
+) -> Option<PasteStep> {
+    let target = optional_locator(ctx, map, "target", parent);
+    let nonempty = |ctx: &mut Ctx, value: &Value, path: &str| match value {
+        Value::String(text) if text.is_empty() => {
+            ctx.err(path, "must not be empty");
+            None
+        }
+        Value::String(text) => Some(text.clone()),
+        other => {
+            ctx.err(path, format!("expected string, found {}", type_name(other)));
+            None
+        }
+    };
+    let content = match raw {
+        Value::String(_) => nonempty(ctx, raw, path).map(|text| (Some(text), None, Vec::new())),
+        Value::Object(content) => {
+            check_keys(ctx, content, path, PASTE_KEYS, "in `paste`");
+            let mut ok = true;
+            let mut field = |ctx: &mut Ctx, key: &str| {
+                let value = content.get(key)?;
+                let parsed = nonempty(ctx, value, &join(path, key));
+                ok &= parsed.is_some();
+                parsed
+            };
+            let text = field(ctx, "text");
+            let html = field(ctx, "html");
+            let files = match content.get("files") {
+                None => Vec::new(),
+                Some(Value::Array(items)) if !items.is_empty() => {
+                    let files_path = join(path, "files");
+                    items
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, item)| {
+                            let file = string_value(ctx, item, &format!("{files_path}[{i}]"));
+                            ok &= file.is_some();
+                            file
+                        })
+                        .collect()
+                }
+                Some(_) => {
+                    ctx.err(
+                        &join(path, "files"),
+                        "expected a non-empty array of file paths",
+                    );
+                    ok = false;
+                    Vec::new()
+                }
+            };
+            // Any other key was reported above as unknown.
+            if ok && content.is_empty() {
+                ctx.err(path, "`paste` needs `text`, `html`, or `files`");
+                ok = false;
+            }
+            ok.then_some((text, html, files))
+        }
+        other => {
+            ctx.err(
+                path,
+                format!(
+                    "expected the text to paste, or {{ text, html, files }}, found {}",
+                    type_name(other)
+                ),
+            );
+            None
+        }
+    };
+    let (text, html, files) = content?;
+    Some(PasteStep {
+        text,
+        html,
+        files,
+        target: target.ok()?,
     })
 }
 
@@ -2393,11 +2551,14 @@ fn parse_locator(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Locator> {
     if map.contains_key("exact") && kind == "role" && !map.contains_key("name") {
         ctx.err(&join(path, "exact"), "requires `name`");
     }
+    let within = map
+        .get("within")
+        .and_then(|value| parse_locator(ctx, value, &join(path, "within")));
     if ctx.issues.len() > before {
         return None;
     }
     let value = value?;
-    Some(match kind {
+    let locator = match kind {
         "css" => match nth {
             Some(nth) => Locator::CssNth { css: value, nth },
             None => Locator::Css(value),
@@ -2425,6 +2586,13 @@ fn parse_locator(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Locator> {
             nth,
         },
         _ => unreachable!("locator kinds are exhaustive"),
+    };
+    Some(match within {
+        Some(within) => Locator::Within {
+            locator: Box::new(locator),
+            within: Box::new(within),
+        },
+        None => locator,
     })
 }
 
@@ -2447,6 +2615,24 @@ pub fn describe(kind: &StepKind) -> String {
             target: Some(target),
         } => format!("press {key} on {target}"),
         StepKind::Press { key, target: None } => format!("press {key}"),
+        StepKind::Paste(paste) => {
+            let mut parts = Vec::new();
+            if let Some(text) = &paste.text {
+                parts.push(format!("{:?}", clip(text, 40)));
+            }
+            if paste.html.is_some() {
+                parts.push("html".to_string());
+            }
+            match paste.files.len() {
+                0 => {}
+                1 => parts.push("1 file".to_string()),
+                n => parts.push(format!("{n} files")),
+            }
+            match &paste.target {
+                Some(target) => format!("paste {} into {target}", parts.join(" + ")),
+                None => format!("paste {}", parts.join(" + ")),
+            }
+        }
         StepKind::Hover(target) => format!("hover {target}"),
         StepKind::Drag { source, to } => format!("drag {source} to {to}"),
         StepKind::Select { target, values } => format!("select {} in {target}", values.join(", ")),
@@ -2457,6 +2643,7 @@ pub fn describe(kind: &StepKind) -> String {
         }
         StepKind::Evaluate(expression) => format!("evaluate {}", clip(expression, 60)),
         StepKind::Reload => "reload page".to_string(),
+        StepKind::ClearStorage => "clear storage and reload".to_string(),
         StepKind::Sleep(ms) => format!("sleep {ms}ms"),
         StepKind::Screenshot { name, .. } => format!("screenshot {name}"),
         StepKind::Gate(gate) => format!(
@@ -3021,6 +3208,34 @@ mod tests {
         assert_eq!(issues.len(), 2, "{issues:?}");
         assert!(issues[0].contains("`drag` requires `to`"), "{issues:?}");
         assert!(issues[1].contains("`to`"), "{issues:?}");
+    }
+
+    #[test]
+    fn paste_steps_take_text_or_clipboard_content() {
+        let ok = parse(
+            r##"{ "tests": [{ "name": "a", "steps": [
+                { "paste": "hello" },
+                { "paste": { "text": "a", "html": "<b>a</b>", "files": ["x.png", "y.png"] }, "target": "#editor" }
+            ] }] }"##,
+        );
+        assert!(ok.issues.is_empty(), "{:?}", ok.issues);
+        let suite = ok.suite.unwrap();
+        let steps = &suite.tests[0].steps;
+        assert_eq!(steps[0].title, r#"paste "hello""#);
+        assert_eq!(steps[1].title, r#"paste "a" + html + 2 files into #editor"#);
+        let StepKind::Paste(paste) = &steps[1].kind else {
+            panic!("expected paste, got {:?}", steps[1].kind);
+        };
+        assert_eq!(paste.files, ["x.png", "y.png"]);
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [{ "paste": {} }, { "paste": { "txt": "a" } }, { "paste": { "files": [] } }] }] }"##,
+        );
+        assert!(
+            issues[0].contains("needs `text`, `html`, or `files`"),
+            "{issues:?}"
+        );
+        assert!(issues[1].contains("did you mean `text`"), "{issues:?}");
+        assert!(issues[2].contains("non-empty array"), "{issues:?}");
     }
 
     #[test]

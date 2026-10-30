@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.30](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.29...auditaur-cli-v0.4.30) - 2026-10-30
+
+### Added
+
+- *(cli)* add within locators, a clearStorage step, and run-folder paths ([#177](https://github.com/sethjuarez/auditaur/pull/177))
+- *(cli)* add a paste drill step ([#174](https://github.com/sethjuarez/auditaur/pull/174))
+
+### Other
+
+- *(canvas)* split the action registry and trace view into single-purpose modules ([#179](https://github.com/sethjuarez/auditaur/pull/179))
+
 ## [0.4.29](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.28...auditaur-cli-v0.4.29) - 2026-10-30
 
 ### Added

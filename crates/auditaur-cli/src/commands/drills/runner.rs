@@ -6,6 +6,7 @@
 
 pub mod dialogs;
 pub mod expect;
+pub mod paste;
 pub mod real;
 pub mod snapshot;
 pub mod telemetry;
@@ -55,6 +56,8 @@ pub struct StepCtx<'a> {
     pub wrote_baseline: bool,
     /// Set by Ctrl+C or a canvas cancel; long waits (gates) give up when it is.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// The drill env (suite `env` and setup hooks' env files), for steps that expand `${NAME}`.
+    pub env: &'a [(String, String)],
 }
 
 impl StepCtx<'_> {
@@ -749,7 +752,7 @@ impl SuiteRun<'_, '_> {
             };
             let snapshot = self.snapshot_target(step, &budget.snapshot_base);
             let tracing = self.tracing();
-            let reload = matches!(step.kind, StepKind::Reload);
+            let reload = matches!(step.kind, StepKind::Reload | StepKind::ClearStorage);
             if reload {
                 if let Some(stubs) = self.dialogs.as_mut() {
                     stubs.before_reload(driver);
@@ -765,6 +768,7 @@ impl SuiteRun<'_, '_> {
                 snapshot,
                 wrote_baseline: false,
                 cancel: self.options.cancel.clone(),
+                env: &self.env,
             };
             let result = match &step.kind {
                 StepKind::Run(command) => {
