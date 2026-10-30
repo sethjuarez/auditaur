@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/sethjuarez/auditaur/compare/api-v0.15.0...api-v0.15.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **api:** keep clearStorage from being undone by unload handlers ([#181](https://github.com/sethjuarez/auditaur/issues/181)) ([05e49c2](https://github.com/sethjuarez/auditaur/commit/05e49c24a54c92fd6414fb3ed139c81760d3584d))
+
 ## [0.15.0](https://github.com/sethjuarez/auditaur/compare/api-v0.14.0...api-v0.15.0) (2026-10-30)
 
 
