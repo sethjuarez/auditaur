@@ -15,6 +15,7 @@ export function CoveragePage() {
   const { state, error, reload, change } = useCanvasState<CoverageState>((current) => (current?.run?.status === "running" ? 2000 : null));
   const action = useAction(reload);
   const broken = (state?.coverage?.sources ?? []).filter((source) => source.error);
+  const unlisted = (state?.coverage?.surface ?? []).filter((surface) => surface.error);
 
   return (
     <>
@@ -38,6 +39,9 @@ export function CoveragePage() {
           {state?.error && <Notice tone="error" title="Could not read coverage" pre>{state.error}</Notice>}
           {broken.map((source) => (
             <Notice key={source.db} tone="warning" title={`Could not read ${source.db}`}>{source.error}</Notice>
+          ))}
+          {unlisted.map((surface) => (
+            <Notice key={surface.path} tone="warning" title={`Could not read the app's commands from ${surface.path}`}>{surface.error}</Notice>
           ))}
         </Notices>
         <CoverageBody state={state} loadError={error} />

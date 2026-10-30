@@ -6,10 +6,10 @@ import { CommandList } from "./CommandList";
 import { CoverageMap } from "./CoverageMap";
 import { EventList } from "./EventList";
 import { TestCoverageRow } from "./TestCoverageRow";
-import { hasBaseline, shownCommands, shownEvents, shownTests, type Coverage, type CoverageState } from "./types";
+import { baselineFor, hasRegistry, shownCommands, shownEvents, shownTests, type Coverage, type CoverageState } from "./types";
 
 const EMPTY = {
-  commands: "No IPC commands were recorded. Compare with app telemetry to list commands no test called.",
+  commands: "No IPC commands were recorded. List the app's commands or compare with app telemetry to see commands no test called.",
   events: "No events were recorded. Compare with app telemetry to list events no test touched.",
   tests: "No tests in this run.",
   map: "Nothing to map.",
@@ -17,15 +17,17 @@ const EMPTY = {
 
 function CoverageList({ coverage, ui, comparing }: { coverage: Coverage; ui: CoverageState["ui"]; comparing: boolean }) {
   const titles = new Map(coverage.tests.map((test) => [test.id, test.title]));
-  const baseline = hasBaseline(coverage);
+  const baseline = ui.tab === "tests"
+    || (ui.tab === "events" ? baselineFor(coverage, "events") : ui.tab === "commands" ? baselineFor(coverage, "commands")
+      : baselineFor(coverage, "commands") && baselineFor(coverage, "events"));
   const empty = ui.missedOnly
-    ? baseline || ui.tab === "tests"
+    ? baseline
       ? <EmptyState icon={CheckCircleIcon} title="Nothing unexercised here." />
-      : <EmptyState icon={InfoIcon} title="Nothing can show as unexercised without app telemetry to compare with." />
+      : <EmptyState icon={InfoIcon} title="Nothing can show as unexercised without a baseline to compare with." />
     : <EmptyState icon={InfoIcon} title={EMPTY[ui.tab]} />;
   if (ui.tab === "commands") {
     const items = shownCommands(coverage, ui.missedOnly);
-    return items.length ? <CommandList items={items} titles={titles} comparing={comparing} /> : empty;
+    return items.length ? <CommandList items={items} titles={titles} comparing={comparing} registry={hasRegistry(coverage)} /> : empty;
   }
   if (ui.tab === "events") {
     const items = shownEvents(coverage, ui.missedOnly);

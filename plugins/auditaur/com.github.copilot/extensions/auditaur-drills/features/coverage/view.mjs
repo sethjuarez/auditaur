@@ -63,7 +63,9 @@ export async function coverageView(state, { fresh = false } = {}) {
 
 const unexercised = (items, key) => items.filter((item) => !item.tests.length).map((item) => item[key]);
 
-export const hasBaseline = (coverage) => (coverage.sources ?? []).some((source) => !source.error);
+const storeBaseline = (coverage) => (coverage.sources ?? []).some((source) => !source.error);
+// Per kind: commands also have a baseline in the app's registered commands (CLI 0.4.21+).
+export const baselineOf = (coverage) => coverage.baseline ?? { commands: storeBaseline(coverage), events: storeBaseline(coverage) };
 
 export function coverageSummary(view) {
     const coverage = view.coverage;
@@ -71,11 +73,15 @@ export function coverageSummary(view) {
     return {
         run: view.run,
         sources: coverage.sources,
-        // Without a readable store, every count is out of only what the run touched.
-        baseline: hasBaseline(coverage),
+        surface: coverage.surface ?? [],
+        // Without a baseline for a kind, its counts are out of only what the run touched.
+        baseline: baselineOf(coverage),
         totals: coverage.totals,
         unexercisedCommands: unexercised(coverage.commands, "command"),
         unexercisedEvents: unexercised(coverage.events, "event"),
+        unregisteredCommands: (coverage.surface ?? []).some((surface) => !surface.error)
+            ? coverage.commands.filter((item) => !item.registered).map((item) => item.command)
+            : [],
         failingCommands: coverage.commands
             .filter((item) => item.failed)
             .map((item) => ({ command: item.command, failed: item.failed, calls: item.calls })),

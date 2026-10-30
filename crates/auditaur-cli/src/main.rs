@@ -611,6 +611,11 @@ enum DrillCommand {
         /// (repeatable); anything recorded there but not exercised is listed too.
         #[arg(long)]
         db: Vec<PathBuf>,
+        /// The app's registered commands (repeatable): Rust sources or a folder of them
+        /// (names in `generate_handler!`), a `.json` array, or a one-per-line list.
+        /// Defaults to `coverage.commands` in the config, else `src-tauri/src`.
+        #[arg(long)]
+        commands: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -1129,8 +1134,19 @@ fn inner_main() -> Result<()> {
             }
             Some(DrillCommand::Runs { json }) => commands::drills::runs(json),
             Some(DrillCommand::Show { run, json }) => commands::drills::show(run.as_deref(), json),
-            Some(DrillCommand::Coverage { run, db, json }) => {
-                commands::drills::coverage::coverage(run.as_deref(), &db, json)
+            Some(DrillCommand::Coverage {
+                run,
+                db,
+                commands: surface,
+                json,
+            }) => {
+                commands::drills::coverage::coverage(commands::drills::coverage::CoverageOptions {
+                    run,
+                    dbs: db,
+                    commands: surface,
+                    config,
+                    json,
+                })
             }
             Some(DrillCommand::Locate { target, app, json }) => {
                 commands::drills::locate::locate(commands::drills::locate::LocateOptions {
