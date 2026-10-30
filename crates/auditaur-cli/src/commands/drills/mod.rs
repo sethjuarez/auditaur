@@ -865,6 +865,12 @@ mod tests {
         use Verdict::*;
         let steps: &[(Verdict, Value)] = &[
             (Valid, json!({ "click": "#a" })),
+            (Valid, json!({ "click": "#a", "button": "right" })),
+            (Valid, json!({ "click": "#a", "button": "middle" })),
+            (Valid, json!({ "click": "#a", "button": "left" })),
+            (Invalid, json!({ "click": "#a", "button": "back" })),
+            (Invalid, json!({ "click": "#a", "button": 2 })),
+            (Invalid, json!({ "dblclick": "#a", "button": "right" })),
             (
                 Valid,
                 json!({ "click": { "role": "button", "name": "Go", "exact": true, "nth": -1 } }),

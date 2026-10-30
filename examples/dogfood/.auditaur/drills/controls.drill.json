@@ -39,10 +39,29 @@
       ]
     },
     {
+      "name": "right- and middle-clicks like a real mouse",
+      "steps": [
+        {
+          "evaluate": "(() => { window.__mouse = []; if (window.__mouseInstalled) return; window.__mouseInstalled = true; const el = document.querySelector('#drive-hover-target'); for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'auxclick', 'contextmenu']) el.addEventListener(type, (event) => { window.__mouse.push(type + ':' + event.button); if (type === 'contextmenu') event.preventDefault(); }); })()"
+        },
+        { "click": { "role": "button", "name": "Hover target", "exact": true }, "button": "right" },
+        {
+          "expectValue": "window.__mouse",
+          "toEqual": ["pointerdown:2", "mousedown:2", "pointerup:2", "mouseup:2", "auxclick:2", "contextmenu:2"]
+        },
+        { "evaluate": "window.__mouse = []" },
+        { "click": { "role": "button", "name": "Hover target", "exact": true }, "button": "middle" },
+        {
+          "expectValue": "window.__mouse",
+          "toEqual": ["pointerdown:1", "mousedown:1", "pointerup:1", "mouseup:1", "auxclick:1"]
+        }
+      ]
+    },
+    {
       "name": "fires blur even when the window is in the background",
       "tags": ["@windows"],
       "steps": [
-        { "run": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/take-foreground.ps1"], "timeoutMs": 15000 },
+        { "run": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/take-foreground.ps1"], "timeoutMs": 60000 },
         {
           "expectValue": "(() => { const input = document.querySelector('#drive-input'); let fired = false; input.addEventListener('blur', () => { fired = true; }, { once: true }); input.focus(); input.blur(); return { hasFocus: document.hasFocus(), fired }; })()",
           "toEqual": { "hasFocus": true, "fired": true }

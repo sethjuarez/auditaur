@@ -105,6 +105,7 @@ export interface DriveBridgeRequest {
     | 'text'
     | 'click'
     | 'dblclick'
+    | 'clickButton'
     | 'fill'
     | 'type'
     | 'press'
