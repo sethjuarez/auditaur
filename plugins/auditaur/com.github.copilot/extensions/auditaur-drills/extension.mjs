@@ -11,6 +11,7 @@ import { canvasActions, runAction } from "./lib/actions.mjs";
 import { reportFailedPages } from "./lib/build-info.mjs";
 import { openSchema } from "./lib/config.mjs";
 import { agentMessage, DrillError } from "./lib/errors.mjs";
+import { awaitCommittedCanvas, missingCanvasMessage } from "./lib/deferral.mjs";
 import { loadFeatures } from "./lib/features.mjs";
 import { PanelStore } from "./lib/panel-store.mjs";
 import { CANVAS_ID, Panels } from "./lib/panels.mjs";
@@ -70,6 +71,10 @@ if (DEFERS_TO_PROJECT) {
         `Auditaur Drills: using this repository's committed canvas (${projectCopy(REPO_ROOT)}); the installed copy is idle.`,
         { level: "info", ephemeral: true },
     );
+    // `list` reads `this`, so bind it to the canvas API.
+    const canvasApi = session.rpc?.canvas;
+    const outcome = await awaitCommittedCanvas({ list: canvasApi?.list?.bind(canvasApi), canvasId: CANVAS_ID });
+    if (outcome === "missing") await session.log(missingCanvasMessage(projectCopy(REPO_ROOT)), { level: "warning" });
 } else {
     await serve();
 }
