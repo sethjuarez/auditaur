@@ -333,9 +333,8 @@ impl AppDriver for BridgeDriver {
             Some(reason) => evidence.skip("bridge", format!("{reason}; nothing to capture")),
             None => self.capture(ctx, "failure", &mut evidence, true),
         }
-        let index = ctx.step_index;
         if let Some(log) = self.log.clone() {
-            let file = format!("step-{index}-failure-app-output.log");
+            let file = ctx.artifact("failure-app-output.log");
             let saved = attach_output(ctx.writer, &log, "failure app output", &file);
             evidence.note("app output", saved);
         } else {
@@ -351,7 +350,7 @@ impl AppDriver for BridgeDriver {
             "appLog": self.log.as_deref().and_then(Path::file_name).map(|name| name.to_string_lossy()),
         });
         if let Ok(bytes) = serde_json::to_vec_pretty(&manifest) {
-            let file = format!("step-{index}-failure-evidence.json");
+            let file = ctx.artifact("failure-evidence.json");
             let _ = ctx
                 .writer
                 .attach("failure evidence", "application/json", &file, &bytes);
@@ -603,13 +602,13 @@ impl BridgeDriver {
             .session
             .screenshot_png(None, ctx.test_id.clone(), step_id, CAPTURE_TIMEOUT)
             .and_then(|png| {
-                let file = format!("step-{index}-{kind}.png");
+                let file = ctx.artifact(&format!("{kind}.png"));
                 ctx.writer
                     .attach(&format!("{kind} screenshot"), "image/png", &file, &png)
             });
         evidence.note("screenshot", shot);
         let dom = self.payload(ctx, "snapshot").and_then(|payload| {
-            let file = format!("step-{index}-{kind}-dom.json");
+            let file = ctx.artifact(&format!("{kind}-dom.json"));
             let bytes = serde_json::to_vec_pretty(&payload)?;
             ctx.writer
                 .attach(&format!("{kind} dom"), "application/json", &file, &bytes)
@@ -621,7 +620,7 @@ impl BridgeDriver {
                     .get("snapshot")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("bridge `ariaSnapshot` reply had no `snapshot`"))?;
-                let file = format!("step-{index}-{kind}-aria.yml");
+                let file = ctx.artifact(&format!("{kind}-aria.yml"));
                 ctx.writer
                     .attach(&format!("{kind} aria"), "text/yaml", &file, text.as_bytes())
             });
@@ -1500,11 +1499,10 @@ impl BridgeDriver {
         let writes = matches!(decision, Decision::Update | Decision::WriteMissing);
         let expected_info = json!({ "snapshot": snapshot.display });
         let attach = |ctx: &mut StepCtx<'_>, label: &str, bytes: &[u8], extension: &str, mime| {
-            let file = format!(
-                "step-{}-{}-{label}.{extension}",
-                ctx.step_index,
+            let file = ctx.artifact(&format!(
+                "{}-{label}.{extension}",
                 file_safe(&snapshot.name)
-            );
+            ));
             let _ = ctx.writer.attach(label, mime, &file, bytes);
         };
         if writes && !stable {
@@ -1630,7 +1628,7 @@ impl BridgeDriver {
                 ctx.remaining(),
             )
             .map_err(|error| failed(format!("{error:#}")))?;
-        let file = format!("step-{}-{}.png", ctx.step_index, file_safe(name));
+        let file = ctx.artifact(&format!("{}.png", file_safe(name)));
         ctx.writer
             .attach(name, "image/png", &file, &png)
             .map_err(|error| failed(format!("could not save screenshot: {error:#}")))?;
