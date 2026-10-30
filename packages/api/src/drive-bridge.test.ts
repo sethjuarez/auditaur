@@ -312,6 +312,12 @@ describe('drive bridge selector operations', () => {
     });
     expect(button.dispatched).toEqual(['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'mousemove']);
 
+    // A missing drag target is "not found", so the CLI keeps polling instead of failing the step.
+    await expect(executeDriveBridgeRequest(request('dragTo', '#button', '#absent'))).rejects.toThrow(
+      'selector not found',
+    );
+    expect(button.dispatched).toEqual(['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'mousemove']);
+
     const selected = await executeDriveBridgeRequest({
       ...request('select', '#select', 'two'),
       values: ['two'],

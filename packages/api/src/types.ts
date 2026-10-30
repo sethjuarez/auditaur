@@ -110,6 +110,7 @@ export interface DriveBridgeRequest {
     | 'type'
     | 'press'
     | 'hover'
+    | 'dragTo'
     | 'select'
     | 'check'
     | 'uncheck'

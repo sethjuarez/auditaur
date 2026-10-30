@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest';
 import { ELEMENT_DISABLED } from './actionability.js';
-import { mouseClick } from './mouse.js';
+import { mouseClick, mouseDrag } from './mouse.js';
 
 const TYPES = [
   'pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove',
@@ -216,5 +216,97 @@ describe('mouseClick', () => {
     mouseClick(button, 'left', 2);
     expect(log).toEqual(expected);
     if (on !== 'click') expect(document.activeElement).toBe(field);
+  });
+});
+describe('mouseDrag', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  const DRAG_TYPES = [
+    'pointerdown', 'mousedown', 'pointermove', 'mousemove', 'pointerup', 'mouseup', 'click', 'pointercancel',
+    'dragstart', 'drag', 'dragenter', 'dragleave', 'dragover', 'drop', 'dragend',
+  ];
+
+  function recordDrag(): string[] {
+    const log: string[] = [];
+    for (const type of DRAG_TYPES) {
+      document.addEventListener(type, (event) => {
+        const id = (event.target as Element).id || (event.target as Element).tagName?.toLowerCase();
+        log.push(`${type}@${id}:${(event as MouseEvent).buttons}`);
+      }, { capture: true, signal: controller.signal });
+    }
+    return log;
+  }
+  let controller = new AbortController();
+  afterEach(() => {
+    controller.abort();
+    controller = new AbortController();
+  });
+
+  it('presses the source, moves in steps with the button held, and releases over the target', async () => {
+    document.body.innerHTML = '<ul id="list"><li id="a">A</li><li id="b">B</li></ul>';
+    const log = recordDrag();
+    const result = await mouseDrag(document.getElementById('a')!, document.getElementById('b')!);
+
+    expect(result).toEqual({ mode: 'pointer' });
+    const moves = log.filter((entry) => entry.startsWith('pointermove'));
+    // One hover move, then five steps and a repeat at the target, all with the button held.
+    expect(moves).toHaveLength(7);
+    expect(moves.slice(1).every((entry) => entry.endsWith(':1'))).toBe(true);
+    // Like Playwright, the source is hovered before it's pressed.
+    expect(log.slice(0, 4)).toEqual(['pointermove@a:0', 'mousemove@a:0', 'pointerdown@a:1', 'mousedown@a:1']);
+    // The click goes to the nearest element containing both the press and the release.
+    expect(log.slice(-3)).toEqual(['pointerup@b:0', 'mouseup@b:0', 'click@list:0']);
+  });
+
+  it('waits a frame between moves so the page can render', async () => {
+    document.body.innerHTML = '<div id="a">A</div><div id="b">B</div>';
+    const frames: number[] = [];
+    let moves = 0;
+    document.addEventListener('pointermove', () => moves++, { signal: controller.signal });
+    const tick = setInterval(() => frames.push(moves), 1);
+    await mouseDrag(document.getElementById('a')!, document.getElementById('b')!);
+    clearInterval(tick);
+    // Some timer ran between the first and last move.
+    expect(frames.some((count) => count > 0 && count < 7)).toBe(true);
+  });
+
+  it('runs the HTML5 sequence for a draggable source and drops where dragover is cancelled', async () => {
+    document.body.innerHTML = '<div id="a" draggable="true">A</div><div id="b">B</div>';
+    const target = document.getElementById('b')!;
+    target.addEventListener('dragover', (event) => event.preventDefault());
+    const log = recordDrag();
+    const result = await mouseDrag(document.getElementById('a')!, target);
+
+    expect(result).toEqual({ mode: 'html5', dropped: true });
+    const kinds = log.map((entry) => entry.split(':')[0]);
+    expect(kinds.slice(0, 6)).toEqual(['pointermove@a', 'mousemove@a', 'pointerdown@a', 'mousedown@a', 'dragstart@a', 'pointercancel@a']);
+    expect(kinds).toContain('dragenter@b');
+    expect(kinds.slice(-2)).toEqual(['drop@b', 'dragend@a']);
+    // A native drag ends the pointer stream: no moves, release or click after dragstart.
+    expect(kinds.filter((kind) => /^(pointermove|pointerup|mouseup|click)@/.test(kind))).toEqual(['pointermove@a']);
+  });
+
+  it('reports no drop when the target never accepts it', async () => {
+    document.body.innerHTML = '<div id="a" draggable="true">A</div><div id="b">B</div>';
+    const result = await mouseDrag(document.getElementById('a')!, document.getElementById('b')!);
+    expect(result).toEqual({ mode: 'html5', dropped: false });
+  });
+
+  it('falls back to pointer events when dragstart is cancelled', async () => {
+    document.body.innerHTML = '<div id="a" draggable="true">A</div><div id="b">B</div>';
+    const source = document.getElementById('a')!;
+    source.addEventListener('dragstart', (event) => event.preventDefault());
+    const log = recordDrag();
+    expect(await mouseDrag(source, document.getElementById('b')!)).toEqual({ mode: 'pointer' });
+    expect(log.at(-2)).toBe('mouseup@b:0');
+  });
+
+  it('refuses a disabled source before pressing it', async () => {
+    document.body.innerHTML = '<button id="a" disabled>A</button><div id="b">B</div>';
+    const log = recordDrag();
+    await expect(mouseDrag(document.getElementById('a')!, document.getElementById('b')!)).rejects.toThrow(ELEMENT_DISABLED);
+    expect(log).toEqual([]);
   });
 });

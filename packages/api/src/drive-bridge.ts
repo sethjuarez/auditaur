@@ -16,7 +16,7 @@ import {
 } from './locator.js';
 import { generateLocator } from './locator-gen.js';
 import { fillContentEditable, pressChord, type PressResult } from './keyboard.js';
-import { isMouseButton, mouseClick } from './mouse.js';
+import { isMouseButton, mouseClick, mouseDrag } from './mouse.js';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -298,6 +298,11 @@ export async function executeDriveBridgeRequest(
       const el = requireSelector(request.selector, request.visibleOnly);
       hoverElement(el);
       return { ok: true, visibleOnly: request.visibleOnly };
+    }
+    case 'dragTo': {
+      const source = requireSelector(request.selector, request.visibleOnly);
+      const target = requireSelector(request.value, request.visibleOnly);
+      return { ok: true, visibleOnly: request.visibleOnly, ...(await mouseDrag(source, target)) };
     }
     case 'fill': {
       const el = requireSelector(request.selector, request.visibleOnly);
