@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { RUN, lib } from "./lib.mjs";
 
 const { canvasActions, runAction } = await lib("actions.mjs");
+const { agentMessage, DrillError } = await lib("errors.mjs");
 const { AppPanel } = await lib("app-panel.mjs");
 const { loadFeatures } = await lib("features.mjs");
 const { features } = await loadFeatures();
@@ -64,6 +65,9 @@ test("every action declares a closed input schema, so the host rejects input it 
 test("get_coverage names a run it can't find instead of answering for the shown one", async () => {
     const actions = byName(canvasActions(features, async () => {}));
     const panel = new AppPanel({ features, input: {} });
-    await assert.rejects(runAction(actions.get_coverage, panel, { runId: "20000101-000000-000" }), /20000101-000000-000 was not found/);
+    const refused = await runAction(actions.get_coverage, panel, { runId: "20000101-000000-000" }).catch((error) => error);
+    assert.match(refused.message, /20000101-000000-000 was not found/);
+    assert.equal(agentMessage(refused), "invalid_run: run 20000101-000000-000 was not found");
+    assert.equal(agentMessage(new DrillError("invalid_run", "invalid_run: already prefixed")), "invalid_run: already prefixed");
     assert.equal(panel.page("coverage").state.runId ?? null, null);
 });

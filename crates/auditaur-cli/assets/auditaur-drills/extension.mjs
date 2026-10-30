@@ -10,7 +10,7 @@ import { joinSession, createCanvas, CanvasError } from "@github/copilot-sdk/exte
 import { canvasActions, runAction } from "./lib/actions.mjs";
 import { reportFailedPages } from "./lib/build-info.mjs";
 import { openSchema } from "./lib/config.mjs";
-import { DrillError } from "./lib/errors.mjs";
+import { agentMessage, DrillError } from "./lib/errors.mjs";
 import { loadFeatures } from "./lib/features.mjs";
 import { PanelStore } from "./lib/panel-store.mjs";
 import { CANVAS_ID, Panels } from "./lib/panels.mjs";
@@ -22,7 +22,7 @@ function surfaced(fn) {
         try {
             return await fn(...args);
         } catch (error) {
-            if (error instanceof DrillError) throw new CanvasError(error.code, error.message);
+            if (error instanceof DrillError) throw new CanvasError(error.code, agentMessage(error));
             throw error;
         }
     };

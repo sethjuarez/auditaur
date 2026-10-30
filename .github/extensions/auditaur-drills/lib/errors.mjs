@@ -7,3 +7,6 @@ export class DrillError extends Error {
         this.code = code;
     }
 }
+
+// What an agent sees. Some hosts show only the message, so the message carries the code too.
+export const agentMessage = (error) => (error.message.startsWith(`${error.code}:`) ? error.message : `${error.code}: ${error.message}`);
