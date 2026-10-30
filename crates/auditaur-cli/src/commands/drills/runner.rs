@@ -866,8 +866,14 @@ impl SuiteRun<'_, '_> {
                         return Ok(None);
                     }
                     (true, _, Some(bad)) => (Status::Failed, bad),
-                    (false, true, bad) => (Status::TimedOut, with(bad, "timed out")),
-                    (false, false, bad) => (Status::Failed, with(bad, "failed")),
+                    (false, true, bad) => (
+                        Status::TimedOut,
+                        format!("{}; {}", with(bad, "timed out"), hook_output(&report)),
+                    ),
+                    (false, false, bad) => (
+                        Status::Failed,
+                        format!("{}; {}", with(bad, "failed"), hook_output(&report)),
+                    ),
                 };
                 (status, format!("{lifecycle} hook `{name}` {message}"))
             }
@@ -926,22 +932,7 @@ fn run_command(
             .unwrap_or_default()
             .to_string()
     };
-    let tail = |key: &str| {
-        let text = text(&shown, key);
-        let text = text.trim();
-        let start = text
-            .char_indices()
-            .rev()
-            .nth(OUTPUT_SHOWN - 1)
-            .map_or(0, |(at, _)| at);
-        if text.is_empty() {
-            format!("{key} was empty")
-        } else if start > 0 {
-            format!("{key} ended with: …{}", &text[start..])
-        } else {
-            format!("{key}: {text}")
-        }
-    };
+    let tail = |key: &str| output_tail(&shown, key);
     if result.report.get("timedOut").and_then(Value::as_bool) == Some(true) || result.timed_out {
         return StepResult::TimedOut(ErrorInfo::new(format!(
             "`{}` did not finish within {timeout_ms}ms",
@@ -972,6 +963,44 @@ fn run_command(
         }
     }
     StepResult::Passed
+}
+
+/// The last [`OUTPUT_SHOWN`] characters of a command report's `key` output, for an error message.
+fn output_tail(report: &Value, key: &str) -> String {
+    let text = report
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let start = text
+        .char_indices()
+        .rev()
+        .nth(OUTPUT_SHOWN - 1)
+        .map_or(0, |(at, _)| at);
+    if text.is_empty() {
+        format!("{key} was empty")
+    } else if start > 0 {
+        format!("{key} ended with: …{}", &text[start..])
+    } else {
+        format!("{key}: {text}")
+    }
+}
+
+/// Why a failed hook failed, in its own words: its stderr, or its stdout when stderr is empty.
+fn hook_output(report: &Value) -> String {
+    let empty = |key: &str| {
+        report
+            .get(key)
+            .and_then(Value::as_str)
+            .is_none_or(|text| text.trim().is_empty())
+    };
+    if empty("stderr") && empty("stdout") {
+        "it printed nothing".to_string()
+    } else if empty("stderr") {
+        output_tail(report, "stdout")
+    } else {
+        output_tail(report, "stderr")
+    }
 }
 
 /// `what` happened, plus a secondary problem if there was one.
