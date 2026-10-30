@@ -119,6 +119,10 @@ export interface DriveBridgeRequest {
   | 'flush'
     | 'screenshot'
     | 'locate'
+    | 'dialogs.arm'
+    | 'dialogs.queue'
+    | 'dialogs.state'
+    | 'dialogs.disarm'
     | string;
   selector?: string;
   value?: string;

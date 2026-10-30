@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { ariaSnapshot } from './aria-snapshot.js';
+import { armDrillDialogs, disarmDrillDialogs, drillDialogState, queueDrillDialog } from './drill-dialogs.js';
 import type { AuditaurExporter } from './exporter.js';
 import {
   describeLocator,
@@ -110,6 +111,7 @@ export function startDriveBridge(
     disposed = true;
     clearInterval(heartbeatTimer);
     stopRequestListener?.();
+    disarmDrillDialogs();
   };
 }
 
@@ -347,6 +349,14 @@ export async function executeDriveBridgeRequest(
     case 'locate': {
       return locateSelector(request.selector);
     }
+    case 'dialogs.arm':
+      return { ...armDrillDialogs(request.value) };
+    case 'dialogs.queue':
+      return { ...queueDrillDialog(request.value ?? '') };
+    case 'dialogs.state':
+      return { ...drillDialogState() };
+    case 'dialogs.disarm':
+      return { ...disarmDrillDialogs() };
     default:
       throw new Error(`unsupported drive bridge action: ${request.action}`);
   }
