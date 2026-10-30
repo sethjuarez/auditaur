@@ -70,6 +70,7 @@ beforeEach(() => {
   document.body.innerHTML = `
     <button id="save">Save</button>
     <input id="name" aria-label="Name">
+    <div id="note" contenteditable="true">old</div>
     <button>Edit</button><button>Edit</button>`;
 });
 
@@ -110,6 +111,8 @@ describe.each(Object.keys(bundlers))('drive bridge bundled by %s', (name) => {
 
     await execute('fill', '#name', 'Ada');
     expect((document.querySelector('#name') as HTMLInputElement).value).toBe('Ada');
+    await execute('fill', '#note', 'new note');
+    expect(document.querySelector('#note')!.textContent).toBe('new note');
 
     const keys: string[] = [];
     document.querySelector('#name')!.addEventListener('keydown', (event) => {
