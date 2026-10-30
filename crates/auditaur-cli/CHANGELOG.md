@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.19](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.18...auditaur-cli-v0.4.19) - 2026-10-30
+
+### Fixed
+
+- *(drills)* print run paths with one separator on Windows ([#130](https://github.com/sethjuarez/auditaur/pull/130))
+
 ## [0.4.18](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.17...auditaur-cli-v0.4.18) - 2026-10-30
 
 ### Added
