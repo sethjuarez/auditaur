@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/sethjuarez/auditaur/compare/api-v0.12.3...api-v0.13.0) (2026-10-30)
+
+
+### Features
+
+* **api:** add a dragTo bridge action for pointer and HTML5 drag-and-drop ([#167](https://github.com/sethjuarez/auditaur/issues/167)) ([4e129f3](https://github.com/sethjuarez/auditaur/commit/4e129f3f12c7976a3e10684fd5d58a84bb6813d4))
+
 ## [0.12.3](https://github.com/sethjuarez/auditaur/compare/api-v0.12.2...api-v0.12.3) (2026-10-30)
 
 
