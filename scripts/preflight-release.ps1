@@ -36,6 +36,7 @@ Push-Location $repoRoot
 try {
     $python = Resolve-Python
     Invoke-Step "Skill drift check" { & $python scripts\check-skill-drift.py }
+    Invoke-Step "CLI, api, and docs compatibility" { & $python scripts\check-compat.py }
     Invoke-Step "API changes are released" { & $python scripts\check-api-released.py }
     Invoke-Step "Rust formatting" { cargo fmt --check }
     Invoke-Step "Collector receiver compatibility tests" { cargo test -p auditaur-collector receiver }

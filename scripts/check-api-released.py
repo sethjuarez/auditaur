@@ -5,6 +5,7 @@ release-please. A Rust release that depends on unreleased frontend bridge change
 with nothing to upgrade to, so the Rust release gates on this check.
 """
 
+import importlib.util
 import json
 import pathlib
 import shutil
@@ -13,6 +14,10 @@ import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location("compat", ROOT / "scripts/check-compat.py")
+compat = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(compat)
 PACKAGE = "@auditaur/api"
 # Matches the build boundary in packages/api/tsconfig.build.json: tests don't ship.
 SHIPPED = ["packages/api/src", ":(exclude,glob)packages/api/src/**/*.test.ts"]
@@ -70,7 +75,13 @@ def main() -> int:
         print("Check the 'Publish Frontend API' run for that tag.", file=sys.stderr)
         return 1
 
-    print(f"{PACKAGE}@{version} is published and covers packages/api/src.")
+    # The CLI refuses older bridges, so the version it requires must be installable (AR-1).
+    required = compat.min_drill_api_version()
+    if required != version and not published(required):
+        print(f"The CLI requires {PACKAGE}@{required} (MIN_DRILL_API_VERSION), which is not on npm.", file=sys.stderr)
+        return 1
+
+    print(f"{PACKAGE}@{version} is published and covers packages/api/src; drills require {required}.")
     return 0
 
 
