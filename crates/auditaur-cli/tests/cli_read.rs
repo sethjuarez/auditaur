@@ -2874,8 +2874,10 @@ fn start_fake_drive_bridge_sequence_worker(
             let response_path = bridge_dir
                 .join("responses")
                 .join(format!("{request_id}.json"));
+            // Write then rename, as the plugin does, so the CLI never reads a half-written file.
+            let partial_path = response_path.with_extension("json.partial");
             fs::write(
-                response_path,
+                &partial_path,
                 serde_json::to_vec_pretty(&json!({
                     "schemaVersion": 1,
                     "protocolVersion": 1,
@@ -2896,6 +2898,7 @@ fn start_fake_drive_bridge_sequence_worker(
                 .unwrap(),
             )
             .unwrap();
+            fs::rename(&partial_path, &response_path).unwrap();
         }
         requests
     })

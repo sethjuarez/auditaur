@@ -746,6 +746,12 @@ mod tests {
             span("load", None, "frontend", Some("OK")),
             // Propagation off: pairs with the `save` call nothing continued.
             span("save", None, "backend", Some("OK")),
+            // Still running when the test ended (AR-36): exercised, not failed.
+            {
+                let mut open = span("agent_chat", None, "backend", None);
+                open.end_time_unix_nanos = None;
+                open
+            },
         ];
         let save: TauriIpcCall = serde_json::from_value(json!({
             "sessionId": "s", "timestampUnixNanos": 1, "durationMs": null,
@@ -763,7 +769,8 @@ mod tests {
             vec![
                 ("load", false),
                 ("save", false),
-                ("save_chat_session", true)
+                ("save_chat_session", true),
+                ("agent_chat", false)
             ]
         );
     }

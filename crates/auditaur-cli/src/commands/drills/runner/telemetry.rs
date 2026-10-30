@@ -187,6 +187,7 @@ pub fn judge(expectation: &TelemetryExpectation, telemetry: &RelatedTelemetry) -
             let found = telemetry
                 .spans
                 .iter()
+                .filter(|span| span.end_time_unix_nanos.is_some())
                 .filter(|span| name_matches(name, &span.name))
                 .filter(|span| status.is_none_or(|status| span_status(span) == status))
                 .filter(|span| {
@@ -203,9 +204,12 @@ pub fn judge(expectation: &TelemetryExpectation, telemetry: &RelatedTelemetry) -
             let seen = || {
                 let mut names = BTreeMap::<(&str, &str), usize>::new();
                 for span in &telemetry.spans {
-                    *names
-                        .entry((&span.name, span_status(span).as_str()))
-                        .or_default() += 1;
+                    let status = if span.end_time_unix_nanos.is_none() {
+                        "still open"
+                    } else {
+                        span_status(span).as_str()
+                    };
+                    *names.entry((&span.name, status)).or_default() += 1;
                 }
                 listing(
                     names
@@ -630,6 +634,32 @@ mod tests {
         assert_eq!(
             missing.actual,
             "0 matching; seen: chat.send (error) ×1, chat.send (ok) ×1, startup (unset) ×1"
+        );
+    }
+
+    #[test]
+    fn open_spans_are_listed_but_do_not_match_until_they_close() {
+        let mut open = span("agent_chat", None, json!({ "tauri.command": "agent_chat" }));
+        open.end_time_unix_nanos = None;
+        let telemetry = RelatedTelemetry {
+            spans: vec![open],
+            ..RelatedTelemetry::default()
+        };
+        let judged = judge(
+            &TelemetryExpectation::Span {
+                name: TextMatch::Exact("agent_chat".into()),
+                status: None,
+                attributes: vec![],
+                count: None,
+                not: false,
+                soft: false,
+            },
+            &telemetry,
+        );
+        assert_eq!(judged.judgement, Judgement::Pending);
+        assert_eq!(
+            judged.actual,
+            "0 matching; seen: agent_chat (still open) ×1"
         );
     }
 
