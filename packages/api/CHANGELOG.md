@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/sethjuarez/auditaur/compare/api-v0.12.0...api-v0.12.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **drive:** wait for enabled and editable targets like Playwright ([#154](https://github.com/sethjuarez/auditaur/issues/154)) ([07e9a7b](https://github.com/sethjuarez/auditaur/commit/07e9a7b243445e7228af2e051a8be99ff798c821))
+
 ## [0.12.0](https://github.com/sethjuarez/auditaur/compare/api-v0.11.1...api-v0.12.0) (2026-10-30)
 
 
