@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.14](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.13...tauri-plugin-auditaur-v0.4.14) - 2026-10-30
+
+### Fixed
+
+- *(plugin)* set command span status from the command's result ([#98](https://github.com/sethjuarez/auditaur/pull/98))
+
 ## [0.4.8](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.7...tauri-plugin-auditaur-v0.4.8) - 2026-10-23
 
 ### Fixed
