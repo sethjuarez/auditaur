@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.24](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.23...tauri-plugin-auditaur-v0.4.24) - 2026-10-30
+
+### Fixed
+
+- *(drive)* keep poll_drive_bridge_request's public signature (AR-29) ([#148](https://github.com/sethjuarez/auditaur/pull/148))
+- *(drive)* emulate page focus so blur fires in background windows (AR-29) ([#146](https://github.com/sethjuarez/auditaur/pull/146))
+
 ## [0.4.14](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.13...tauri-plugin-auditaur-v0.4.14) - 2026-10-30
 
 ### Fixed
