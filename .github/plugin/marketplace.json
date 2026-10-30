@@ -12,7 +12,7 @@
     {
       "name": "auditaur",
       "description": "Debug and test Tauri apps with Auditaur: the auditaur-debug skill and the Auditaur Drills canvas.",
-      "version": "0.4.23",
+      "version": "0.5.0",
       "author": {
         "name": "Auditaur contributors",
         "url": "https://github.com/sethjuarez/auditaur"
