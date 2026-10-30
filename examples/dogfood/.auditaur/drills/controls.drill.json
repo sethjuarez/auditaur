@@ -25,6 +25,13 @@
       "steps": [
         { "select": { "label": "Select" }, "value": "charlie" },
         { "expect": "#drive-select", "toHaveValue": "charlie" },
+        { "select": { "label": "Select" }, "value": "Bravo" },
+        { "expect": "#drive-select", "toHaveValue": "bravo" },
+        {
+          "evaluate": "(() => { const select = document.querySelector('#drive-select'); select.querySelectorAll('[value=delta]').forEach((option) => option.remove()); clearTimeout(window.__deltaTimer); window.__deltaTimer = setTimeout(() => select.add(new Option('Delta', 'delta')), 300); })()"
+        },
+        { "select": { "label": "Select" }, "value": "delta" },
+        { "expect": "#drive-select", "toHaveValue": "delta" },
         { "check": { "role": "checkbox", "name": "Checkbox" } },
         { "expect": "#drive-checkbox", "toBeChecked": true },
         { "uncheck": "#drive-checkbox" },

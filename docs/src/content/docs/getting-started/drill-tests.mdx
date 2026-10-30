@@ -102,6 +102,8 @@ Assertions retry until they pass or their retry window runs out: the suite's `ex
 
 `check` and `uncheck` work like Playwright's. If the target is already in the requested state, they do nothing. Otherwise they click it like a real mouse, so the app's own click handlers (React's checkbox `onChange` listens only for `click`) make the change, and then they verify the new state, failing with "clicking did not check the element" if it didn't change. They take native checkboxes and radios, and elements whose role is `checkbox`, `switch`, `radio`, `menuitemcheckbox`, `menuitemradio`, `option` or `treeitem`, read through `aria-checked`. `uncheck` refuses a native radio input. Needs @auditaur/api 0.12.2 or newer; older versions set `checked` directly, which React state never sees.
 
+`select` works like Playwright's `selectOption`. Each value matches an option by its `value` or its label (the `label` attribute, else its whitespace-collapsed text). A single select takes the first matching option; a multiple select takes one option per value and drops the rest of the selection. The step waits until every value has an enabled option, so options loaded asynchronously work, and it changes nothing until they all do. A timeout names the missing options. Needs @auditaur/api 0.12.3 and CLI 0.4.27 or newer; older versions match `value` only and fail at once on a missing option.
+
 ```json
 { "click": { "role": "treeitem", "name": "notes.md" }, "button": "right" },
 { "click": { "role": "menuitem", "name": "Move to project" } }

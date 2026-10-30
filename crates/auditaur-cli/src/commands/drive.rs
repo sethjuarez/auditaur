@@ -1706,7 +1706,7 @@ fn future_actions() -> Vec<DriverActionSpec> {
             name: "select",
             selector_required: true,
             mutates_app: true,
-            description: "select one or more option values in a select element",
+            description: "select options in a select element by value or label",
         },
         DriverActionSpec {
             name: "check",

@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { requireEditable, requireEnabled } from './actionability.js';
 import { setChecked } from './checkable.js';
+import { selectOptions } from './select.js';
 import { ariaSnapshot } from './aria-snapshot.js';
 import { armDrillDialogs, disarmDrillDialogs, drillDialogState, queueDrillDialog } from './drill-dialogs.js';
 import type { AuditaurExporter } from './exporter.js';
@@ -322,7 +323,8 @@ export async function executeDriveBridgeRequest(
       const el = requireSelector(request.selector, request.visibleOnly);
       requireEnabled(el);
       const values = request.values?.length ? request.values : [request.value ?? ''];
-      return selectElementValues(el, values, request.visibleOnly);
+      const selectedValues = selectOptions(el, values);
+      return { ok: true, visibleOnly: request.visibleOnly, selectedValues, missingValues: [] };
     }
     case 'check': {
       const el = requireSelector(request.selector, request.visibleOnly);
@@ -593,31 +595,6 @@ function hoverElement(el: Element): void {
       : typeof MouseEvent === 'function' ? MouseEvent : Event;
     el.dispatchEvent(new EventConstructor(type, eventInit));
   }
-}
-
-function selectElementValues(el: Element, values: string[], visibleOnly: boolean): Record<string, unknown> {
-  if (!(el instanceof HTMLSelectElement)) {
-    throw new Error('selector is not a select element');
-  }
-  const requested = new Set(values);
-  const matched = new Set<string>();
-  for (const option of Array.from(el.options)) {
-    const selected = requested.has(option.value);
-    option.selected = selected;
-    if (selected) {
-      matched.add(option.value);
-    }
-  }
-  const missingValues = values.filter((value) => !matched.has(value));
-  el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
-  return {
-    ok: missingValues.length === 0,
-    visibleOnly,
-    selectedValues: Array.from(el.selectedOptions).map((option) => option.value),
-    missingValues,
-    ...(missingValues.length ? { error: `option value(s) not found: ${missingValues.join(', ')}` } : {}),
-  };
 }
 
 async function evaluateExpression(expression: string): Promise<Record<string, unknown>> {

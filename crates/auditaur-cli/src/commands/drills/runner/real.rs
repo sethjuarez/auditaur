@@ -469,6 +469,9 @@ const SELECTOR_NOT_FOUND: &str = "selector not found";
 /// clear, like Playwright's "enabled" and "editable" checks.
 const ELEMENT_DISABLED: &str = "element is disabled";
 const ELEMENT_NOT_EDITABLE: &str = "element is not editable";
+/// The bridge's replies while a select value has no option yet, or only a disabled one.
+const OPTION_NOT_FOUND: &str = "option not found";
+const OPTION_DISABLED: &str = "option is disabled";
 
 pub(crate) fn bridge_selector(locator: &Locator) -> String {
     fn put<T: serde::Serialize>(spec: &mut Value, key: &str, value: Option<T>) {
@@ -1280,20 +1283,40 @@ impl BridgeDriver {
                 Ok(reply)
                     if matches!(
                         reply.error.as_deref(),
-                        Some(ELEMENT_DISABLED | ELEMENT_NOT_EDITABLE)
+                        Some(
+                            ELEMENT_DISABLED
+                                | ELEMENT_NOT_EDITABLE
+                                | OPTION_NOT_FOUND
+                                | OPTION_DISABLED
+                        )
                     ) =>
                 {
-                    let state = if reply.error.as_deref() == Some(ELEMENT_DISABLED) {
-                        "enabled"
-                    } else {
-                        "editable"
+                    let options = || {
+                        let requested = if values.is_empty() {
+                            value.iter().cloned().collect()
+                        } else {
+                            values.clone()
+                        };
+                        requested
+                            .iter()
+                            .map(|value| format!("`{value}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    let waited_for = match reply.error.as_deref() {
+                        Some(ELEMENT_DISABLED) => format!("`{target}` to be enabled"),
+                        Some(ELEMENT_NOT_EDITABLE) => format!("`{target}` to be editable"),
+                        Some(OPTION_NOT_FOUND) => {
+                            format!("`{target}` to have option(s) {}", options())
+                        }
+                        _ => format!("option(s) {} of `{target}` to be enabled", options()),
                     };
                     // Time out here, not in the next visibility poll, so the message names
                     // the condition that actually held the step up.
                     thread::sleep(WAIT_POLL.min(ctx.remaining()));
                     if ctx.expired() {
                         return Err(timed_out(format!(
-                            "{shown}: timed out waiting for `{target}` to be {state}"
+                            "{shown}: timed out waiting for {waited_for}"
                         )));
                     }
                 }
