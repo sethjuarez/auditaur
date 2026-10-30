@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.18](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.17...auditaur-cli-v0.4.18) - 2026-10-30
+
+### Added
+
+- *(canvas)* ship a version stamp in every extension copy; get_coverage takes runId ([#126](https://github.com/sethjuarez/auditaur/pull/126))
+
+### Fixed
+
+- *(canvas)* count gate time down to the runner's own deadline ([#125](https://github.com/sethjuarez/auditaur/pull/125))
+
 ## [0.4.17](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.16...auditaur-cli-v0.4.17) - 2026-10-30
 
 ### Added
