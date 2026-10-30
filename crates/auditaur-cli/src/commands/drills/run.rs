@@ -300,6 +300,16 @@ pub enum RunEvent {
         title: String,
         action: String,
     },
+    /// What a long-running step is doing now, e.g. the app's latest output while it launches.
+    /// Live only: the step's report keeps no history of it.
+    #[serde(rename_all = "camelCase")]
+    StepProgress {
+        suite_id: String,
+        test_id: Option<String>,
+        attempt: Option<u32>,
+        index: usize,
+        message: String,
+    },
     #[serde(rename_all = "camelCase")]
     StepFinished {
         suite_id: String,
@@ -1021,6 +1031,26 @@ impl RunWriter {
         Ok((self.scope()?, step))
     }
 
+    /// Report what the running step is doing now (see [`RunEvent::StepProgress`]).
+    pub fn step_progress(&mut self, message: &str) -> Result<()> {
+        let step = self
+            .step
+            .as_ref()
+            .ok_or_else(|| anyhow!("progress belongs to a running step"))?
+            .index;
+        let scope = self.scope()?;
+        self.commit(
+            RunEvent::StepProgress {
+                suite_id: scope.suite_id,
+                test_id: scope.test_id,
+                attempt: scope.attempt,
+                index: step,
+                message: message.to_string(),
+            },
+            false,
+        )
+    }
+
     /// A manual gate in the running step is waiting for a human.
     pub fn gate_waiting(&mut self, gate: Value) -> Result<()> {
         let (scope, step) = self.gate_scope()?;
@@ -1596,8 +1626,10 @@ mod tests {
             )
         );
         assert!(writer.attach("log", "text/plain", "../x.log", b"").is_err());
+        writer.step_progress("Compiling app v0.1.0").unwrap();
         assert!(writer.step_started(Phase::Test, "x", "click").is_err());
         writer.step_finished(Status::Passed, false, None).unwrap();
+        assert!(writer.step_progress("too late").is_err());
         // passes
         let status = attempt(&mut writer, 0, 0, 0, true);
         writer.test_finished(status, None, false).unwrap();
@@ -1719,6 +1751,7 @@ mod tests {
             "suiteApp",
             "testStarted",
             "stepStarted",
+            "stepProgress",
             "gateWaiting",
             "gateResolved",
             "stepFinished",

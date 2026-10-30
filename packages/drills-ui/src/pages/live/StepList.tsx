@@ -15,6 +15,7 @@ function StepRow({ step }: { step: LiveStep }) {
         {step.soft && <Label size="small" variant="secondary">soft</Label>}
       </span>
       <span className="duration muted nums">{ms(duration)}</span>
+      {step.status === "running" && step.progress && <div className="live-step-progress muted" title="Latest output">{step.progress}</div>}
       {step.error && <pre className="detail-error live-step-error">{step.error}</pre>}
     </li>
   );

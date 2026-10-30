@@ -21,6 +21,7 @@
 .live-step-phase { font-size: var(--text-caption-size); }
 .live-step .duration { font-size: var(--text-caption-size); text-align: right; }
 .live-step-error { grid-column: 2 / 4; margin-top: var(--base-size-4); }
+.live-step-progress { grid-column: 2 / 4; font-family: var(--fontStack-monospace); font-size: var(--text-body-size-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .gates { display: flex; flex-direction: column; gap: var(--base-size-12); }
 .gates:empty { display: none; }

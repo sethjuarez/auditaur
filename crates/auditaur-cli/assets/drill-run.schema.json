@@ -785,6 +785,59 @@
             "testId",
             "attempt",
             "index",
+            "message"
+          ],
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ts": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "type": {
+              "const": "stepProgress"
+            },
+            "suiteId": {
+              "$ref": "#/$defs/suiteId"
+            },
+            "testId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/testId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "attempt": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "seq",
+            "ts",
+            "type",
+            "suiteId",
+            "testId",
+            "attempt",
+            "index",
             "status",
             "soft",
             "durationMs",
