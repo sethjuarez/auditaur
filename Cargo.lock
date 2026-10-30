@@ -284,12 +284,14 @@ dependencies = [
  "ctrlc",
  "dunce",
  "jsonschema",
+ "libc",
  "png",
  "regex",
  "serde",
  "serde_json",
  "tempfile",
  "time",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
