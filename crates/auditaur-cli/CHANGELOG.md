@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.20](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.19...auditaur-cli-v0.4.20) - 2026-10-30
+
+### Fixed
+
+- *(canvas)* put the error code in action failure messages ([#132](https://github.com/sethjuarez/auditaur/pull/132))
+
 ## [0.4.19](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.18...auditaur-cli-v0.4.19) - 2026-10-30
 
 ### Fixed
