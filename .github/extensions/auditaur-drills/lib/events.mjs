@@ -31,11 +31,15 @@ export function foldEvents(text) {
                 startedAt: event.ts,
                 durationMs: null,
                 error: null,
+                progress: null,
             });
+        } else if (event.type === "stepProgress") {
+            const step = (steps.get(key) ?? []).findLast((candidate) => candidate.index === event.index && candidate.status === "running");
+            if (step) step.progress = event.message;
         } else if (event.type === "stepFinished") {
             const step = (steps.get(key) ?? []).findLast((candidate) => candidate.index === event.index && candidate.status === "running");
             if (step) {
-                Object.assign(step, { status: event.status, soft: event.soft, durationMs: event.durationMs, error: errorText(event.error) });
+                Object.assign(step, { status: event.status, soft: event.soft, durationMs: event.durationMs, error: errorText(event.error), progress: null });
             }
         } else if (event.type === "gateWaiting") {
             gates.set(`${key}|${event.step}`, { ...event, since: event.ts });

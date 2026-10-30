@@ -9,6 +9,8 @@ export interface LiveStep {
   startedAt?: string;
   durationMs?: number;
   error?: string | null;
+  // What a running step is doing now, e.g. the app's latest output while it launches.
+  progress?: string | null;
 }
 
 export interface LiveAttempt {

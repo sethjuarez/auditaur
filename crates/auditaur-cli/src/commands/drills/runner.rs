@@ -103,11 +103,13 @@ pub trait AppDriver {
 
 /// Launches apps and runs suite command hooks.
 pub trait Host {
-    /// Launch the suite's app with `env` added to its environment.
+    /// Launch the suite's app with `env` added to its environment. `progress` hears what the
+    /// launch is doing while it waits (the app's latest output line).
     fn launch(
         &mut self,
         suite: &DrillSuite,
         env: &[(String, String)],
+        progress: &mut dyn FnMut(&str),
     ) -> Result<Box<dyn AppDriver>>;
     /// Attach what the failed launch left (the app's output) to the running launch step.
     /// Best effort.
@@ -396,7 +398,15 @@ impl SuiteRun<'_, '_> {
         let index = self
             .writer
             .step_started(Phase::BeforeAll, "launch app", "launch")?;
-        match self.host.launch(self.selected.suite, &self.env) {
+        let writer = &mut *self.writer;
+        let mut progress = |message: &str| {
+            // Best effort: progress is a live hint, never a reason to fail the launch.
+            let _ = writer.step_progress(message);
+        };
+        match self
+            .host
+            .launch(self.selected.suite, &self.env, &mut progress)
+        {
             Ok(driver) => {
                 self.writer.step_finished(Status::Passed, false, None)?;
                 self.writer.set_suite_app(driver.app_info())?;

@@ -181,7 +181,9 @@ impl Host for FakeHost {
         &mut self,
         suite: &DrillSuite,
         env: &[(String, String)],
+        progress: &mut dyn FnMut(&str),
     ) -> Result<Box<dyn AppDriver>> {
+        progress("Compiling app v0.1.0");
         let mut state = self.state.borrow_mut();
         state.log.push("launch".to_string());
         if !env.is_empty() {

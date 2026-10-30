@@ -192,7 +192,7 @@ A missing baseline is written and the test still fails, so review the new baseli
 
 ## Run folders
 
-Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes its end and attaches the last 64K characters to the launch step.
+Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes its end and attaches the last 64K characters to the launch step. While the app launches, the canvas shows its latest output line under the "launch app" step, so a long first compile is visible. If readiness times out while that line is build activity (cargo's `Compiling`, `Building`, …), the error says the app was still building; raise `--timeout-seconds` or `readiness.timeoutSeconds`.
 
 ```text
 run.json                         run report, updated as the run progresses

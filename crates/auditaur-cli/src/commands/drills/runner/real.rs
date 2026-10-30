@@ -92,6 +92,7 @@ impl Host for RealHost {
         &mut self,
         suite: &DrillSuite,
         env: &[(String, String)],
+        progress: &mut dyn FnMut(&str),
     ) -> Result<Box<dyn AppDriver>> {
         self.failed_launch_log = None;
         let (command, mut environment) = match &self.source {
@@ -116,7 +117,7 @@ impl Host for RealHost {
         };
         // Fresh port variables from the config win over the suite's.
         environment.splice(0..0, env.iter().cloned());
-        self.spawn(&command, &environment)
+        self.spawn(&command, &environment, progress)
     }
 
     fn capture_launch_failure(&mut self, writer: &mut RunWriter) {
@@ -172,6 +173,7 @@ impl RealHost {
         &mut self,
         command: &[String],
         environment: &[(String, String)],
+        progress: &mut dyn FnMut(&str),
     ) -> Result<Box<dyn AppDriver>> {
         self.launches += 1;
         let log = self
@@ -186,7 +188,14 @@ impl RealHost {
         let started_at = OffsetDateTime::now_utc();
         let mut child = drill::spawn_command(command, environment, log.as_deref())?;
         let deadline = Instant::now() + self.ready_timeout;
-        let ready = self.wait_until_ready(&mut child, started_at, &preexisting_ids, deadline);
+        let mut output = LaunchOutput::new(log.as_deref(), progress);
+        let ready = self.wait_until_ready(
+            &mut child,
+            started_at,
+            &preexisting_ids,
+            deadline,
+            &mut output,
+        );
         let session = ready.and_then(|app| {
             let session = BridgeSession::connect(&drill::drive_selector(&app))?;
             check_drill_support(&session)?;
@@ -196,9 +205,15 @@ impl RealHost {
             Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child), log))),
             Err(error) => {
                 let _ = drill::cleanup_child_tree(&mut child);
+                let hint = if Instant::now() >= deadline {
+                    output.building_hint()
+                } else {
+                    String::new()
+                };
                 match log {
                     Some(log) => {
-                        let error = anyhow!("{error:#}\n{}", output_tail(&log));
+                        let tail = output_tail(&log);
+                        let error = anyhow!("{error:#}{hint}\n{tail}");
                         self.failed_launch_log = Some(log);
                         Err(error)
                     }
@@ -214,9 +229,11 @@ impl RealHost {
         started_at: OffsetDateTime,
         preexisting_ids: &HashSet<&str>,
         deadline: Instant,
+        output: &mut LaunchOutput<'_>,
     ) -> Result<DiscoveredApp> {
         let timeout = self.ready_timeout.as_secs();
         let app = loop {
+            output.poll();
             if let Some(app) = drill::find_spawned_session(&self.app, started_at, preexisting_ids)?
             {
                 break app;
@@ -249,6 +266,7 @@ impl RealHost {
             require_drive_bridge: true,
         };
         loop {
+            output.poll();
             let status = debug::snapshot(&selector)?;
             if status.ready {
                 return Ok(app);
@@ -461,6 +479,101 @@ fn about(target: &Locator, error: String) -> String {
     } else {
         format!("`{target}`: {error}")
     }
+}
+
+/// How much of the log a launch reads to find the app's latest output line.
+const PROGRESS_TAIL: usize = 4_096;
+/// Progress lines are a glance, not a log.
+const PROGRESS_LINE_MAX: usize = 200;
+/// Lines a build tool prints while it works (cargo's status verbs), so a readiness timeout
+/// can say the app was still building rather than hung.
+const BUILD_ACTIVITY: &[&str] = &[
+    "Compiling ",
+    "Building ",
+    "Checking ",
+    "Blocking waiting for file lock",
+    "Downloading ",
+    "Downloaded ",
+    "Updating ",
+    "Locking ",
+];
+
+/// Follows a launching app's output: reports each new latest line as step progress, and
+/// remembers it to explain a readiness timeout.
+struct LaunchOutput<'a> {
+    log: Option<&'a Path>,
+    progress: &'a mut dyn FnMut(&str),
+    last: Option<String>,
+}
+
+impl<'a> LaunchOutput<'a> {
+    fn new(log: Option<&'a Path>, progress: &'a mut dyn FnMut(&str)) -> Self {
+        Self {
+            log,
+            progress,
+            last: None,
+        }
+    }
+
+    fn poll(&mut self) {
+        let Some(log) = self.log else { return };
+        let Ok((text, _)) = read_tail(log, PROGRESS_TAIL) else {
+            return;
+        };
+        let Some(line) = last_line(&text) else { return };
+        if self.last.as_deref() != Some(line.as_str()) {
+            (self.progress)(&line);
+            self.last = Some(line);
+        }
+    }
+
+    /// Why a readiness timeout may only mean a slow build, or nothing.
+    fn building_hint(&mut self) -> String {
+        self.poll();
+        match &self.last {
+            Some(line) if is_build_activity(line) => format!(
+                "\nthe app was still building (`{line}`); the first launch after a dependency change can take longer, so raise `--timeout-seconds` or `readiness.timeoutSeconds` in .auditaur/config.json"
+            ),
+            _ => String::new(),
+        }
+    }
+}
+
+/// The last non-empty line of some output, without terminal escapes, cut to a glance.
+fn last_line(text: &str) -> Option<String> {
+    let line = text
+        .split(['\n', '\r'])
+        .map(|line| strip_ansi(line).trim().to_string())
+        .rfind(|line| !line.is_empty())?;
+    Some(match line.char_indices().nth(PROGRESS_LINE_MAX) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line,
+    })
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // CSI sequences (`ESC [ … final`) are what build tools color with; drop any other
+        // escape's next char too.
+        if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+fn is_build_activity(line: &str) -> bool {
+    BUILD_ACTIVITY.iter().any(|verb| line.starts_with(verb))
 }
 
 /// The end of a launch log, for a launch failure message.
@@ -1781,7 +1894,7 @@ mod launch_tests {
             failed_launch_log: None,
         };
 
-        let Err(error) = host.spawn(&command, &[]) else {
+        let Err(error) = host.spawn(&command, &[], &mut |_| {}) else {
             panic!("the app exits before it is ready");
         };
 
@@ -1789,6 +1902,88 @@ mod launch_tests {
         assert!(message.contains("exited"), "{message}");
         assert!(message.contains("panicked at src/main.rs"), "{message}");
         assert!(message.contains("app-1.log"), "{message}");
+    }
+
+    #[test]
+    fn a_readiness_timeout_while_building_says_so() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let command: Vec<String> = if cfg!(windows) {
+            [
+                "cmd",
+                "/c",
+                "echo    Compiling app v0.1.0 & ping -n 10 127.0.0.1 >nul",
+            ]
+        } else {
+            ["sh", "-c", "echo '   Compiling app v0.1.0'; sleep 10"]
+        }
+        .map(String::from)
+        .to_vec();
+        let mut host = RealHost {
+            app: "auditaur-launch-log-test-no-such-app".into(),
+            source: LaunchSource::Command(command.clone()),
+            require_frontend: false,
+            ready_timeout: Duration::from_secs(2),
+            workspace_root: dir.path().to_path_buf(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            log_dir: Some(dir.path().to_path_buf()),
+            launches: 0,
+            failed_launch_log: None,
+        };
+        let mut seen = Vec::new();
+        let Err(error) = host.spawn(&command, &[], &mut |line| seen.push(line.to_string())) else {
+            panic!("no session ever appears");
+        };
+        let message = format!("{error:#}");
+        assert!(message.contains("timed out after 2s"), "{message}");
+        assert!(
+            message.contains("still building (`Compiling app v0.1.0`)"),
+            "{message}"
+        );
+        assert_eq!(seen, ["Compiling app v0.1.0"]);
+    }
+
+    #[test]
+    fn launch_output_reports_new_lines_and_explains_a_slow_build() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log = dir.path().join("app-1.log");
+        let mut seen = Vec::new();
+        let mut progress = |line: &str| seen.push(line.to_string());
+        let mut output = LaunchOutput::new(Some(&log), &mut progress);
+        output.poll(); // no log yet
+        fs::write(&log, "   \x1b[1m\x1b[32mCompiling\x1b[0m tauri v2.0.0\n").unwrap();
+        output.poll();
+        output.poll(); // unchanged: not reported again
+        fs::write(
+            &log,
+            "Compiling tauri v2.0.0\r   Building [=====>  ] 410/520: app\r",
+        )
+        .unwrap();
+        output.poll();
+        let hint = output.building_hint();
+        assert!(
+            hint.contains("still building (`Building [=====>  ] 410/520: app`)"),
+            "{hint}"
+        );
+        assert!(hint.contains("readiness.timeoutSeconds"), "{hint}");
+        fs::write(&log, "Compiling app\nthread 'main' panicked\n").unwrap();
+        assert_eq!(output.building_hint(), "");
+        drop(output);
+        assert_eq!(
+            seen,
+            [
+                "Compiling tauri v2.0.0",
+                "Building [=====>  ] 410/520: app",
+                "thread 'main' panicked"
+            ]
+        );
+    }
+
+    #[test]
+    fn last_line_cuts_long_lines() {
+        let line = last_line(&"é".repeat(PROGRESS_LINE_MAX + 5)).unwrap();
+        assert_eq!(line.chars().count(), PROGRESS_LINE_MAX + 1);
+        assert!(line.ends_with('…'));
+        assert_eq!(last_line(" \n\r "), None);
     }
 
     #[test]
@@ -1837,7 +2032,7 @@ mod launch_tests {
             launches: 0,
             failed_launch_log: None,
         };
-        assert!(host.spawn(&command, &[]).is_err());
+        assert!(host.spawn(&command, &[], &mut |_| {}).is_err());
         assert_eq!(host.failed_launch_log, Some(dir.path().join("app-1.log")));
         // A config error before spawning must not reuse the old log.
         host.source = LaunchSource::Config(dir.path().join("missing.json"));
@@ -1847,7 +2042,7 @@ mod launch_tests {
         )
         .suite
         .unwrap();
-        assert!(host.launch(&suite, &[]).is_err());
+        assert!(host.launch(&suite, &[], &mut |_| {}).is_err());
         assert_eq!(host.failed_launch_log, None);
     }
 }
