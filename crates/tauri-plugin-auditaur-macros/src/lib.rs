@@ -55,7 +55,7 @@ fn expand_instrument_ipc(attr: TokenStream2, item: TokenStream2) -> TokenStream2
         args,
         quote!(auditaur_trace_context),
         quote!(#traceparent_field),
-        status_fields(&tracing_crate),
+        command_fields(&tracing_crate, &function),
     ) {
         Ok(args) => args,
         Err(error) => return error.to_compile_error(),
@@ -117,7 +117,7 @@ fn expand_auditaur_command(attr: TokenStream2, item: TokenStream2) -> TokenStrea
         args,
         quote!(#injected_skip_args),
         quote!(#traceparent_field),
-        status_fields(&tracing_crate),
+        command_fields(&tracing_crate, &function),
     ) {
         Ok(args) => args,
         Err(error) => return error.to_compile_error(),
@@ -131,19 +131,24 @@ fn expand_auditaur_command(attr: TokenStream2, item: TokenStream2) -> TokenStrea
     }
 }
 
-/// Span fields the command's outcome is recorded into when it returns, keyed by their
-/// token text so ones the caller already declares are not added twice.
-fn status_fields(tracing_crate: &TokenStream2) -> Vec<(String, TokenStream2)> {
-    ["status_code", "status_message"]
-        .into_iter()
-        .map(|name| {
-            let ident = format_ident!("{name}");
-            (
-                format!("otel . {name}"),
-                quote!(otel.#ident = #tracing_crate::field::Empty),
-            )
-        })
-        .collect()
+/// Span fields every command span carries: `tauri.command` names the command, so drill
+/// coverage counts calls that bypassed the instrumented frontend `invoke`, and the outcome is
+/// recorded into the status fields when it returns. Keyed by their token text so ones the
+/// caller already declares are not added twice.
+fn command_fields(tracing_crate: &TokenStream2, function: &ItemFn) -> Vec<(String, TokenStream2)> {
+    let command = function.sig.ident.to_string();
+    let mut fields = vec![(
+        "tauri . command".to_string(),
+        quote!(tauri.command = #command),
+    )];
+    fields.extend(["status_code", "status_message"].into_iter().map(|name| {
+        let ident = format_ident!("{name}");
+        (
+            format!("otel . {name}"),
+            quote!(otel.#ident = #tracing_crate::field::Empty),
+        )
+    }));
+    fields
 }
 
 /// Wrap the body so the command span records OK, or ERROR with the error, when it returns.
@@ -184,7 +189,7 @@ fn merge_instrument_args(
     args: InstrumentArgs,
     injected_skip_arg: TokenStream2,
     traceparent_field: TokenStream2,
-    status_fields: Vec<(String, TokenStream2)>,
+    command_fields: Vec<(String, TokenStream2)>,
 ) -> syn::Result<Vec<TokenStream2>> {
     let mut instrument_args = Vec::new();
     let mut skip_args = None;
@@ -230,12 +235,12 @@ fn merge_instrument_args(
         instrument_args.push(quote!(skip(#skip_args)));
     }
     let declared = fields_args.to_string();
-    let missing_status_fields: Vec<_> = status_fields
+    let missing_fields: Vec<_> = command_fields
         .into_iter()
         .filter(|(name, _)| !declared.contains(name.as_str()))
         .map(|(_, field)| field)
         .collect();
-    instrument_args.push(quote!(fields(#fields_args #(, #missing_status_fields)*)));
+    instrument_args.push(quote!(fields(#fields_args #(, #missing_fields)*)));
 
     Ok(instrument_args)
 }
@@ -352,6 +357,28 @@ mod tests {
         assert!(expanded.contains("skip (app , auditaur_trace_context)"));
         assert!(expanded.contains("command = \"emit_backend_event\""));
         assert!(expanded.contains("traceparent ="));
+    }
+
+    #[test]
+    fn names_the_command_on_its_span_unless_declared() {
+        let expanded = expand_auditaur_command(
+            quote!(),
+            quote! {
+                fn save_chat_session(id: String) -> String { id }
+            },
+        )
+        .to_string();
+        assert!(expanded.contains("tauri . command = \"save_chat_session\""));
+
+        let expanded = expand_instrument_ipc(
+            quote!(fields(tauri.command = "custom")),
+            quote! {
+                fn load_user(auditaur_trace_context: Option<IpcTraceContext>) {}
+            },
+        )
+        .to_string();
+        assert!(expanded.contains("tauri . command = \"custom\""));
+        assert!(!expanded.contains("tauri . command = \"load_user\""));
     }
 
     #[test]
