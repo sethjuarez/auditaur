@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.2](https://github.com/sethjuarez/auditaur/compare/api-v0.12.1...api-v0.12.2) (2026-10-30)
+
+
+### Bug Fixes
+
+* **drive:** check and uncheck by clicking, then verify, like Playwright ([#159](https://github.com/sethjuarez/auditaur/issues/159)) ([3aa6c09](https://github.com/sethjuarez/auditaur/commit/3aa6c09d0c58c39bdf7df69499b6f6713165204e))
+* **drive:** click and dblclick with Edge's full pointer sequence ([#158](https://github.com/sethjuarez/auditaur/issues/158)) ([ab8bf8e](https://github.com/sethjuarez/auditaur/commit/ab8bf8e1c131f60cf47a9b8016c67463501a80a4))
+
 ## [0.12.1](https://github.com/sethjuarez/auditaur/compare/api-v0.12.0...api-v0.12.1) (2026-10-30)
 
 
