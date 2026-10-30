@@ -12,7 +12,7 @@ import { CoverageMeters } from "./CoverageMeters";
 import { CoverageTabs } from "./CoverageTabs";
 import { MissedToggle } from "./MissedToggle";
 import { StorePicker } from "./StorePicker";
-import { hasBaseline, type CoverageState, type CoverageTab } from "./types";
+import { baselineFor, type CoverageState, type CoverageTab } from "./types";
 
 interface Props {
   state: CoverageState | null;
@@ -46,7 +46,7 @@ export function CoverageHeader({ state, loadError, busy, select, reload, setTab,
           <span id="open-in"><OpenInLinks caption="Open this run in" links={runLinks(run.runId, "coverage")} /></span>
         </div>
       )}
-      {coverage && <CoverageMeters totals={coverage.totals} baseline={hasBaseline(coverage)} />}
+      {coverage && <CoverageMeters totals={coverage.totals} baseline={{ commands: baselineFor(coverage, "commands"), events: baselineFor(coverage, "events") }} />}
       {coverage && state && (
         <div className="row coverage-toolbar">
           <CoverageTabs coverage={coverage} tab={state.ui.tab} missedOnly={state.ui.missedOnly} pick={setTab} />

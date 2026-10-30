@@ -5,6 +5,8 @@ export interface CommandCoverage {
   failed: number;
   tests: string[];
   seen: number;
+  // Listed by the app's registered commands (`generate_handler!` or `--commands`).
+  registered?: boolean;
 }
 
 export interface EventCoverage {
@@ -32,12 +34,19 @@ export interface Coverage {
   events: EventCoverage[];
   tests: TestCoverage[];
   sources: { db: string; ipcCalls: number; events: number; error?: string }[];
+  // Where the registered commands were read from (absent from CLIs before 0.4.21).
+  surface?: { path: string; commands: number; error?: string }[];
+  baseline?: { commands: boolean; events: boolean };
 }
 
 export type CoverageTab = "commands" | "events" | "tests" | "map";
 
-// Without a readable store to compare with, counts are out of only what the run touched.
-export const hasBaseline = (coverage: Coverage) => coverage.sources.some((source) => !source.error);
+// Without a baseline (a readable store, or for commands the registered list), counts are out of
+// only what the run touched.
+const storeBaseline = (coverage: Coverage) => coverage.sources.some((source) => !source.error);
+export const baselineFor = (coverage: Coverage, kind: "commands" | "events") =>
+  coverage.baseline?.[kind] ?? storeBaseline(coverage);
+export const hasRegistry = (coverage: Coverage) => (coverage.surface ?? []).some((surface) => !surface.error);
 
 export interface CoverageState {
   pinned: string | null;

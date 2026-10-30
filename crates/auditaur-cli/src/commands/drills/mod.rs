@@ -8,6 +8,7 @@ pub mod locate;
 pub mod model;
 pub mod run;
 pub mod runner;
+pub mod surface;
 mod test_command;
 
 pub use test_command::{test, TestOptions};

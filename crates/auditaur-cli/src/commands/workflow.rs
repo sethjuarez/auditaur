@@ -72,6 +72,18 @@ struct AgentConfig {
     default_drill: Option<String>,
     #[serde(default)]
     drills: BTreeMap<String, DrillConfig>,
+    /// Read by `drill coverage` (see `drills::surface`); accepted here so the config validates.
+    #[serde(default)]
+    #[allow(dead_code)]
+    coverage: Option<CoverageConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CoverageConfig {
+    #[serde(default)]
+    #[allow(dead_code)]
+    commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

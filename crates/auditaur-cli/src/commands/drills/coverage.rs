@@ -3,7 +3,8 @@
 //! Each attempt folder holds a `telemetry.json` attachment (the app telemetry
 //! recorded while the attempt ran). Coverage folds those into per-command and
 //! per-event tallies. Optional telemetry stores (`--db`) add everything the app
-//! has been seen doing, so commands and events no test touched show up too.
+//! has been seen doing, and the registered command surface (see [`super::surface`])
+//! adds every command the app declares, so ones no test touched show up too.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -19,6 +20,7 @@ use auditaur_core::{
 use serde::Serialize;
 
 use super::run::{self, RunReport, Status};
+use super::surface::{self, SurfaceSummary};
 use crate::commands::read::{is_failed_ipc_status, open_validated_store};
 
 const TELEMETRY_ATTACHMENT: &str = "telemetry";
@@ -34,6 +36,28 @@ pub struct Coverage {
     pub events: Vec<EventCoverage>,
     pub tests: Vec<TestCoverage>,
     pub sources: Vec<SourceSummary>,
+    /// Where the registered command surface was read from.
+    pub surface: Vec<SurfaceSummary>,
+    /// Whether totals are out of a known surface rather than only what the run touched.
+    pub baseline: Baseline,
+    /// What no test exercised; empty for a kind without a baseline.
+    pub unexercised: Unexercised,
+}
+
+#[derive(Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Baseline {
+    /// A readable store or registered surface.
+    pub commands: bool,
+    /// A readable store.
+    pub events: bool,
+}
+
+#[derive(Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Unexercised {
+    pub commands: Vec<String>,
+    pub events: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, PartialEq)]
@@ -59,6 +83,8 @@ pub struct CommandCoverage {
     pub tests: Vec<String>,
     /// Calls recorded in the `--db` stores; 0 when no store was given.
     pub seen: usize,
+    /// Listed by the registered command surface.
+    pub registered: bool,
 }
 
 #[derive(Debug, Default, Serialize, PartialEq)]
@@ -97,11 +123,13 @@ pub struct SourceSummary {
     pub error: Option<String>,
 }
 
-/// Telemetry recorded in a store, reduced to what coverage needs.
+/// What is known about the app beyond the run: telemetry recorded in stores, reduced to what
+/// coverage needs, and the commands it registers.
 #[derive(Debug, Default)]
 pub struct Seen {
     pub commands: BTreeMap<String, usize>,
     pub events: BTreeMap<String, usize>,
+    pub registered: BTreeSet<String>,
 }
 
 /// Build coverage for one run folder plus telemetry already read from stores.
@@ -183,6 +211,15 @@ pub fn build(run_dir: &Path, report: &RunReport, seen: &Seen) -> Coverage {
             })
             .seen = *count;
     }
+    for command in &seen.registered {
+        commands
+            .entry(command.clone())
+            .or_insert_with(|| CommandCoverage {
+                command: command.clone(),
+                ..Default::default()
+            })
+            .registered = true;
+    }
     for (event, count) in &seen.events {
         events
             .entry(event.clone())
@@ -212,7 +249,42 @@ pub fn build(run_dir: &Path, report: &RunReport, seen: &Seen) -> Coverage {
         events,
         tests,
         sources: Vec::new(),
+        surface: Vec::new(),
+        baseline: Baseline::default(),
+        unexercised: Unexercised::default(),
     }
+}
+
+/// Mark which kinds have a baseline, from readable stores and surfaces, and list what no test
+/// exercised for those kinds.
+fn settle_baseline(coverage: &mut Coverage) {
+    let store = coverage.sources.iter().any(|s| s.error.is_none());
+    let surface = coverage.surface.iter().any(|s| s.error.is_none());
+    coverage.baseline = Baseline {
+        commands: store || surface,
+        events: store,
+    };
+    let missed = |tests: &Vec<String>| tests.is_empty();
+    coverage.unexercised = Unexercised {
+        commands: match coverage.baseline.commands {
+            true => coverage
+                .commands
+                .iter()
+                .filter(|c| missed(&c.tests))
+                .map(|c| c.command.clone())
+                .collect(),
+            false => Vec::new(),
+        },
+        events: match coverage.baseline.events {
+            true => coverage
+                .events
+                .iter()
+                .filter(|e| missed(&e.tests))
+                .map(|e| e.event.clone())
+                .collect(),
+            false => Vec::new(),
+        },
+    };
 }
 
 /// The attempt's `telemetry.json`, or `None` when the attempt has none (yet).
@@ -357,23 +429,40 @@ fn tally_store(db: &Path, seen: &mut Seen, summary: &mut SourceSummary) -> Resul
 }
 
 /// The `drill coverage --json` document.
-pub fn coverage_json(
-    workspace: &Path,
-    selector: Option<&str>,
-    dbs: &[PathBuf],
-) -> Result<Coverage> {
-    let dir = run::resolve_run(&run::runs_root(&workspace), selector)?;
+pub fn coverage_json(workspace: &Path, options: &CoverageOptions) -> Result<Coverage> {
+    let dir = run::resolve_run(&run::runs_root(&workspace), options.run.as_deref())?;
     let report = run::read_run(&dir)?;
-    let (seen, sources) = read_seen(dbs);
+    let (mut seen, sources) = read_seen(&options.dbs);
+    let (registered, surface) = surface::read(surface::paths(
+        workspace,
+        &options.commands,
+        &options.config,
+    ));
+    seen.registered = registered;
     let mut coverage = build(&dir, &report, &seen);
     coverage.sources = sources;
+    coverage.surface = surface;
+    settle_baseline(&mut coverage);
     Ok(coverage)
 }
 
-/// `auditaur drill coverage [run] [--db <path>]...`.
-pub fn coverage(selector: Option<&str>, dbs: &[PathBuf], json: bool) -> Result<()> {
+#[derive(Debug, Default)]
+pub struct CoverageOptions {
+    /// `latest` (or `None`), a run id, or a prefix.
+    pub run: Option<String>,
+    pub dbs: Vec<PathBuf>,
+    /// Registered-command surface paths; empty means the config's, or the default.
+    pub commands: Vec<PathBuf>,
+    /// `.auditaur/config.json`, relative to the workspace unless absolute.
+    pub config: PathBuf,
+    pub json: bool,
+}
+
+/// `auditaur drill coverage [run] [--db <path>]... [--commands <path>]...`.
+pub fn coverage(options: CoverageOptions) -> Result<()> {
     let workspace = std::env::current_dir()?;
-    let coverage = coverage_json(&workspace, selector, dbs)?;
+    let json = options.json;
+    let coverage = coverage_json(&workspace, &options)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&coverage)?);
         return Ok(());
@@ -400,28 +489,49 @@ fn print_coverage(coverage: &Coverage) {
             ),
         }
     }
-    // Without a readable store, the totals are only what the run touched: "5 of 5" would claim
+    for surface in &coverage.surface {
+        match &surface.error {
+            Some(error) => eprintln!("  commands {}: {error}", surface.path),
+            None => println!(
+                "  commands {}: {} registered",
+                surface.path, surface.commands
+            ),
+        }
+    }
+    // Without a baseline, the totals are only what the run touched: "5 of 5" would claim
     // full coverage of a surface nothing listed.
-    let baseline = coverage.sources.iter().any(|source| source.error.is_none());
-    let tally = |exercised: usize, total: usize| match baseline {
+    let tally = |baseline: bool, exercised: usize, total: usize| match baseline {
         true => format!("{exercised} of {total} exercised"),
         false => format!("{exercised} touched"),
     };
-    if !baseline {
-        println!("  no baseline: pass --db <app store> to list what no test exercised");
+    let registered = coverage.surface.iter().any(|s| s.error.is_none());
+    if !coverage.baseline.commands {
+        println!("  no command baseline: list src-tauri/src or pass --commands <path> or --db <app store> to show what no test called");
+    }
+    if !coverage.baseline.events {
+        println!("  no event baseline: pass --db <app store> to list events no test touched");
     }
     println!();
     println!(
         "Commands  {}",
-        tally(totals.commands_exercised, totals.commands)
+        tally(
+            coverage.baseline.commands,
+            totals.commands_exercised,
+            totals.commands
+        )
     );
     for command in &coverage.commands {
         let failed = match command.failed {
             0 => String::new(),
             count => format!(", {count} failed"),
         };
+        // Called but not listed: a plugin command, or one the surface misses.
+        let unregistered = match registered && !command.registered {
+            true => ", not registered",
+            false => "",
+        };
         println!(
-            "  {}  {}  ({} calls{failed}, {} tests)",
+            "  {}  {}  ({} calls{failed}, {} tests{unregistered})",
             mark(&command.tests),
             command.command,
             command.calls,
@@ -429,7 +539,14 @@ fn print_coverage(coverage: &Coverage) {
         );
     }
     println!();
-    println!("Events  {}", tally(totals.events_exercised, totals.events));
+    println!(
+        "Events  {}",
+        tally(
+            coverage.baseline.events,
+            totals.events_exercised,
+            totals.events
+        )
+    );
     for event in &coverage.events {
         let directions: Vec<&str> = event.directions.iter().map(String::as_str).collect();
         println!(
@@ -780,6 +897,56 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("resolves outside the run"));
+    }
+
+    #[test]
+    fn registered_commands_set_a_command_baseline_only() {
+        let root = tempfile::tempdir().unwrap();
+        attempt_json(
+            root.path(),
+            "a/attempt-0",
+            Some(telemetry(&[("save", "OK"), ("plugin:x|y", "OK")], &[])),
+        );
+        let report = report(vec![test(
+            "a",
+            "passed",
+            vec![attempt("a/attempt-0", "passed")],
+        )]);
+        let mut seen = Seen::default();
+        seen.registered = ["save".to_string(), "delete".to_string()].into();
+
+        let mut coverage = build(root.path(), &report, &seen);
+        settle_baseline(&mut coverage);
+        assert_eq!(coverage.baseline, Baseline::default());
+        assert!(coverage.unexercised.commands.is_empty());
+
+        coverage.surface.push(SurfaceSummary {
+            path: "src-tauri/src".into(),
+            commands: 2,
+            error: None,
+        });
+        settle_baseline(&mut coverage);
+        assert_eq!(
+            coverage.baseline,
+            Baseline {
+                commands: true,
+                events: false
+            }
+        );
+        assert_eq!(coverage.unexercised.commands, ["delete"]);
+        assert_eq!(
+            (coverage.totals.commands_exercised, coverage.totals.commands),
+            (2, 3)
+        );
+        let registered: Vec<_> = coverage
+            .commands
+            .iter()
+            .map(|c| (c.command.as_str(), c.registered))
+            .collect();
+        assert_eq!(
+            registered,
+            [("delete", true), ("plugin:x|y", false), ("save", true)]
+        );
     }
 
     #[test]
