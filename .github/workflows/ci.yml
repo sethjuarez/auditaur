@@ -145,10 +145,41 @@ jobs:
         working-directory: examples/dogfood
         continue-on-error: true
 
+  # Picks the drill legs: the api in this branch, plus the npm tarball users install when one
+  # matches this branch's packages/api/src. The published leg proves this branch's CLI and plugin
+  # work with the shipped api (AR-1, AR-19); feature PRs with unreleased api changes skip it.
+  drill-api-legs:
+    name: Pick drill api legs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.pick.outputs.legs }}
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # check-api-released.py reads history since the api release tag.
+          fetch-depth: 0
+      - id: pick
+        run: |
+          version=$(python scripts/check-api-released.py --published-version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ -n "$version" ]; then
+            echo 'legs=["source","published"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'legs=["source"]' >> "$GITHUB_OUTPUT"
+            echo "::notice::No published @auditaur/api matches packages/api/src; only the source-api drills run."
+          fi
+
   tauri-drills:
-    name: Dogfood Tauri drills
+    name: Dogfood Tauri drills (${{ matrix.api }} api)
+    needs: drill-api-legs
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        api: ${{ fromJSON(needs.drill-api-legs.outputs.legs) }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -168,6 +199,20 @@ jobs:
         working-directory: packages/api
       - run: npm install
         working-directory: examples/dogfood
+      # Replaces the file: link with the npm tarball; the app build below also typechecks against it.
+      - name: Install the published api
+        if: matrix.api == 'published'
+        working-directory: examples/dogfood
+        env:
+          VERSION: ${{ needs.drill-api-legs.outputs.version }}
+        run: |
+          npm install --no-save "@auditaur/api@$env:VERSION"
+          # Version alone can't tell the npm package from the file: link to packages/api.
+          $api = Get-Item node_modules/@auditaur/api
+          if ($api.LinkType) { throw "@auditaur/api is still a $($api.LinkType) to the source package" }
+          $installed = (Get-Content node_modules/@auditaur/api/package.json | ConvertFrom-Json).version
+          if ($installed -ne $env:VERSION) { throw "expected @auditaur/api $env:VERSION from npm, found $installed" }
+          "@auditaur/api $installed from npm"
       # A debug build embeds the frontend, so no dev server is needed, and keeps the drive bridge on.
       - run: npm run tauri build -- --debug --no-bundle
         working-directory: examples/dogfood
@@ -183,7 +228,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dogfood-drill-runs
+          name: dogfood-drill-runs-${{ matrix.api }}-api
           path: |
             examples/dogfood/drill-results.xml
             examples/dogfood/.auditaur/drill-runs/

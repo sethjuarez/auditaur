@@ -3,6 +3,9 @@
 The CLI and plugin release through release-plz; @auditaur/api releases separately through
 release-please. A Rust release that depends on unreleased frontend bridge changes leaves apps
 with nothing to upgrade to, so the Rust release gates on this check.
+
+`--published-version` prints the npm version matching packages/api/src (or nothing), for the
+CI job that runs drills against the published api.
 """
 
 import importlib.util
@@ -55,7 +58,47 @@ def published(version: str, attempts: int = 6, delay: float = 15) -> bool:
     return False
 
 
+def published_version() -> int:
+    """Print the npm api version that matches packages/api/src, or nothing when none does.
+
+    CI drives the dogfood app with this published tarball to prove the CLI works with what
+    users install. It prints nothing (and exits 0) while the source has unreleased changes,
+    because then no published api matches the drills on this branch.
+    """
+    version = json.loads((ROOT / ".release-please-manifest.json").read_text(encoding="utf-8"))["packages/api"]
+    tag = f"api-v{version}"
+    log = unreleased_commits(tag)
+    if log is None:
+        print(f"Cannot read history since {tag}; fetch tags (fetch-depth: 0).", file=sys.stderr)
+        return 1
+    if log:
+        print(f"Skipping: packages/api/src changed since {tag}, so no published api matches it.", file=sys.stderr)
+        return 0
+    npm = shutil.which("npm")
+    if npm is None:
+        sys.exit("npm is required to check the published @auditaur/api version.")
+    # Only a confirmed 404 skips; a registry outage must not quietly drop the published leg.
+    for attempt in range(3):
+        result = subprocess.run(
+            [npm, "view", f"{PACKAGE}@{version}", "version", "--prefer-online"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip() == version:
+            print(version)
+            return 0
+        if "E404" in result.stderr:
+            print(f"Skipping: {PACKAGE}@{version} is tagged but not on npm yet.", file=sys.stderr)
+            return 0
+        if attempt < 2:
+            time.sleep(15)
+    print(f"Cannot read {PACKAGE}@{version} from npm:\n{result.stderr.strip()}", file=sys.stderr)
+    return 1
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--published-version"]:
+        return published_version()
     manifest = json.loads((ROOT / ".release-please-manifest.json").read_text(encoding="utf-8"))
     version = manifest["packages/api"]
     tag = f"api-v{version}"

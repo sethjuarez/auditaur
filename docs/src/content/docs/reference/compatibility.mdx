@@ -11,11 +11,11 @@ Auditaur has Rust crates, an npm frontend package, a CLI binary, and app-side ru
 | --- | --- | --- |
 | CLI binary | `cargo install auditaur-cli` | `0.4.x` |
 | Tauri plugin | `tauri-plugin-auditaur` | `0.4.x` |
-| Frontend SDK | `@auditaur/api` | `0.7.x`; `auditaur drill test` needs `0.7.1` or newer |
+| Frontend SDK | `@auditaur/api` | latest `0.x`; `auditaur drill test` needs `0.7.1` or newer, and newer drill actions name the version they need |
 | Core/collector crates | `auditaur-core`, `auditaur-collector` | `0.4.x` |
 | Macro crate | `tauri-plugin-auditaur-macros` | `0.4.x` |
 
-CI (`scripts/check-compat.py`) keeps the drill minimum, the drive bridge protocol, and these docs in agreement.
+CI (`scripts/check-compat.py`) keeps the drill minimum, the drive bridge protocol, and these docs in agreement. CI also runs the dogfood drills twice: once with the api from source, and once with the published `@auditaur/api` from npm, driven by the branch's CLI and plugin. The second run is skipped while `packages/api/src` has unreleased changes.
 
 ## Recommended app pins
 
