@@ -161,6 +161,23 @@ describe('console and uncaught error redaction', () => {
     expect(recordedConsole({ redactConsole: (() => 1) as unknown as (b: string) => string }, 'log', ['secret']).body).toBe(REDACTED);
   });
 
+  it('withholds a console error whose text redactConsole removed or rewrote (AR-22)', () => {
+    const args = ['Could not save chat session:', new Error('transcript: secret plan')];
+    const omitted = recordedConsole({ redactConsole: () => '[omitted]' }, 'warn', args);
+    expect(omitted).toEqual({ body: '[omitted]', bodyJson: undefined, error: { message: REDACTED, errorType: 'Error' } });
+    expect(JSON.stringify(omitted)).not.toContain('secret plan');
+
+    const rewritten = recordedConsole({ redactConsole: (body) => body.replace('secret', '<x>') }, 'warn', args);
+    expect(rewritten.error).toEqual({ message: REDACTED, errorType: 'Error' });
+
+    const throws = recordedConsole({ redactConsole: () => { throw new Error('bug'); } }, 'warn', args);
+    expect(throws).toEqual({ body: REDACTED, error: { message: REDACTED, errorType: 'Error' } });
+
+    const untouched = recordedConsole({ redactConsole: (body) => body }, 'warn', args);
+    expect(untouched.error?.message).toBe('transcript: secret plan');
+    expect(untouched.error?.stack).toBe((args[1] as Error).stack);
+  });
+
   it('rewrites an error message in the message, the stack, and a console body', () => {
     const error = new Error('no access for ada@example.com');
     const name = vi.fn((m: string, _context: { name: string }) => email(m));
