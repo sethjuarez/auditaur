@@ -415,6 +415,30 @@ impl AppDriver for BridgeDriver {
         })
     }
 
+    fn bridge(
+        &mut self,
+        action: &str,
+        value: Option<String>,
+        timeout: Duration,
+    ) -> std::result::Result<Value, String> {
+        let reply = self
+            .session
+            .request(action, None, value, Vec::new(), false, None, None, timeout)
+            .map_err(|error| format!("{error:#}"))?;
+        if reply.ok {
+            return Ok(reply.payload);
+        }
+        let error = reply
+            .error
+            .unwrap_or_else(|| format!("bridge refused `{action}`"));
+        if error.contains("unsupported drive bridge action") {
+            return Err(format!(
+                "{error}\n`dialog` steps need @auditaur/api {MIN_DIALOG_API_VERSION} or newer in the app"
+            ));
+        }
+        Err(error)
+    }
+
     fn close(&mut self) -> Result<()> {
         // Keep the handle until cleanup succeeds so `Drop` can retry.
         if let Some(child) = self.child.as_mut() {
@@ -649,6 +673,8 @@ impl Evidence {
 /// drill actions (`dblclick`, `inspect`), and reports a missing element without throwing once
 /// bundled (0.7.0 threw, so every auto-wait failed at once).
 const MIN_DRILL_API_VERSION: &str = "0.7.1";
+/// First `@auditaur/api` release with `withDrillDialogs` and the `dialogs.*` bridge actions.
+const MIN_DIALOG_API_VERSION: &str = "0.11.0";
 
 /// Matches nothing, so the probe exercises the bridge's not-found reply.
 const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
@@ -848,6 +874,7 @@ impl BridgeDriver {
             StepKind::ExpectValue(expectation) => self.expect_value(ctx, step, expectation),
             // The runner runs commands through the host; they never reach the app.
             StepKind::Run(_) => Err(failed("`run` steps are run by the host")),
+            StepKind::Dialog(_) => Err(failed("`dialog` steps are queued by the runner")),
         }
     }
 

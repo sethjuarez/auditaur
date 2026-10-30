@@ -2407,7 +2407,7 @@ pub(crate) fn run_hook_json(
 /// Replace `${NAME}` with drill env values (suite `env` and `$AUDITAUR_DRILL_ENV_FILE`),
 /// returning whether anything expanded. Other text, including `${NAME}` for names outside the
 /// drill env, is left for the command itself, so shell-script arguments keep working.
-fn expand_drill_env(text: &str, env: &[(String, String)]) -> (String, bool) {
+pub(crate) fn expand_drill_env(text: &str, env: &[(String, String)]) -> (String, bool) {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     let mut expanded = false;

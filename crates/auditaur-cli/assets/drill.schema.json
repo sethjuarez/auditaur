@@ -100,7 +100,8 @@
         { "$ref": "#/$defs/stepExpectNoTelemetry" },
         { "$ref": "#/$defs/stepExpectNoErrors" },
         { "$ref": "#/$defs/stepExpectValue" },
-        { "$ref": "#/$defs/stepRun" }
+        { "$ref": "#/$defs/stepRun" },
+        { "$ref": "#/$defs/stepDialog" }
       ]
     },
     "stepName": { "$ref": "#/$defs/text", "description": "Custom step title." },
@@ -322,6 +323,22 @@
         "exitCode": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647, "description": "Expected exit code (default 0)." },
         "stdout": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stdout must contain." },
         "stderr": { "$ref": "#/$defs/nameMatch", "description": "Text or {pattern} stderr must contain." }
+      }
+    },
+    "stepDialog": {
+      "type": "object", "additionalProperties": false, "required": ["dialog"],
+      "description": "Queue the answer to the next native dialog the app opens through withDrillDialogs (@auditaur/api >= 0.11.0). Respond values may use ${NAME} drill env variables.",
+      "allOf": [
+        { "if": { "properties": { "dialog": { "const": "open" } } }, "then": { "required": ["respond"], "properties": { "respond": { "oneOf": [{ "type": "null" }, { "type": "string" }, { "type": "array", "minItems": 1, "items": { "type": "string" } }] } } } },
+        { "if": { "properties": { "dialog": { "const": "save" } } }, "then": { "required": ["respond"], "properties": { "respond": { "type": ["string", "null"] } } } },
+        { "if": { "properties": { "dialog": { "enum": ["ask", "confirm"] } } }, "then": { "required": ["respond"], "properties": { "respond": { "type": "boolean" } } } },
+        { "if": { "properties": { "dialog": { "const": "message" } } }, "then": { "properties": { "respond": { "type": "string" } } } }
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" },
+        "dialog": { "enum": ["open", "save", "ask", "confirm", "message"] },
+        "respond": { "description": "open: path, paths or null (cancel); save: path or null (cancel); ask/confirm: boolean; message: button label (default \"Ok\")." },
+        "expectOptions": { "type": "object", "description": "Options the app must pass (partial match), such as title, filters or defaultPath." }
       }
     },
     "snapshotName": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$" },
