@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.27](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.26...auditaur-cli-v0.4.27) - 2026-10-30
+
+### Fixed
+
+- *(drive)* select waits for options and matches labels, like Playwright ([#161](https://github.com/sethjuarez/auditaur/pull/161))
+
 ## [0.4.26](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.25...auditaur-cli-v0.4.26) - 2026-10-30
 
 ### Fixed
