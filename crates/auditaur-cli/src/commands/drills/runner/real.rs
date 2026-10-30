@@ -729,7 +729,10 @@ impl BridgeDriver {
     ) -> StepOutcome {
         let started = Instant::now();
         let give_up = (started + ctx.expect_timeout).min(ctx.deadline);
-        let mut last: Option<String> = None;
+        // What the expression last produced (or threw), kept apart from bridge failures: the
+        // final poll often only has a sliver of time left, and its timeout says nothing.
+        let mut observed: Option<String> = None;
+        let mut bridge_error: Option<String> = None;
         let mut first = true;
         loop {
             let now = Instant::now();
@@ -762,25 +765,34 @@ impl BridgeDriver {
                     if expectation.matcher.matches(value) != expectation.not {
                         return Ok(());
                     }
-                    last = Some(clip_value(value));
+                    observed = Some(clip_value(value));
+                    bridge_error = None;
                 }
                 Ok(reply) => {
                     let error = reply
                         .error
                         .unwrap_or_else(|| "bridge returned ok=false".to_string());
-                    last = Some(format!("threw: {error}"));
+                    observed = Some(format!("threw: {error}"));
+                    bridge_error = None;
                 }
-                Err(error) => last = Some(format!("evaluate failed: {error:#}")),
+                // A poll cut short by the deadline says nothing once a value has been seen.
+                Err(error) if observed.is_none() || wait >= MIN_INSPECT_TIMEOUT => {
+                    bridge_error = Some(format!("evaluate failed: {error:#}"));
+                }
+                Err(_) => {}
             }
             thread::sleep(WAIT_POLL.min(give_up.saturating_duration_since(Instant::now())));
         }
         let ms = started.elapsed().as_millis();
         let not = if expectation.not { "not " } else { "" };
         let expected = format!("{not}{}", expectation.matcher);
-        let actual = last.unwrap_or_else(|| "no time left to evaluate".to_string());
+        let (actual, after) = value_received(observed, bridge_error);
+        let after = after
+            .map(|error| format!("\nthen: {error}"))
+            .unwrap_or_default();
         let info = ErrorInfo {
             message: format!(
-                "{} failed after {ms}ms\nexpected: {expected}\nreceived: {actual}",
+                "{} failed after {ms}ms\nexpected: {expected}\nreceived: {actual}{after}",
                 step.title
             ),
             expected: Some(Value::String(expected)),
@@ -1678,6 +1690,50 @@ fn file_safe(name: &str) -> String {
         "screenshot".to_string()
     } else {
         safe
+    }
+}
+
+/// What a failed xpectValue reports: the last value the expression produced (or what it
+/// threw), not the last poll's bridge error, which is usually just a sliver-of-time timeout.
+/// A bridge error after the last value comes back separately: the app may have stopped answering.
+fn value_received(
+    observed: Option<String>,
+    bridge_error: Option<String>,
+) -> (String, Option<String>) {
+    match (observed, bridge_error) {
+        (Some(value), after) => (value, after),
+        (None, Some(error)) => (error, None),
+        (None, None) => ("no time left to evaluate".to_string(), None),
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::value_received;
+
+    #[test]
+    fn reports_the_last_observed_value_over_a_trailing_bridge_error() {
+        let (actual, after) = value_received(
+            Some("3".to_string()),
+            Some("evaluate failed: Timed out after 114ms".to_string()),
+        );
+        assert_eq!(actual, "3");
+        assert_eq!(
+            after.as_deref(),
+            Some("evaluate failed: Timed out after 114ms")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_bridge_error_when_nothing_was_observed() {
+        let (actual, after) = value_received(None, Some("evaluate failed: gone".to_string()));
+        assert_eq!(actual, "evaluate failed: gone");
+        assert_eq!(after, None);
+        assert_eq!(value_received(None, None).0, "no time left to evaluate");
+        assert_eq!(
+            value_received(Some("threw: x".to_string()), None),
+            ("threw: x".to_string(), None)
+        );
     }
 }
 
