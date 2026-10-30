@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.17](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.16...auditaur-cli-v0.4.17) - 2026-10-30
+
+### Added
+
+- *(drill)* show launch progress and explain slow-build readiness timeouts ([#123](https://github.com/sethjuarez/auditaur/pull/123))
+
 ## [0.4.16](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.15...auditaur-cli-v0.4.16) - 2026-10-30
 
 ### Added
