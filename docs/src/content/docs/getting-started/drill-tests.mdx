@@ -290,13 +290,14 @@ fs.appendFileSync(process.env.AUDITAUR_DRILL_ENV_FILE, `APP_PROJECT=${dir}\n`);
 Each suite launches the app once; its tests, retries included, share that instance, and the app closes before the next suite starts. That keeps suites fast, so state carries between tests:
 
 - Reset what a test depends on in `beforeEach`: navigate home, `{ "clearStorage": true }`, or `run` a script that resets fixtures.
+- To wait for the app in `beforeEach`, `waitFor` something in its shell that no test changes, such as its navigation or a `testId` on the root, not seeded data an earlier test may have renamed or deleted. Launch, `reload` and `clearStorage` already wait for the bridge and a fully loaded page.
 - Put work that needs a fresh process, such as first-run flows or startup flags in `env`, in its own suite.
 - For full per-test isolation, give each test its own single-test suite, at the cost of a launch per test.
 - When tests must build on each other's state, mark the suite `"serial": true`, like Playwright's `describe.serial`. After a failure the rest are skipped, `--retries` doesn't apply, and `--last-failed` reruns the whole suite.
 
 If the app exits or restarts mid-suite, the suite's remaining tests stop rather than running against a different instance.
 
-The webview keeps its storage between launches, so state a suite leaves in `localStorage` (a saved layout, say) carries into later suites. `{ "clearStorage": true }` in `beforeAll` or `beforeEach` clears localStorage, sessionStorage, IndexedDB, Cache Storage and script-visible cookies, then reloads the page so the app starts from empty storage. It doesn't touch HttpOnly cookies, the HTTP cache, or files the app's backend wrote. Needs @auditaur/api 0.15.0 or newer.
+The webview keeps its storage between launches, so state a suite leaves in `localStorage` (a saved layout, say) carries into later suites. `{ "clearStorage": true }` in `beforeAll` or `beforeEach` clears localStorage, sessionStorage, IndexedDB, Cache Storage and script-visible cookies, then reloads the page so the app starts from empty storage. Until that reload, it clears local and session storage again as the page unloads, so an app that saves state from `beforeunload`, `pagehide` or `visibilitychange` can't write it back (@auditaur/api 0.15.1 or newer). It doesn't touch HttpOnly cookies, the HTTP cache, or files the app's backend wrote. Needs @auditaur/api 0.15.0 or newer.
 
 Closing the app ends its whole process tree. On Windows, WebView2's browser and GPU processes can take a minute or more to exit and release the app's data folder, and an app launched before then fails with "The requested resource is in use". So the next launch waits up to 120 s for them and notes the wait at the top of its app log. If they're still running after that, the suite fails and names the process.
 
