@@ -27,6 +27,7 @@ use crate::{
     commands::{debug, drive, polish, read},
     discovery::{self, DiscoveredApp, DiscoveryStatus},
     output::bounded_text,
+    process_tree::{ProcessTree, STOP_TIMEOUT},
 };
 
 const EXIT_PASSED: i32 = 0;
@@ -480,7 +481,7 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
         &preexisting,
         deadline,
         interval,
-        child.as_mut(),
+        child.as_deref_mut(),
         &mut report,
     )?;
 
@@ -491,11 +492,11 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
             &app,
             deadline,
             interval,
-            child.as_mut(),
+            child.as_deref_mut(),
             &mut report,
         )? {
             WaitOutcome::Ready(status) => {
-                report.command.running_at_readiness = match child.as_mut() {
+                report.command.running_at_readiness = match child.as_deref_mut() {
                     Some(child) => child.try_wait()?.map(|_| false).or(Some(true)),
                     None => None,
                 };
@@ -507,7 +508,13 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
                     Some(serde_json::to_value(status)?),
                 ));
                 let gates_passed = if let Some(script) = &script {
-                    run_gates(script, &app, child.as_mut(), &mut report, &mut exit_code)?
+                    run_gates(
+                        script,
+                        &app,
+                        child.as_deref_mut(),
+                        &mut report,
+                        &mut exit_code,
+                    )?
                 } else {
                     true
                 };
@@ -2948,7 +2955,7 @@ pub(crate) fn spawn_command(
     command: &[String],
     environment: &[(String, String)],
     log: Option<&Path>,
-) -> Result<Child> {
+) -> Result<ProcessTree> {
     if command.is_empty() {
         return Err(anyhow!("drill run requires a command after `--`"));
     }
@@ -2967,12 +2974,7 @@ pub(crate) fn spawn_command(
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
-    #[cfg(windows)]
-    child_command.creation_flags(0x0800_0000);
-    #[cfg(not(windows))]
-    child_command.process_group(0);
-    child_command
-        .spawn()
+    ProcessTree::spawn(&mut child_command)
         .with_context(|| format!("failed to start `{}`", command.join(" ")))
 }
 
@@ -3032,29 +3034,9 @@ pub(crate) fn drive_selector(app: &DiscoveredApp) -> drive::DriveAppSelector {
     }
 }
 
-pub(crate) fn cleanup_child_tree(child: &mut Child) -> Result<String> {
-    if let Some(status) = child.try_wait()? {
-        return Ok(format!(
-            "wrapped command already exited with status {status}"
-        ));
-    }
-    let pid = child.id();
-    if let Err(tree_error) = cleanup_process_tree(pid) {
-        // Fall back to killing the direct child so it is never leaked.
-        if let Err(kill_error) = child.kill() {
-            if child.try_wait().ok().flatten().is_none() {
-                return Err(anyhow!(
-                    "{tree_error:#}; fallback kill of pid {pid} also failed: {kill_error}"
-                ));
-            }
-        }
-        let _ = child.wait();
-        return Ok(format!(
-            "stopped pid {pid} directly; process tree cleanup failed: {tree_error:#}"
-        ));
-    }
-    let _ = child.wait();
-    Ok(format!("stopped process tree rooted at pid {pid}"))
+/// Stop the app's whole process tree and wait until every process in it has exited.
+pub(crate) fn cleanup_child_tree(child: &mut ProcessTree) -> Result<String> {
+    child.stop(STOP_TIMEOUT)
 }
 
 #[cfg(windows)]

@@ -2,6 +2,7 @@ mod commands;
 mod discovery;
 pub mod mcp;
 pub mod output;
+mod process_tree;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};

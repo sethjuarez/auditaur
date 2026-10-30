@@ -43,6 +43,7 @@ use crate::{
         read, workflow,
     },
     discovery::DiscoveredApp,
+    process_tree::ProcessTree,
 };
 
 const LAUNCH_POLL: Duration = Duration::from_millis(500);
@@ -281,7 +282,7 @@ impl RealHost {
 pub struct BridgeDriver {
     session: BridgeSession,
     /// The spawned app process; `None` when attached to a running app.
-    child: Option<Child>,
+    child: Option<ProcessTree>,
     /// Where the spawned app's output goes, in the run directory.
     log: Option<PathBuf>,
     /// The app's telemetry store, opened on first use.
@@ -291,7 +292,7 @@ pub struct BridgeDriver {
 }
 
 impl BridgeDriver {
-    fn new(session: BridgeSession, child: Option<Child>, log: Option<PathBuf>) -> Self {
+    fn new(session: BridgeSession, child: Option<ProcessTree>, log: Option<PathBuf>) -> Self {
         Self {
             session,
             child,
@@ -632,7 +633,7 @@ impl BridgeDriver {
             {
                 return Some("interrupted".to_string());
             }
-            match child.as_mut().map(Child::try_wait) {
+            match child.as_deref_mut().map(Child::try_wait) {
                 Some(Ok(Some(status))) => Some(format!("app process exited ({status})")),
                 _ => None,
             }
