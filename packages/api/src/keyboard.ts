@@ -439,8 +439,19 @@ function edit(
   command: string,
   value: string | undefined,
   fallback: () => boolean,
+  dataTransfer?: DataTransfer,
 ): EditOutcome {
-  const before = new InputEvent('beforeinput', { inputType, data, bubbles: true, cancelable: true, composed: true });
+  const before = new InputEvent('beforeinput', {
+    inputType,
+    data,
+    dataTransfer: dataTransfer ?? null,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  if (dataTransfer && before.dataTransfer !== dataTransfer) {
+    Object.defineProperty(before, 'dataTransfer', { value: dataTransfer });
+  }
   if (!el.dispatchEvent(before)) {
     return 'prevented';
   }
@@ -458,6 +469,32 @@ export function insertText(el: Element, text: string): EditOutcome {
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
     return true;
   });
+}
+
+/** The browser's default paste action: text fields take the plain text; rich text takes the HTML
+ * when there is any. A non-editable target gets nothing, and neither does a field when only HTML was
+ * pasted. */
+export function insertFromPaste(el: Element, text: string, html: string, transfer: DataTransfer): EditOutcome {
+  if (!isEditable(el)) {
+    return 'failed';
+  }
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    if (!text) {
+      return 'failed';
+    }
+    const value = el instanceof HTMLInputElement ? text.replace(/\r?\n/g, ' ') : text;
+    return edit(el, 'insertFromPaste', value, 'insertText', value, () => {
+      const [start, end] = selection(el);
+      replaceRange(el, value, start, end);
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: value }));
+      return true;
+    });
+  }
+  if (!text && !html) {
+    return 'failed';
+  }
+  const [command, value] = html ? ['insertHTML', html] : ['insertText', text];
+  return edit(el, 'insertFromPaste', null, command, value, () => false, transfer);
 }
 
 function insertLineBreak(el: Element): EditOutcome {

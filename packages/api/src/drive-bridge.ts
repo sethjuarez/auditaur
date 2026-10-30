@@ -17,6 +17,7 @@ import {
 import { generateLocator } from './locator-gen.js';
 import { fillContentEditable, pressChord, type PressResult } from './keyboard.js';
 import { isMouseButton, mouseClick, mouseDrag } from './mouse.js';
+import { parsePastePayload, pasteInto } from './clipboard.js';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -323,6 +324,16 @@ export async function executeDriveBridgeRequest(
     case 'press': {
       const pressed = pressKey(request.selector, request.value ?? '', request.visibleOnly);
       return { ok: true, visibleOnly: request.visibleOnly, ...pressed };
+    }
+    case 'paste': {
+      const payload = parsePastePayload(request.value ?? '');
+      const target = request.selector
+        ? requireSelector(request.selector, request.visibleOnly)
+        : document.activeElement ?? document.body;
+      if (!target) {
+        throw new Error('selector not found');
+      }
+      return { ok: true, visibleOnly: request.visibleOnly, ...pasteInto(target, payload) };
     }
     case 'select': {
       const el = requireSelector(request.selector, request.visibleOnly);
