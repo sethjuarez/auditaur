@@ -68,6 +68,47 @@ pub fn list_apps() -> Result<Vec<DiscoveredApp>> {
     Ok(apps)
 }
 
+/// The newest live instance of the same app that started after ours: what a relaunch (such as
+/// a `tauri dev` rebuild) leaves behind. Reads discovery files only, since opening every
+/// session store is slow once many stale sessions pile up.
+pub fn live_successor(ours: &DiscoveryFile) -> Result<Option<DiscoveryFile>> {
+    let apps_dir = apps_dir()?;
+    let Ok(entries) = fs::read_dir(apps_dir) else {
+        return Ok(None);
+    };
+    let files = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .filter_map(|path| serde_json::from_slice::<DiscoveryFile>(&fs::read(path).ok()?).ok());
+    Ok(successor(ours, files, OffsetDateTime::now_utc()))
+}
+
+fn successor(
+    ours: &DiscoveryFile,
+    files: impl IntoIterator<Item = DiscoveryFile>,
+    now: OffsetDateTime,
+) -> Option<DiscoveryFile> {
+    let started = parse_timestamp(&ours.started_at)?;
+    let fresh = time::Duration::seconds(i64::try_from(STALE_AFTER.as_secs()).unwrap_or(30));
+    let same_app = |other: &DiscoveryFile| match (&ours.app_identifier, &other.app_identifier) {
+        (Some(left), Some(right)) => left == right,
+        _ => ours.service_name == other.service_name,
+    };
+    files
+        .into_iter()
+        .filter(|other| other.instance_id != ours.instance_id && same_app(other))
+        .filter(|other| {
+            parse_timestamp(&other.last_heartbeat_at).is_some_and(|beat| now - beat <= fresh)
+        })
+        .filter_map(|other| {
+            let other_started = parse_timestamp(&other.started_at)?;
+            (other_started > started).then_some((other_started, other))
+        })
+        .max_by_key(|(other_started, _)| *other_started)
+        .map(|(_, other)| other)
+}
+
 pub fn resolve_db(db: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(db) = db {
         return Ok(db);
@@ -220,4 +261,54 @@ fn same_app_identity(left: &DiscoveredApp, right: &DiscoveredApp) -> bool {
 
 fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(instance: &str, started: &str, heartbeat: &str) -> DiscoveryFile {
+        DiscoveryFile {
+            schema_version: 1,
+            instance_id: instance.to_string(),
+            session_id: format!("session-{instance}"),
+            service_name: "app".to_string(),
+            service_version: None,
+            app_identifier: Some("dev.example.app".to_string()),
+            pid: 1,
+            started_at: started.to_string(),
+            database_path: String::new(),
+            capabilities: Vec::new(),
+            last_heartbeat_at: heartbeat.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_newer_live_instance_of_the_same_app_is_the_successor() {
+        let now = parse_timestamp("2026-10-30T00:10:00Z").unwrap();
+        let ours = file("a", "2026-10-30T00:00:00Z", "2026-10-30T00:05:00Z");
+        let mut other_app = file("x", "2026-10-30T00:08:00Z", "2026-10-30T00:09:59Z");
+        other_app.app_identifier = Some("dev.example.other".to_string());
+        let found = successor(
+            &ours,
+            [
+                ours.clone(),
+                other_app,
+                // Older than ours: an earlier session, not a relaunch.
+                file("old", "2026-10-29T23:00:00Z", "2026-10-30T00:09:59Z"),
+                // Newer but long dead.
+                file("dead", "2026-10-30T00:01:00Z", "2026-10-30T00:02:00Z"),
+                file("b", "2026-10-30T00:06:00Z", "2026-10-30T00:09:50Z"),
+                file("c", "2026-10-30T00:07:00Z", "2026-10-30T00:09:55Z"),
+            ],
+            now,
+        );
+        assert_eq!(found.map(|found| found.instance_id).as_deref(), Some("c"));
+        assert!(successor(
+            &ours,
+            [file("old", "2026-10-29T23:00:00Z", "2026-10-30T00:09:59Z")],
+            now
+        )
+        .is_none());
+    }
 }

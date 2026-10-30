@@ -371,11 +371,31 @@ impl AppDriver for BridgeDriver {
     }
 
     fn exited(&mut self) -> Option<String> {
-        let child = self.child.as_mut()?;
-        match child.try_wait() {
-            Ok(Some(status)) => Some(format!("app process exited ({status})")),
-            _ => None,
+        if let Some(child) = self.child.as_mut() {
+            if let Ok(Some(status)) = child.try_wait() {
+                return Some(format!("app process exited ({status})"));
+            }
         }
+        // The launcher (`tauri dev`, `npm start`) can outlive the app it started, and an attached
+        // app has no launcher at all: either way the bridge is stranded and every later step
+        // would only time out. If the check itself fails, don't claim the app is gone.
+        let pid = self.session.pid();
+        if workflow::process_exists(pid).unwrap_or(true) {
+            return None;
+        }
+        const HINT: &str = "something relaunched it, such as a `tauri dev` rebuild. Drill a built app, or avoid source edits while drills run";
+        Some(match self.session.successor() {
+            Some(next) => format!(
+                "it restarted mid-run (pid {pid} → {}, session {} → {}); {HINT}",
+                next.pid,
+                self.session.session_id(),
+                next.session_id
+            ),
+            None if self.child.is_some() => format!(
+                "the app (pid {pid}) is gone but its launch command is still running; {HINT}"
+            ),
+            None => format!("the app (pid {pid}) is gone"),
+        })
     }
 
     fn close(&mut self) -> Result<()> {
