@@ -2,6 +2,9 @@
 # when someone works in another window during a drill. Fails if it can't take the foreground.
 param([switch]$Window)
 
+# Progress goes to stdout so a timed-out step shows where it stalled (Add-Type compiles C#, which
+# can take seconds on a cold CI runner).
+if (-not $Window) { 'compiling' }
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -46,7 +49,9 @@ if ($Window) {
 # Hide only the console: a hidden Start-Process would also hide the form when it first shows.
 $child = Start-Process powershell -PassThru -ArgumentList @(
     '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Window')
-$deadline = (Get-Date).AddSeconds(5)
+"started window process $($child.Id)"
+# The child compiles the same C# before it shows its window.
+$deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) {
     $owner = 0
     [Fg]::GetWindowThreadProcessId([Fg]::GetForegroundWindow(), [ref]$owner) | Out-Null
