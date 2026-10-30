@@ -1,4 +1,6 @@
 export { initAuditaur } from './init.js';
+export { withDrillDialogs } from './drill-dialogs.js';
+export type { DrillDialogKind, DrillDialogModule } from './drill-dialogs.js';
 export { DEFAULT_REDACTION_KEYS, REDACTED, recordedConsole, recordedError, recordedErrorMessage, recordedPayload } from './payload.js';
 export type { RecordedConsole, RecordedError, RecordedPayload } from './payload.js';
 export {
