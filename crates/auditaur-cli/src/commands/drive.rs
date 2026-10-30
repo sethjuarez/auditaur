@@ -1284,6 +1284,28 @@ impl BridgeSession {
         &self.attach.session_id
     }
 
+    pub(crate) fn pid(&self) -> u32 {
+        self.attach.pid
+    }
+
+    /// A newer live instance of this app, started after this session: a sign it was relaunched.
+    pub(crate) fn successor(&self) -> Option<auditaur_core::discovery::DiscoveryFile> {
+        let ours = auditaur_core::discovery::DiscoveryFile {
+            schema_version: 1,
+            instance_id: self.attach.instance_id.clone(),
+            session_id: self.attach.session_id.clone(),
+            service_name: self.attach.service_name.clone(),
+            service_version: self.attach.service_version.clone(),
+            app_identifier: self.attach.app_identifier.clone(),
+            pid: self.attach.pid,
+            started_at: self.attach.started_at.clone(),
+            database_path: self.attach.db_path.clone(),
+            capabilities: Vec::new(),
+            last_heartbeat_at: self.attach.last_heartbeat_at.clone(),
+        };
+        crate::discovery::live_successor(&ours).ok().flatten()
+    }
+
     pub(crate) fn gate_target(&self) -> super::drill::GateTarget {
         super::drill::GateTarget {
             session_id: self.attach.session_id.clone(),
