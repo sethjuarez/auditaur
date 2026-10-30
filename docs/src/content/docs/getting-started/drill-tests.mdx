@@ -58,7 +58,7 @@ A launched app counts as ready once its drive bridge responds, so `drill test` n
 | `-g, --grep <regex>` | Match the title (`suite > test`) or `@tags`. |
 | `--grep-invert <regex>` | Skip matching tests. |
 | `--tag <tag>` | Only tests with this tag (repeatable). |
-| `--last-failed` | Rerun the failed and unfinished tests from the newest finished run. |
+| `--last-failed` | Rerun the failed and unfinished tests from the newest finished run; a `serial` suite reruns whole. |
 
 In the test file, `"only": true` focuses tests, and `skip` and `fixme` (each takes an optional reason) leave tests out.
 
@@ -238,7 +238,8 @@ auditaur drill locate "li button" --app my-app
 | `beforeEach`, `afterEach` | suite | Steps that run around every test. |
 | `timeoutMs` | suite, test | Per-test timeout (default 30s). `"slow": true` triples it. |
 | `expectTimeoutMs` | suite | How long assertions retry. |
-| `retries` | suite, test | Overrides `--retries`. |
+| `retries` | suite, test | Overrides `--retries`. Not allowed in a `serial` suite. |
+| `serial` | suite | Tests build on each other: a failure skips the rest, and nothing is retried. |
 | `expectFail` | test | The test passes only if it fails. |
 | `env` | suite | Environment variables for the app launch, hooks, and `run` steps. |
 
@@ -261,6 +262,7 @@ Each suite launches the app once; its tests, retries included, share that instan
 - Reset what a test depends on in `beforeEach`: navigate home, clear storage, or `run` a script that resets fixtures.
 - Put work that needs a fresh process, such as first-run flows or startup flags in `env`, in its own suite.
 - For full per-test isolation, give each test its own single-test suite, at the cost of a launch per test.
+- When tests must build on each other's state, mark the suite `"serial": true`, like Playwright's `describe.serial`. After a failure the rest are skipped, `--retries` doesn't apply, and `--last-failed` reruns the whole suite.
 
 If the app exits or restarts mid-suite, the suite's remaining tests stop rather than running against a different instance.
 

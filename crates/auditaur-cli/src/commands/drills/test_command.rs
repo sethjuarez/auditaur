@@ -19,9 +19,12 @@ use super::{
         real::{LaunchSource, RealHost},
         Reporter, RunnerOptions, Stopped, TestDone,
     },
-    select, Filters, DEFAULT_DRILLS_DIR,
+    select, Filters, Selected, DEFAULT_DRILLS_DIR,
 };
-use crate::commands::{drills::model::DrillSuite, workflow};
+use crate::commands::{
+    drills::model::{DrillSuite, TestCase},
+    workflow,
+};
 
 const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 180;
 
@@ -68,14 +71,7 @@ pub fn test(options: TestOptions) -> Result<i32> {
     }
     let mut plan = select(&loaded.suites, &options.filters);
     if options.last_failed {
-        let failed = last_failed_ids(&workspace)?;
-        for selected in &mut plan {
-            let path = run::workspace_path(&workspace, &selected.suite.path);
-            selected
-                .tests
-                .retain(|test| failed.contains(&run::test_id(&path, &test.name)));
-        }
-        plan.retain(|selected| !selected.tests.is_empty());
+        keep_last_failed(&mut plan, &workspace, &last_failed_ids(&workspace)?);
         if plan.is_empty() {
             println!("No failed tests in the latest run to rerun.");
             return Ok(0);
@@ -269,6 +265,27 @@ fn plural(count: usize, one: &str, many: &str) -> String {
 
 /// Ids of tests that failed or never finished in the newest finished run. Runs still in
 /// progress (e.g. a concurrent `drill test`) and unreadable folders are passed over.
+/// Keeps the tests `--last-failed` reruns. A serial suite reruns whole, since its later tests
+/// need the state earlier ones built.
+pub(crate) fn keep_last_failed(
+    plan: &mut Vec<Selected<'_>>,
+    workspace: &std::path::Path,
+    failed: &HashSet<String>,
+) {
+    for selected in plan.iter_mut() {
+        let path = run::workspace_path(workspace, &selected.suite.path);
+        let is_failed = |test: &&TestCase| failed.contains(&run::test_id(&path, &test.name));
+        if selected.suite.serial {
+            if !selected.tests.iter().any(is_failed) {
+                selected.tests.clear();
+            }
+        } else {
+            selected.tests.retain(is_failed);
+        }
+    }
+    plan.retain(|selected| !selected.tests.is_empty());
+}
+
 pub(crate) fn last_failed_ids(workspace: &std::path::Path) -> Result<HashSet<String>> {
     let root = run::runs_root(&workspace);
     let ids = run::run_ids(&root).unwrap_or_default();

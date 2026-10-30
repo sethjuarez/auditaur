@@ -14,6 +14,7 @@
     "timeoutMs": { "type": "integer", "minimum": 1, "description": "Default per-test timeout." },
     "expectTimeoutMs": { "type": "integer", "minimum": 1, "description": "How long assertions keep retrying before failing (default 5000). Override one step with its timeoutMs." },
     "retries": { "$ref": "#/$defs/retries" },
+    "serial": { "type": "boolean", "description": "Tests build on each other: a failure skips the rest, retries are not allowed, and --last-failed reruns the whole suite." },
     "env": {
       "type": "object", "additionalProperties": { "type": "string", "pattern": "^[^\\u0000]*$" },
       "propertyNames": { "minLength": 1, "pattern": "^[^=\\s\\u0000]+$", "not": { "const": "AUDITAUR_DRILL_ENV_FILE" } },

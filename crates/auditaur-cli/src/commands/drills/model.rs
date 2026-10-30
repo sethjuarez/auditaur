@@ -23,6 +23,7 @@ pub const SUITE_KEYS: &[&str] = &[
     "timeoutMs",
     "expectTimeoutMs",
     "retries",
+    "serial",
     "env",
     "setup",
     "teardown",
@@ -172,6 +173,10 @@ pub struct DrillSuite {
     pub expect_timeout_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retries: Option<u32>,
+    /// Tests depend on earlier ones: a failure skips the rest, and
+    /// `--last-failed` reruns the whole suite (Playwright `describe.serial`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub serial: bool,
     /// Environment for the app launch, hooks, and `run` steps, in file order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<(String, String)>,
@@ -1120,6 +1125,9 @@ fn get_flag_reason(
     }
 }
 
+const SERIAL_RETRIES: &str =
+    "is not valid in a serial suite; a test can't be retried apart from the tests it depends on";
+
 fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> {
     let map = as_object(ctx, value, "", "drill file")?;
     check_keys(ctx, map, "", SUITE_KEYS, "at the top level of a drill file");
@@ -1135,6 +1143,10 @@ fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> 
     let timeout_ms = get_u64(ctx, map, "timeoutMs", "", 1);
     let expect_timeout_ms = get_u64(ctx, map, "expectTimeoutMs", "", 1);
     let retries = get_retries(ctx, map, "");
+    let serial = get_bool(ctx, map, "serial", "");
+    if serial && retries.is_some() {
+        ctx.err("retries", SERIAL_RETRIES);
+    }
     let env = parse_env(ctx, map);
     let setup = parse_hooks(ctx, map, "setup");
     let teardown = parse_hooks(ctx, map, "teardown");
@@ -1153,6 +1165,9 @@ fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> 
             let mut names = HashSet::new();
             for (i, item) in items.iter().enumerate() {
                 if let Some(test) = parse_test(ctx, item, &index("", "tests", i)) {
+                    if serial && test.retries.is_some() {
+                        ctx.err(&join(&index("", "tests", i), "retries"), SERIAL_RETRIES);
+                    }
                     if !names.insert(test.name.clone()) {
                         ctx.err(
                             &index("", "tests", i),
@@ -1177,6 +1192,7 @@ fn parse_suite(ctx: &mut Ctx, path: &Path, value: &Value) -> Option<DrillSuite> 
         timeout_ms,
         expect_timeout_ms,
         retries,
+        serial,
         env,
         setup,
         teardown,
@@ -2963,6 +2979,19 @@ mod tests {
         assert!(messages(r##"{ "env": [], "tests": [] }"##)
             .iter()
             .any(|m| m.contains("expected object of strings")));
+    }
+
+    #[test]
+    fn serial_suites_reject_retries() {
+        let ok = parse(r##"{ "serial": true, "tests": [{ "name": "a", "skip": true }] }"##);
+        assert!(ok.issues.is_empty());
+        assert!(ok.suite.unwrap().serial);
+        let issues = messages(
+            r##"{ "serial": true, "retries": 1, "tests": [{ "name": "a", "retries": 2, "skip": true }] }"##,
+        );
+        assert_eq!(issues.len(), 2, "{issues:?}");
+        assert!(issues[0].starts_with("retries: is not valid in a serial suite"));
+        assert!(issues[1].starts_with("tests[0].retries: is not valid in a serial suite"));
     }
 
     #[test]

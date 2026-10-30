@@ -475,13 +475,14 @@ impl SuiteRun<'_, '_> {
 
         // A skip in `beforeAll` skips every test in the suite, like `test.skip()` there.
         let skip_all = tally.skipped;
+        let mut serial_failed = false;
         if self.error.is_none() && self.exited.is_none() {
             for (index, test) in self.selected.tests.iter().enumerate() {
                 if let Some(stopped) = stop_reason(self.writer, self.options) {
                     self.stopped = Some(stopped);
                     break;
                 }
-                if skip_all {
+                if skip_all || serial_failed {
                     self.skip_test(index, test)?;
                     continue;
                 }
@@ -489,6 +490,10 @@ impl SuiteRun<'_, '_> {
                 if self.exited.is_some() {
                     break;
                 }
+                // Later tests in a serial suite build on this one's state.
+                serial_failed = suite.serial
+                    && self.writer.report().suites[self.index].tests[index].outcome
+                        == Some(Outcome::Unexpected);
             }
         }
 
@@ -546,11 +551,15 @@ impl SuiteRun<'_, '_> {
         if matches!(test.mode, TestMode::Skip | TestMode::Fixme) {
             return self.skip_test(index, test);
         }
-        let retries = test
-            .retries
-            .or(suite.retries)
-            .or(self.options.retries)
-            .unwrap_or(0);
+        // A serial suite's tests share state, so one can't be rerun alone.
+        let retries = if suite.serial {
+            0
+        } else {
+            test.retries
+                .or(suite.retries)
+                .or(self.options.retries)
+                .unwrap_or(0)
+        };
         let mut timeout_ms = test
             .timeout_ms
             .or(suite.timeout_ms)
