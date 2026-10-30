@@ -81,7 +81,7 @@ fn show(arguments: &Value) -> Result<Value> {
 fn cancel(arguments: &Value) -> Result<Value> {
     let cwd = workspace(arguments)?;
     let selector = string(arguments, "runId")?;
-    let dir = run::resolve_run(&cwd.join(run::RUNS_DIR), selector.as_deref())?;
+    let dir = run::resolve_run(&run::runs_root(&cwd), selector.as_deref())?;
     let report = run::read_run(&dir)?;
     if report.status != run::Status::Running {
         bail!(
@@ -149,7 +149,7 @@ fn test(arguments: &Value) -> Result<Value> {
 
 /// Spawn `auditaur drill test` in the background and wait for its run folder.
 fn start_run(cwd: &Path, args: &[String]) -> Result<Value> {
-    let runs_root = cwd.join(run::RUNS_DIR);
+    let runs_root = run::runs_root(&cwd);
     // Only a run created after the spawn can be ours, even if an old run shares the pid.
     let existing: HashSet<String> = run::run_ids(&runs_root)
         .unwrap_or_default()

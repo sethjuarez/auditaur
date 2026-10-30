@@ -32,6 +32,14 @@ use super::{effective_tags, model::TestMode, title, Selected};
 
 pub const RUN_SCHEMA_VERSION: u32 = 1;
 pub const RUNS_DIR: &str = ".auditaur/drill-runs";
+
+/// The runs folder under `workspace`, joined by component so Windows paths use one separator.
+/// `RUNS_DIR` stays `/`-separated for the portable relative paths reports print.
+pub fn runs_root(workspace: &Path) -> PathBuf {
+    RUNS_DIR
+        .split('/')
+        .fold(workspace.to_path_buf(), |path, part| path.join(part))
+}
 pub const DEFAULT_KEEP_RUNS: usize = 20;
 /// Creating this file in a running run's folder asks its `drill test` to stop gracefully.
 pub const CANCEL_REQUEST_FILE: &str = "cancel.request";
@@ -566,7 +574,7 @@ pub struct RunWriter {
 impl RunWriter {
     /// Create the run folder with every selected test pending, so readers see the plan at once.
     pub fn create(options: RunOptions, plan: &[Selected<'_>]) -> Result<Self> {
-        let runs_root = options.workspace.join(RUNS_DIR);
+        let runs_root = runs_root(&options.workspace);
         fs::create_dir_all(&runs_root)
             .with_context(|| format!("failed to create `{}`", runs_root.display()))?;
         let gitignore = runs_root.join(".gitignore");
@@ -1567,6 +1575,13 @@ mod tests {
     }
 
     #[test]
+    fn runs_root_uses_the_platform_separator_throughout() {
+        let root = runs_root(Path::new("workspace"));
+        let expected = Path::new("workspace").join(".auditaur").join("drill-runs");
+        assert_eq!(root.to_string_lossy(), expected.to_string_lossy());
+    }
+
+    #[test]
     fn writes_a_schema_valid_run_with_every_outcome() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().to_path_buf();
@@ -1762,7 +1777,7 @@ mod tests {
             assert!(types.iter().any(|t| t == expected), "missing {expected}");
         }
 
-        let root = workspace.join(RUNS_DIR);
+        let root = runs_root(&workspace);
         assert_eq!(fs::read_to_string(root.join(".gitignore")).unwrap(), "*\n");
         assert_eq!(resolve_run(&root, None).unwrap(), run_dir);
         assert_eq!(resolve_run(&root, Some(&report.run_id)).unwrap(), run_dir);

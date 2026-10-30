@@ -262,7 +262,7 @@ fn plural(count: usize, one: &str, many: &str) -> String {
 /// Ids of tests that failed or never finished in the newest finished run. Runs still in
 /// progress (e.g. a concurrent `drill test`) and unreadable folders are passed over.
 pub(crate) fn last_failed_ids(workspace: &std::path::Path) -> Result<HashSet<String>> {
-    let root = workspace.join(run::RUNS_DIR);
+    let root = run::runs_root(&workspace);
     let ids = run::run_ids(&root).unwrap_or_default();
     let report = ids
         .iter()
