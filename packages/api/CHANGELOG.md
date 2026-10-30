@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/sethjuarez/auditaur/compare/api-v0.10.1...api-v0.11.0) (2026-10-30)
+
+
+### Features
+
+* **api:** let drills answer native dialogs (AR-24) ([#136](https://github.com/sethjuarez/auditaur/issues/136)) ([9fb1f36](https://github.com/sethjuarez/auditaur/commit/9fb1f36ffdcf8969e5362957bfdd6744acd772af))
+
 ## [0.10.1](https://github.com/sethjuarez/auditaur/compare/api-v0.10.0...api-v0.10.1) (2026-10-30)
 
 
