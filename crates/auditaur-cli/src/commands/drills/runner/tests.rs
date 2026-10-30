@@ -113,7 +113,7 @@ impl AppDriver for FakeDriver {
             *count += 1;
             *count
         };
-        if matches!(step.kind, StepKind::Reload) {
+        if matches!(step.kind, StepKind::Reload | StepKind::ClearStorage) {
             // A reload starts the page, and its stubs, over.
             state.dialogs.armed = false;
             state.dialogs.queue.clear();

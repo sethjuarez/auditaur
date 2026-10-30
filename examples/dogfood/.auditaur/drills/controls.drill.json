@@ -146,6 +146,22 @@
         },
         { "evaluate": "(() => { document.querySelector('#paste-zone').remove(); document.querySelector('#paste-editor').remove(); document.querySelector('#drive-input').value = 'ready'; })()" }
       ]
+    },
+    {
+      "name": "scopes locators with within and clears storage",
+      "steps": [
+        {
+          "evaluate": "(() => { for (const name of ['Drafts', 'Archive']) { const list = Object.assign(document.createElement('section'), { className: 'scope-list' }); list.setAttribute('aria-label', name); const button = Object.assign(document.createElement('button'), { textContent: 'Open' }); button.addEventListener('click', () => (window.__opened = name)); list.append(button); document.body.append(list); } })()"
+        },
+        { "click": { "role": "button", "name": "Open", "within": { "role": "region", "name": "Archive" } } },
+        { "expectValue": "window.__opened", "toEqual": "Archive" },
+        { "click": { "role": "button", "name": "Open", "within": { "css": ".scope-list", "nth": 0 } } },
+        { "expectValue": "window.__opened", "toEqual": "Drafts" },
+        { "expect": { "role": "button", "name": "Open", "within": { "css": ".scope-list" } }, "toHaveCount": 2 },
+        { "evaluate": "localStorage.setItem('dogfood:layout', 'focus'); sessionStorage.setItem('dogfood:tab', '1'); true" },
+        { "clearStorage": true },
+        { "expectValue": "[localStorage.length, sessionStorage.length, document.querySelectorAll('.scope-list').length]", "toEqual": [0, 0, 0] }
+      ]
     }
   ]
 }

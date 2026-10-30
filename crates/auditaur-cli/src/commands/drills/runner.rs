@@ -752,7 +752,7 @@ impl SuiteRun<'_, '_> {
             };
             let snapshot = self.snapshot_target(step, &budget.snapshot_base);
             let tracing = self.tracing();
-            let reload = matches!(step.kind, StepKind::Reload);
+            let reload = matches!(step.kind, StepKind::Reload | StepKind::ClearStorage);
             if reload {
                 if let Some(stubs) = self.dialogs.as_mut() {
                     stubs.before_reload(driver);

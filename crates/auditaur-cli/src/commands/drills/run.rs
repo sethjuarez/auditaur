@@ -1408,8 +1408,12 @@ pub fn prune_runs(root: &Path, keep: usize, current: &str) -> Result<Vec<String>
     Ok(removed)
 }
 
-/// Resolve `latest` (the newest run folder) or a run id or unique prefix.
+/// Resolve `latest` (the newest run folder), a run id or unique prefix, or the path of a run
+/// folder under `root`.
 pub fn resolve_run(root: &Path, selector: Option<&str>) -> Result<PathBuf> {
+    if let Some(dir) = selector.and_then(|selector| run_dir_path(root, selector)) {
+        return dir;
+    }
     let ids = run_ids(root)?;
     match selector {
         None | Some("latest") => ids
@@ -1431,6 +1435,29 @@ pub fn resolve_run(root: &Path, selector: Option<&str>) -> Result<PathBuf> {
             }
         }
     }
+}
+
+/// A selector that looks like a path names a run folder directly; it must sit in `root`, so a
+/// run selector never reads outside this workspace's runs.
+fn run_dir_path(root: &Path, selector: &str) -> Option<Result<PathBuf>> {
+    if !selector.contains(['/', '\\']) {
+        return None;
+    }
+    let path = Path::new(selector.trim_end_matches(['/', '\\']));
+    let resolved = (|| {
+        let dir = fs::canonicalize(path).ok()?;
+        let parent = dir.parent()?;
+        (parent == fs::canonicalize(root).ok()?)
+            .then(|| dir.file_name().map(|name| root.join(name)))
+            .flatten()
+    })();
+    Some(match resolved {
+        Some(dir) if dir.join("run.json").is_file() => Ok(dir),
+        _ => Err(anyhow!(
+            "`{selector}` is not a drill run folder under `{}`",
+            root.display()
+        )),
+    })
 }
 
 /// Read a run report. A `running` run whose owner process is gone reads as
@@ -1786,6 +1813,15 @@ mod tests {
             run_dir
         );
         assert!(resolve_run(&root, Some("1999")).is_err());
+        let by_path = format!("{}{}", run_dir.display(), std::path::MAIN_SEPARATOR);
+        assert_eq!(resolve_run(&root, Some(&by_path)).unwrap(), run_dir);
+        let outside = workspace.join("not-a-run");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("run.json"), "{}").unwrap();
+        let error = resolve_run(&root, Some(&outside.display().to_string())).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("is not a drill run folder under"));
         let leftovers: Vec<_> = fs::read_dir(&run_dir)
             .unwrap()
             .filter_map(|e| e.ok())
