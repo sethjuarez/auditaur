@@ -1,3 +1,4 @@
+import { requireEnabled } from './actionability.js';
 import { TABBABLE, isDisabled } from './keyboard.js';
 
 export type MouseButton = 'right' | 'middle';
@@ -8,9 +9,6 @@ const BUTTONS: Record<MouseButton, { button: number; buttons: number; which: num
   right: { button: 2, buttons: 2, which: 3 },
 };
 
-/** The bridge's error for a disabled target; the CLI waits for it to become enabled. */
-export const ELEMENT_DISABLED = 'element is disabled';
-
 export interface ButtonClickResult {
   button: MouseButton;
   /** The `contextmenu` event's `defaultPrevented`, for a right click. */
@@ -19,15 +17,6 @@ export interface ButtonClickResult {
 
 export function isMouseButton(value: string): value is MouseButton {
   return Object.prototype.hasOwnProperty.call(BUTTONS, value);
-}
-
-/**
- * Playwright's "enabled" actionability check: not a disabled form control (itself, as the
- * control containing it, or through a disabled fieldset) and not inside `aria-disabled="true"`.
- */
-export function isActionDisabled(el: Element): boolean {
-  const control = el.closest('button, input, select, textarea, option, optgroup');
-  return (control !== null && isDisabled(control)) || el.closest('[aria-disabled="true"]') !== null;
 }
 
 type Phase = 'hover' | 'press' | 'release' | 'click';
@@ -56,12 +45,10 @@ const EVENTS: Record<string, { pointer: boolean; phase: Phase; boundary?: boolea
  * fires for a real click: pointer and mouse over/enter/move, `pointerdown`, `mousedown`, focus,
  * `pointerup`, `mouseup`, `auxclick`, then `contextmenu` for the right button. As in the browser,
  * cancelling `pointerdown` suppresses `mousedown`, `mouseup` and the focus change, and cancelling
- * `mousedown` suppresses the focus change. Throws {@link ELEMENT_DISABLED} for a disabled target.
+ * `mousedown` suppresses the focus change. Throws `element is disabled` for a disabled target.
  */
 export function clickButton(el: Element, button: MouseButton): ButtonClickResult {
-  if (isActionDisabled(el)) {
-    throw new Error(ELEMENT_DISABLED);
-  }
+  requireEnabled(el);
   el.scrollIntoView?.({ block: 'center', inline: 'center' });
   const rect = el.getBoundingClientRect?.();
   const clientX = Math.round((rect?.left ?? 0) + (rect?.width ?? 0) / 2);

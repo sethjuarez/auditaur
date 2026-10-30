@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { requireEditable, requireEnabled } from './actionability.js';
 import { ariaSnapshot } from './aria-snapshot.js';
 import { armDrillDialogs, disarmDrillDialogs, drillDialogState, queueDrillDialog } from './drill-dialogs.js';
 import type { AuditaurExporter } from './exporter.js';
@@ -275,12 +276,14 @@ export async function executeDriveBridgeRequest(
 
     case 'click': {
       const el = requireSelector(request.selector, request.visibleOnly);
+      requireEnabled(el);
       el.scrollIntoView?.({ block: 'center', inline: 'center' });
       (el as HTMLElement).click?.();
       return { ok: true, visibleOnly: request.visibleOnly };
     }
     case 'dblclick': {
       const el = requireSelector(request.selector, request.visibleOnly);
+      requireEnabled(el);
       el.scrollIntoView?.({ block: 'center', inline: 'center' });
       (el as HTMLElement).click?.();
       (el as HTMLElement).click?.();
@@ -303,6 +306,7 @@ export async function executeDriveBridgeRequest(
     }
     case 'fill': {
       const el = requireSelector(request.selector, request.visibleOnly);
+      requireEditable(el);
       if ((el as HTMLElement).isContentEditable) {
         await fillContentEditable(el, request.value ?? '');
       } else {
@@ -312,6 +316,7 @@ export async function executeDriveBridgeRequest(
     }
     case 'type': {
       const el = requireSelector(request.selector, request.visibleOnly);
+      requireEditable(el);
       const insertedCharacters = typeElementValue(el, request.value ?? '');
       return { ok: true, visibleOnly: request.visibleOnly, insertedCharacters };
     }
@@ -321,16 +326,19 @@ export async function executeDriveBridgeRequest(
     }
     case 'select': {
       const el = requireSelector(request.selector, request.visibleOnly);
+      requireEnabled(el);
       const values = request.values?.length ? request.values : [request.value ?? ''];
       return selectElementValues(el, values, request.visibleOnly);
     }
     case 'check': {
       const el = requireSelector(request.selector, request.visibleOnly);
+      requireEnabled(el);
       setChecked(el, true);
       return { ok: true, checked: true, visibleOnly: request.visibleOnly };
     }
     case 'uncheck': {
       const el = requireSelector(request.selector, request.visibleOnly);
+      requireEnabled(el);
       setChecked(el, false);
       return { ok: true, checked: false, visibleOnly: request.visibleOnly };
     }

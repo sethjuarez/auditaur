@@ -465,9 +465,10 @@ fn timed_out(message: impl Into<String>) -> StepResult {
 pub(crate) const LOCATOR_PREFIX: &str = "locator:";
 /// The bridge's error when an action's target is missing (or not visible).
 const SELECTOR_NOT_FOUND: &str = "selector not found";
-/// The bridge's reply when an action that requires an enabled target finds it disabled; `act`
-/// waits for it to become enabled, like Playwright's actionability checks.
+/// The bridge's replies when an action's target isn't actionable yet; `act` waits for them to
+/// clear, like Playwright's "enabled" and "editable" checks.
 const ELEMENT_DISABLED: &str = "element is disabled";
+const ELEMENT_NOT_EDITABLE: &str = "element is not editable";
 
 pub(crate) fn bridge_selector(locator: &Locator) -> String {
     fn put<T: serde::Serialize>(spec: &mut Value, key: &str, value: Option<T>) {
@@ -1251,13 +1252,9 @@ impl BridgeDriver {
             ("clickButton", Some(button)) => format!("{button}-click"),
             _ => action.to_string(),
         };
-        let mut disabled = false;
         loop {
             self.poll(ctx, target, true, true)
                 .map_err(|error| match error {
-                    StepResult::TimedOut(_) if disabled => timed_out(format!(
-                        "{shown}: timed out waiting for `{target}` to be enabled"
-                    )),
                     StepResult::TimedOut(_) => timed_out(format!(
                         "{shown}: timed out waiting for `{target}` to be visible"
                     )),
@@ -1278,17 +1275,27 @@ impl BridgeDriver {
             match reply {
                 Ok(reply) if reply.ok => return Ok(()),
                 Ok(reply) if reply.error.as_deref() == Some(SELECTOR_NOT_FOUND) => {
-                    disabled = false;
                     thread::sleep(WAIT_POLL.min(ctx.remaining()));
                 }
-                Ok(reply) if reply.error.as_deref() == Some(ELEMENT_DISABLED) => {
+                Ok(reply)
+                    if matches!(
+                        reply.error.as_deref(),
+                        Some(ELEMENT_DISABLED | ELEMENT_NOT_EDITABLE)
+                    ) =>
+                {
+                    let state = if reply.error.as_deref() == Some(ELEMENT_DISABLED) {
+                        "enabled"
+                    } else {
+                        "editable"
+                    };
+                    // Time out here, not in the next visibility poll, so the message names
+                    // the condition that actually held the step up.
+                    thread::sleep(WAIT_POLL.min(ctx.remaining()));
                     if ctx.expired() {
                         return Err(timed_out(format!(
-                            "{shown}: timed out waiting for `{target}` to be enabled"
+                            "{shown}: timed out waiting for `{target}` to be {state}"
                         )));
                     }
-                    disabled = true;
-                    thread::sleep(WAIT_POLL.min(ctx.remaining()));
                 }
                 Ok(reply) => {
                     return Err(failed(explain_action(
