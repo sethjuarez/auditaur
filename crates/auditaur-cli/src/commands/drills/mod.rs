@@ -406,7 +406,7 @@ fn format_totals(totals: &run::Totals) -> String {
 
 /// Readable runs and unreadable folders under `workspace`, newest first.
 fn read_runs(workspace: &Path) -> Result<(Vec<run::RunReport>, Vec<Value>)> {
-    let root = workspace.join(run::RUNS_DIR);
+    let root = run::runs_root(&workspace);
     let mut runs = Vec::new();
     let mut unreadable = Vec::new();
     for id in run::run_ids(&root)?.into_iter().rev() {
@@ -436,7 +436,7 @@ pub fn runs_json(workspace: &Path) -> Result<Value> {
 
 /// The `drill show --json` document: the run report plus its workspace-relative `dir`.
 pub fn show_json(workspace: &Path, selector: Option<&str>) -> Result<Value> {
-    let dir = run::resolve_run(&workspace.join(run::RUNS_DIR), selector)?;
+    let dir = run::resolve_run(&run::runs_root(&workspace), selector)?;
     let report = run::read_run(&dir)?;
     let mut value = serde_json::to_value(&report)?;
     value["dir"] = json!(format!("{}/{}", run::RUNS_DIR, report.run_id));
@@ -446,7 +446,7 @@ pub fn show_json(workspace: &Path, selector: Option<&str>) -> Result<Value> {
 /// One test of a run with every attempt's full report (steps, errors, attachments).
 /// `test` is a test id, title (`suite > test`) or name; a name must be unique in the run.
 pub fn test_detail_json(workspace: &Path, selector: Option<&str>, test: &str) -> Result<Value> {
-    let dir = run::resolve_run(&workspace.join(run::RUNS_DIR), selector)?;
+    let dir = run::resolve_run(&run::runs_root(&workspace), selector)?;
     let report = run::read_run(&dir)?;
     let tests: Vec<&run::TestReport> = report
         .suites
@@ -542,7 +542,7 @@ pub fn show(selector: Option<&str>, json: bool) -> Result<()> {
         );
         return Ok(());
     }
-    let dir = run::resolve_run(&workspace.join(run::RUNS_DIR), selector)?;
+    let dir = run::resolve_run(&run::runs_root(&workspace), selector)?;
     let report = run::read_run(&dir)?;
     println!(
         "Run {}  {}  ({})",

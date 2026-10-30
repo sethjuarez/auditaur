@@ -362,7 +362,7 @@ pub fn coverage_json(
     selector: Option<&str>,
     dbs: &[PathBuf],
 ) -> Result<Coverage> {
-    let dir = run::resolve_run(&workspace.join(run::RUNS_DIR), selector)?;
+    let dir = run::resolve_run(&run::runs_root(&workspace), selector)?;
     let report = run::read_run(&dir)?;
     let (seen, sources) = read_seen(dbs);
     let mut coverage = build(&dir, &report, &seen);

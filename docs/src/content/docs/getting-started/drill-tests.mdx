@@ -192,7 +192,7 @@ A missing baseline is written and the test still fails, so review the new baseli
 
 ## Run folders
 
-Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes its end and attaches the last 64K characters to the launch step. While the app launches, the canvas shows its latest output line under the "launch app" step, so a long first compile is visible. If readiness times out while that line is build activity (cargo's `Compiling`, `Building`, …), the error says the app was still building; raise `--timeout-seconds` or `readiness.timeoutSeconds`.
+Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes its end and attaches the last 64K characters to the launch step. While the app launches, the canvas shows its latest output line under the "launch app" step, so a long first compile is visible. If readiness times out while that line is build activity (cargo's `Compiling …` or `Building [==> ] n/m` progress, …), the error quotes it and says the app was still building; raise `--timeout-seconds` or `readiness.timeoutSeconds`.
 
 ```text
 run.json                         run report, updated as the run progresses
@@ -233,7 +233,7 @@ Install it one of two ways:
 
 The plugin also ships the `auditaur-debug` skill and the `auditaur mcp` server (it runs `auditaur` from `PATH`, so skip a manual MCP entry). When a repo commits its own copy, the plugin copy stays idle so the canvas has one provider. The `health` action reports which copy runs (`install`), its `version` and `versionSource`, `onDiskVersion` (the version now on disk), and the CLI version. `versionSource` is `plugin`, `init` (the `installed.json` stamp `init extension` writes), or `bundled` (the `version.json` every release ships, e.g. a copy installed from a release tag). The panel warns when the canvas and CLI versions differ, with the fix for that install.
 
-A running canvas keeps its loaded code: reopening the panel or touching its files reuses the same extension process, and `init extension --force` can't restart it. After updating any copy, reload extensions if your host offers it (installing the extension through the host reloads it), or start a new session; until then `health` reports `stale: true` and the panel shows a "changed on disk" warning naming both versions.
+A running canvas keeps its loaded code: reopening the panel or touching its files reuses the same extension process, and `init extension --force` can't restart it. After updating any copy, start a new session, or reload extensions if your host offers it. In Copilot, `install_extension` reloads but won't overwrite an installed extension, so remove the installed copy first, then install the new one. Until a reload, `health` reports `stale: true` and the panel shows a "changed on disk" warning naming both versions.
 
 To try another version of the plugin in a consumer app, point the marketplace at it:
 
