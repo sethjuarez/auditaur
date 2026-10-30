@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/sethjuarez/auditaur/compare/api-v0.11.0...api-v0.11.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **api:** fill replaces contenteditable text like Playwright and fails loudly (AR-26) ([#141](https://github.com/sethjuarez/auditaur/issues/141)) ([40ffbdf](https://github.com/sethjuarez/auditaur/commit/40ffbdf51d271b6505563324fc7f41427a67289a))
+* **api:** press sends real key definitions and default actions (AR-25) ([#140](https://github.com/sethjuarez/auditaur/issues/140)) ([20be952](https://github.com/sethjuarez/auditaur/commit/20be952dd70b6f670a23b03fe15e2f8c6d024ea0))
+
 ## [0.11.0](https://github.com/sethjuarez/auditaur/compare/api-v0.10.1...api-v0.11.0) (2026-10-30)
 
 
