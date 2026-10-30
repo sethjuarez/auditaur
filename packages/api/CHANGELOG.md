@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/sethjuarez/auditaur/compare/api-v0.9.0...api-v0.9.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **api:** import under plain Node with .js relative specifiers ([#117](https://github.com/sethjuarez/auditaur/issues/117)) ([e980990](https://github.com/sethjuarez/auditaur/commit/e980990741ca510f7eb085566fca687169054bf1))
+
 ## [0.9.0](https://github.com/sethjuarez/auditaur/compare/api-v0.8.0...api-v0.9.0) (2026-10-30)
 
 
