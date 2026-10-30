@@ -18,6 +18,7 @@
         { "click": { "role": "button", "name": "Call successful command" } },
         { "expect": "#output", "toContainText": "Successful command returned" },
         { "expectIpc": "successful_command", "status": "ok", "count": 1 },
+        { "expectSpan": "successful_command", "status": "ok", "count": 1 },
         { "expectNoErrors": true }
       ]
     },
@@ -26,7 +27,8 @@
       "tags": ["@ipc"],
       "steps": [
         { "click": "#failing-command" },
-        { "expectIpc": "failing_command", "status": "error" }
+        { "expectIpc": "failing_command", "status": "error" },
+        { "expectSpan": "failing_command", "status": "error", "count": 1 }
       ]
     },
     {

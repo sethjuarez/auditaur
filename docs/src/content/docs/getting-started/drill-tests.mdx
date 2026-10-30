@@ -102,7 +102,7 @@ Assertions retry until they pass or `expectTimeoutMs` (default 5s) runs out. Add
 
 Telemetry assertions only see what the app recorded after the test started. Negative, exact-count, `expectNoTelemetry`, and `expectNoErrors` assertions check what has been recorded so far, so place them after the actions they cover.
 
-`expectIpc` and `expectSpan` take a name or `{ "pattern": "regex" }`. A backend `#[auditaur::command]` span is named after its Rust function, so `"expectSpan": "save_project"` checks a command even when the frontend doesn't instrument it. `attributes` maps attribute keys to exact values or `{ "pattern": "regex" }`. `expectNoTelemetry` fails if any log, span, IPC call, or event (narrow with `in`) contains the text or pattern anywhere in its data, which makes a privacy guard:
+`expectIpc` and `expectSpan` take a name or `{ "pattern": "regex" }`. A backend `#[auditaur::command]` span is named after its Rust function, so `"expectSpan": "save_project"` checks a command even when the frontend doesn't instrument it. Its `status` is `ok` when the command returns `Ok` (or a non-`Result` value) and `error`, with the serialized error as the message, when it returns `Err`; other spans set it through the OpenTelemetry `otel.status_code` / `otel.status_message` fields. A miss lists each span seen with its status. `attributes` maps attribute keys to exact values or `{ "pattern": "regex" }`. `expectNoTelemetry` fails if any log, span, IPC call, or event (narrow with `in`) contains the text or pattern anywhere in its data, which makes a privacy guard:
 
 ```json
 { "expectSpan": "chat.send", "status": "ok", "attributes": { "harness": "prompty" } },

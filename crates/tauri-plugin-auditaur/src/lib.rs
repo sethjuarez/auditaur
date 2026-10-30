@@ -1,3 +1,5 @@
+#[doc(hidden)]
+pub mod command_status;
 pub mod commands;
 pub mod desktop;
 pub mod error;
