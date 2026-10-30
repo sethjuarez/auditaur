@@ -165,20 +165,31 @@ export function recordConsole(policy: PayloadPolicy, level: string, args: unknow
   try {
     const shown = args.map((arg) => (arg instanceof Error ? errorText(errors.get(arg)!) : redactKeys(arg, policy.keys)));
     let body = shown.map((arg) => summarizePayload(arg, policy.maxBytes)).join(' ');
+    let kept = error;
     if (policy.consoleHook) {
       const hooked = policy.consoleHook(body, { level });
       body = typeof hooked === 'string' ? hooked : REDACTED;
+      kept = error && keptByBody(error, body);
     }
     const structured = shown.find((arg) => typeof arg === 'object' && arg !== null);
     return {
       body,
       bodyJson: policy.full && structured !== undefined ? maybePayload(structured, true, policy.maxBytes) : undefined,
-      error,
+      error: kept,
     };
   } catch {
-    return { body: REDACTED, error };
+    return { body: REDACTED, error: error && withheld(error) };
   }
 }
+
+// The body already shows the error's text, so `redactConsole` decides for both: an error whose text
+// the hook removed or rewrote is withheld rather than recorded beside the body it was redacted from.
+function keptByBody(error: RecordedError, body: string): RecordedError {
+  const text = errorText(error);
+  return body.includes(text) ? error : withheld(error);
+}
+
+const withheld = (error: RecordedError): RecordedError => ({ message: REDACTED, errorType: error.errorType });
 
 /** What recording would keep of `console[level](...args)` under `config`. */
 export function recordedConsole(config: Partial<AuditaurFrontendConfig>, level: string, args: unknown[]): RecordedConsole {

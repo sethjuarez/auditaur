@@ -32,7 +32,9 @@ export interface AuditaurFrontendConfig {
   /**
    * Rewrite a console call's recorded text (arguments already key-redacted and joined). If it
    * throws, the body is recorded as `[REDACTED]`. The first object argument is recorded as JSON
-   * only with `captureFullPayloads`.
+   * only with `captureFullPayloads`. The body includes any Error argument's text, so this hook
+   * decides for it too: if the hook removes or changes that text, the error's message and stack
+   * are recorded as `[REDACTED]` (its type is kept).
    */
   redactConsole?: AuditaurRedactConsole;
   maxPayloadBytes?: number;

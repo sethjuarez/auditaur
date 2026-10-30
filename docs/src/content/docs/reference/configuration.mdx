@@ -31,7 +31,7 @@ description: Auditaur plugin and frontend configuration.
 | `redactKeys` | `[]` | Extra keys to redact, on top of the defaults (`password`, `token`, `key`, `session`, …). Case-insensitive, any depth. |
 | `redactPayload` | none | `(payload, { kind, name }) => unknown` rewrites a payload before key redaction; `kind` is `invokeArgs`, `invokeResult`, or `eventPayload`. If it throws, the payload is stored as `[REDACTED]`. |
 | `redactErrorMessage` | none | `(message, { name }) => string` rewrites an error message before it is stored: failed invokes and emits (`name` is the command or event), uncaught errors (`window.error`), unhandled rejections (`unhandledrejection`), and errors passed to `console` (`console.<level>`). Object errors are key-redacted first; the stack is kept only if it visibly carries the rewritten message. If it throws or returns a non-string, the message is stored as `[REDACTED]`. |
-| `redactConsole` | none | `(body, { level }) => string` rewrites a console call's text after its arguments are key-redacted and joined. If it throws or returns a non-string, the body is stored as `[REDACTED]`. |
+| `redactConsole` | none | `(body, { level }) => string` rewrites a console call's text after its arguments are key-redacted and joined. If it throws or returns a non-string, the body is stored as `[REDACTED]`. The body includes any Error argument's text, so if the hook removes or changes it, that error's message and stack are stored as `[REDACTED]` too. |
 | `maxPayloadBytes` | `16384` | Bounds captured payload summaries and payload values. |
 | `batchIntervalMs` | `1000` | Flush cadence. |
 | `maxBatchSize` | `64` | Flush when the in-memory batch reaches this size. |
