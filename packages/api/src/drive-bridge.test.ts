@@ -33,6 +33,10 @@ class FakeElement {
     return null;
   }
 
+  getAttribute(): string | null {
+    return null;
+  }
+
   getClientRects(): Array<{ width: number; height: number }> {
     return [{ width: 1, height: 1 }];
   }

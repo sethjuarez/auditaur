@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest';
-import { ELEMENT_DISABLED, clickButton } from './mouse.js';
+import { ELEMENT_DISABLED } from './actionability.js';
+import { clickButton } from './mouse.js';
 
 const TYPES = [
   'pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove',
