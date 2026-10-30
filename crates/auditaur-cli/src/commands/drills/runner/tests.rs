@@ -816,6 +816,37 @@ fn retries_fall_back_to_suite_then_cli() {
 }
 
 #[test]
+fn a_serial_suite_skips_the_rest_after_a_failure_and_never_retries() {
+    let ran = run_with(
+        r##"{ "serial": true, "tests": [
+            { "name": "a", "steps": [{ "click": "#a" }] },
+            { "name": "b", "steps": [{ "click": "#fail" }] },
+            { "name": "c", "steps": [{ "click": "#c" }] }
+        ] }"##,
+        RunnerOptions {
+            retries: Some(2),
+            ..RunnerOptions::default()
+        },
+    );
+    assert_eq!(test(&ran, "a").status, Status::Passed);
+    assert_eq!(
+        test(&ran, "b").attempts.len(),
+        1,
+        "no retry in a serial suite"
+    );
+    assert_eq!(test(&ran, "b").outcome, Some(Outcome::Unexpected));
+    assert_eq!(test(&ran, "c").status, Status::Skipped);
+    assert!(!ran.log.contains(&"click #c".to_string()));
+
+    // An expected failure is not a reason to stop.
+    let ran = run(r##"{ "serial": true, "tests": [
+        { "name": "a", "expectFail": true, "steps": [{ "click": "#fail" }] },
+        { "name": "b", "steps": [{ "click": "#b" }] }
+    ] }"##);
+    assert_eq!(test(&ran, "b").status, Status::Passed);
+}
+
+#[test]
 fn trace_modes_capture_every_step_or_only_the_first_retry() {
     let suite = r##"{ "tests": [{ "name": "t", "retries": 2, "steps": [
         { "click": "#ok" }, { "click": "#flaky" }
@@ -1462,6 +1493,46 @@ fn last_failed_picks_failed_and_unfinished_tests() {
         .collect();
     names.sort();
     assert_eq!(names, ["fail", "flaky", "skip", "unrun"]);
+}
+
+#[test]
+fn last_failed_reruns_a_serial_suite_whole() {
+    let ran = run_files(
+        &[
+            r##"{ "serial": true, "tests": [
+                { "name": "a", "steps": [{ "click": "#a" }] },
+                { "name": "b", "steps": [{ "click": "#fail" }] },
+                { "name": "c", "steps": [{ "click": "#c" }] }
+            ] }"##,
+            r##"{ "tests": [
+                { "name": "x", "steps": [{ "click": "#x" }] },
+                { "name": "y", "steps": [{ "click": "#fail" }] }
+            ] }"##,
+            r##"{ "serial": true, "tests": [{ "name": "ok", "steps": [{ "click": "#ok" }] }] }"##,
+        ],
+        RunnerOptions::default(),
+    );
+    let workspace = ran.dir.ancestors().nth(3).unwrap();
+    let drills = workspace.join(".auditaur/drills");
+    let loaded = load(&[
+        drills.join("s.drill.json"),
+        drills.join("s1.drill.json"),
+        drills.join("s2.drill.json"),
+    ]);
+    let mut plan = select(&loaded.suites, &Filters::default());
+    let ids = crate::commands::drills::test_command::last_failed_ids(workspace).unwrap();
+    crate::commands::drills::test_command::keep_last_failed(&mut plan, workspace, &ids);
+    let kept: Vec<Vec<&str>> = plan
+        .iter()
+        .map(|selected| {
+            selected
+                .tests
+                .iter()
+                .map(|test| test.name.as_str())
+                .collect()
+        })
+        .collect();
+    assert_eq!(kept, [vec!["a", "b", "c"], vec!["y"]]);
 }
 
 #[test]
