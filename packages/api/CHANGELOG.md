@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/sethjuarez/auditaur/compare/api-v0.14.0...api-v0.15.0) (2026-10-30)
+
+
+### Features
+
+* **api:** scope locators with within and add a clearStorage bridge action ([#175](https://github.com/sethjuarez/auditaur/issues/175)) ([31fcb92](https://github.com/sethjuarez/auditaur/commit/31fcb926a9b5253738a4bdabd2b89517c0ed8cc5))
+
 ## [0.14.0](https://github.com/sethjuarez/auditaur/compare/api-v0.13.0...api-v0.14.0) (2026-10-30)
 
 
