@@ -161,6 +161,43 @@ describe('strictness and nth', () => {
   });
 });
 
+describe('within', () => {
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <section id="a" aria-label="Drafts"><button id="a-del">Delete</button><p id="a-t">Note</p></section>
+      <section id="b" aria-label="Archive"><button id="b-del">Delete</button>
+        <section id="c" aria-label="Old"><button id="c-del">Delete</button></section>
+      </section>`;
+  });
+
+  it('searches inside every container match, deduped, in document order', () => {
+    const del: LocatorSpec = { kind: 'role', value: 'button', name: 'Delete' };
+    expect(ids({ ...del, within: { kind: 'css', value: '#a' } })).toEqual(['a-del']);
+    expect(ids({ ...del, within: { kind: 'css', value: 'section' } })).toEqual(['a-del', 'b-del', 'c-del']);
+    expect(ids({ ...del, within: { kind: 'role', value: 'region', name: 'Archive' } })).toEqual(['b-del', 'c-del']);
+    expect(ids({ kind: 'text', value: 'Note', within: { kind: 'css', value: 'section', nth: 0 } })).toEqual(['a-t']);
+    expect(ids({ kind: 'css', value: 'section', within: { kind: 'css', value: '#c' } })).toEqual([]);
+  });
+
+  it('applies strictness and nth to the inner matches', () => {
+    const spec: LocatorSpec = { kind: 'role', value: 'button', name: 'Delete', within: { kind: 'css', value: '#b' } };
+    expect(() => resolveLocator(spec, false, always)).toThrow(
+      'strict mode violation: `#b >> role=button[name="Delete"i]` resolved to 2 elements',
+    );
+    expect(resolveLocator({ ...spec, nth: -1 }, false, always)?.id).toBe('c-del');
+  });
+
+  it('validates nested locators', () => {
+    expect(parseLocator(sel({ kind: 'css', value: 'b', within: { kind: 'css', value: '#a' } })).within?.value).toBe('#a');
+    expect(() => parseLocator('locator:{"kind":"css","value":"b","within":{"kind":"nope","value":""}}')).toThrow(
+      'unknown kind',
+    );
+    expect(() => parseLocator('locator:{"kind":"css","value":"b","within":{"kind":"css","value":1}}')).toThrow(
+      '`value` must be a string',
+    );
+  });
+});
+
 describe('bridge integration', () => {
   function request(action: string, selector?: string, value?: string): DriveBridgeRequest {
     return {

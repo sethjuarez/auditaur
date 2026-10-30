@@ -122,6 +122,7 @@ export interface DriveBridgeRequest {
   | 'flush'
     | 'screenshot'
     | 'locate'
+    | 'clearStorage'
     | 'dialogs.arm'
     | 'dialogs.queue'
     | 'dialogs.state'

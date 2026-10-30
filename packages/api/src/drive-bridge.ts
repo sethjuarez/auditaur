@@ -18,6 +18,7 @@ import { generateLocator } from './locator-gen.js';
 import { fillContentEditable, pressChord, type PressResult } from './keyboard.js';
 import { isMouseButton, mouseClick, mouseDrag } from './mouse.js';
 import { parsePastePayload, pasteInto } from './clipboard.js';
+import { clearWebStorage } from './storage.js';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -381,6 +382,8 @@ export async function executeDriveBridgeRequest(
     case 'locate': {
       return locateSelector(request.selector);
     }
+    case 'clearStorage':
+      return { ok: true, ...(await clearWebStorage()) };
     case 'dialogs.arm':
       return { ...armDrillDialogs(request.value) };
     case 'dialogs.queue':
