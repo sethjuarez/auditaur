@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.23](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.22...auditaur-cli-v0.4.23) - 2026-10-30
+
+### Fixed
+
+- *(drills)* wait for the previous app's exiting processes before the next launch (AR-28) ([#144](https://github.com/sethjuarez/auditaur/pull/144))
+- *(drills-canvas)* warn when the committed canvas never registers (AR-11) ([#143](https://github.com/sethjuarez/auditaur/pull/143))
+
 ## [0.4.22](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.21...auditaur-cli-v0.4.22) - 2026-10-30
 
 ### Added
