@@ -22,6 +22,11 @@ export interface AuditaurFrontendConfig {
    * If it throws, the payload is recorded as `[REDACTED]`.
    */
   redactPayload?: AuditaurRedactPayload;
+  /**
+   * Rewrite a failed invoke's or emit's error message before it is recorded, e.g. strip a path or email.
+   * Object errors are key-redacted first. If it throws, the message is recorded as `[REDACTED]`.
+   */
+  redactErrorMessage?: AuditaurRedactErrorMessage;
   maxPayloadBytes?: number;
   batchIntervalMs?: number;
   maxBatchSize?: number;
@@ -46,6 +51,9 @@ export type AuditaurRedactPayload = (
   payload: unknown,
   context: { kind: AuditaurPayloadKind; name: string },
 ) => unknown;
+
+/** `name` is the command or event that failed. Return the message to record in place of `message`. */
+export type AuditaurRedactErrorMessage = (message: string, context: { name: string }) => string;
 
 export interface AuditaurDriveBridgeConfig {
   pollIntervalMs?: number;

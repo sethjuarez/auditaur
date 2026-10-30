@@ -1,7 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_REDACTION_KEYS, MAX_REDACTION_NODES, payloadPolicy, recordPayload, redactKeys, REDACTED } from './payload';
+import {
+  DEFAULT_REDACTION_KEYS,
+  MAX_REDACTION_NODES,
+  payloadPolicy,
+  recordedErrorMessage,
+  recordedPayload,
+  recordPayload,
+  redactKeys,
+  REDACTED,
+} from './payload';
 
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ label: 'main' }) }));
 
@@ -92,5 +101,42 @@ describe('payload policy', () => {
     const walked = redactKeys(huge, keys) as unknown[];
     expect(walked.at(-1)).toBe('[Truncated]');
     expect(walked[0]).toEqual({ i: 0 });
+  });
+});
+
+describe('error message redaction', () => {
+  it('records the message as-is by default', () => {
+    expect(recordedErrorMessage({}, 'save', new Error('disk full'))).toBe('disk full');
+    expect(recordedErrorMessage({}, 'save', 'plain string')).toBe('plain string');
+  });
+
+  it('key-redacts object errors before the hook sees them', () => {
+    const hook = vi.fn((message: string) => message);
+    const message = recordedErrorMessage({ redactErrorMessage: hook, redactKeys: ['email'] }, 'list', {
+      kind: 'conflict',
+      email: 'ada@example.com',
+    });
+    expect(message).toBe('{"kind":"conflict","email":"[REDACTED]"}');
+    expect(hook).toHaveBeenCalledWith(message, { name: 'list' });
+  });
+
+  it('applies the hook', () => {
+    const config = { redactErrorMessage: (m: string) => m.replace(/\S+@\S+/g, '<email>') };
+    expect(recordedErrorMessage(config, 'save', new Error('no access for ada@example.com'))).toBe('no access for <email>');
+  });
+
+  it('fails closed when the hook throws or returns a non-string', () => {
+    const throws = { redactErrorMessage: () => { throw new Error('bug'); } };
+    expect(recordedErrorMessage(throws, 'save', new Error('secret path'))).toBe(REDACTED);
+    const wrong = { redactErrorMessage: (() => undefined) as unknown as (m: string) => string };
+    expect(recordedErrorMessage(wrong, 'save', new Error('secret path'))).toBe(REDACTED);
+  });
+
+  it('recordedPayload matches what recording keeps', () => {
+    const config = { redactKeys: ['author'], redactPayload: (p: unknown) => ({ ...(p as object), transcript: undefined }) };
+    expect(recordedPayload(config, 'invokeResult', 'history', { author: { email: 'a@b' }, transcript: 'hi', n: 1 })).toEqual({
+      summary: '{"author":"[REDACTED]","n":1}',
+      json: undefined,
+    });
   });
 });

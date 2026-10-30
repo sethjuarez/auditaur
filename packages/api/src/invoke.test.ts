@@ -102,6 +102,21 @@ describe('instrumentedInvoke', () => {
     );
   });
 
+  it('records a failed command through redactErrorMessage, and rethrows the original', async () => {
+    const original = new Error('no access for ada@example.com');
+    mocks.invoke.mockRejectedValueOnce(original).mockResolvedValueOnce(undefined);
+    const exporter = new AuditaurExporter(1_000_000, 64);
+    const policy = payloadPolicy({ redactErrorMessage: (m) => m.replace(/\S+@\S+/g, '<email>') });
+
+    await expect(instrumentedInvoke(exporter, 'list_variations', undefined, policy, false)).rejects.toBe(original);
+    await exporter.flush();
+    await exporter.shutdown();
+
+    const batch = mocks.invoke.mock.calls[1][1].batch;
+    expect(batch.spans[0].statusMessage).toBe('no access for <email>');
+    expect(batch.tauriIpcCalls[0].errorMessage).toBe('no access for <email>');
+  });
+
   it('adds trace context for no-argument commands', async () => {
     mocks.invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
     const exporter = new AuditaurExporter(1_000_000, 64);
