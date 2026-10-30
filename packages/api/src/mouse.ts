@@ -1,15 +1,16 @@
-import { requireEnabled } from './actionability.js';
+import { isActionDisabled, requireEnabled } from './actionability.js';
 import { TABBABLE, isDisabled } from './keyboard.js';
 
-export type MouseButton = 'right' | 'middle';
+export type MouseButton = 'left' | 'right' | 'middle';
 
 /** `MouseEvent.button`, the `buttons` mask while held, and the legacy `which`. */
 const BUTTONS: Record<MouseButton, { button: number; buttons: number; which: number }> = {
+  left: { button: 0, buttons: 1, which: 1 },
   middle: { button: 1, buttons: 4, which: 2 },
   right: { button: 2, buttons: 2, which: 3 },
 };
 
-export interface ButtonClickResult {
+export interface MouseClickResult {
   button: MouseButton;
   /** The `contextmenu` event's `defaultPrevented`, for a right click. */
   contextMenuPrevented?: boolean;
@@ -36,25 +37,31 @@ const EVENTS: Record<string, { pointer: boolean; phase: Phase; boundary?: boolea
   mousedown: { pointer: false, phase: 'press' },
   pointerup: { pointer: true, phase: 'release' },
   mouseup: { pointer: false, phase: 'release' },
+  click: { pointer: true, phase: 'click' },
   auxclick: { pointer: true, phase: 'click' },
   contextmenu: { pointer: true, phase: 'click' },
+  dblclick: { pointer: false, phase: 'click' },
 };
 
 /**
- * Click with the right or middle button at the element's center, with the events Edge on Windows
- * fires for a real click: pointer and mouse over/enter/move, `pointerdown`, `mousedown`, focus,
- * `pointerup`, `mouseup`, `auxclick`, then `contextmenu` for the right button. As in the browser,
- * cancelling `pointerdown` suppresses `mousedown`, `mouseup` and the focus change, and cancelling
- * `mousedown` suppresses the focus change. Throws `element is disabled` for a disabled target.
+ * Click at the element's center with the events Edge on Windows fires for a real click: pointer
+ * and mouse over/enter/move, then per press `pointerdown`, `mousedown`, focus, `pointerup`,
+ * `mouseup` and `click` (left) or `auxclick` (right, middle), then `contextmenu` for the right
+ * button and `dblclick` after a second left press. As in the browser, cancelling `pointerdown`
+ * suppresses that press's `mousedown`, `mouseup` and focus change, and cancelling `mousedown`
+ * suppresses the focus change. The dispatched `click` runs the element's activation behavior
+ * (toggling a checkbox, following a link, submitting a form), as a real click does. If a handler
+ * removes or disables the target, the sequence stops there, as the browser stops targeting it.
+ * Throws `element is disabled` for a disabled target.
  */
-export function clickButton(el: Element, button: MouseButton): ButtonClickResult {
+export function mouseClick(el: Element, button: MouseButton, clickCount: 1 | 2 = 1): MouseClickResult {
   requireEnabled(el);
   el.scrollIntoView?.({ block: 'center', inline: 'center' });
   const rect = el.getBoundingClientRect?.();
   const clientX = Math.round((rect?.left ?? 0) + (rect?.width ?? 0) / 2);
   const clientY = Math.round((rect?.top ?? 0) + (rect?.height ?? 0) / 2);
   const held = BUTTONS[button];
-  const fire = (type: string) => {
+  const fire = (type: string, count = 0) => {
     const { pointer, phase, boundary } = EVENTS[type];
     const hover = phase === 'hover';
     const init: MouseEventInit = {
@@ -67,12 +74,12 @@ export function clickButton(el: Element, button: MouseButton): ButtonClickResult
       // Without a button, pointer events report -1 and mouse events the main button.
       button: hover ? (pointer ? -1 : 0) : held.button,
       buttons: phase === 'press' ? held.buttons : 0,
-      // Mouse events and auxclick count the click; pointer events and contextmenu don't.
-      detail: !hover && type !== 'contextmenu' && (!pointer || type === 'auxclick') ? 1 : 0,
+      // Mouse events and the click events count presses; pointer events and contextmenu don't.
+      detail: hover || type === 'contextmenu' || (pointer && phase !== 'click') ? 0 : count,
     };
     const event =
       pointer && typeof PointerEvent === 'function'
-        ? new PointerEvent(type, { ...init, pointerId: 1, pointerType: 'mouse', isPrimary: true })
+        ? new PointerEvent(type, { ...init, pointerId: 1, pointerType: 'mouse', isPrimary: phase !== 'click' })
         : new MouseEvent(type, init);
     // The constructors can't set the legacy `which`, which older handlers check for 3 or 2.
     Object.defineProperty(event, 'which', { value: hover ? 0 : held.which });
@@ -82,15 +89,24 @@ export function clickButton(el: Element, button: MouseButton): ButtonClickResult
   for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']) {
     fire(type);
   }
-  const compatibility = !fire('pointerdown').defaultPrevented;
-  if (compatibility && !fire('mousedown').defaultPrevented) {
-    focusForMouse(el);
+  const gone = () => el.isConnected === false || isActionDisabled(el);
+  for (let count = 1; count <= clickCount; count++) {
+    const compatibility = !fire('pointerdown').defaultPrevented;
+    if (gone()) return { button };
+    if (compatibility) {
+      const focus = !fire('mousedown', count).defaultPrevented;
+      if (gone()) return { button };
+      if (focus) focusForMouse(el);
+    }
+    fire('pointerup');
+    if (compatibility) fire('mouseup', count);
+    if (gone()) return { button };
+    fire(button === 'left' ? 'click' : 'auxclick', count);
+    if (gone()) return { button };
   }
-  fire('pointerup');
-  if (compatibility) {
-    fire('mouseup');
+  if (button === 'left' && clickCount === 2) {
+    fire('dblclick', 2);
   }
-  fire('auxclick');
   if (button !== 'right') {
     return { button };
   }
@@ -101,7 +117,9 @@ export function clickButton(el: Element, button: MouseButton): ButtonClickResult
 function focusForMouse(el: Element): void {
   const target = el.closest(TABBABLE);
   if (target && !isDisabled(target) && !target.closest('[inert]')) {
-    (target as HTMLElement).focus();
+    if (document.activeElement !== target) {
+      (target as HTMLElement).focus();
+    }
   } else if (document.activeElement && document.activeElement !== document.body) {
     (document.activeElement as HTMLElement).blur?.();
   }

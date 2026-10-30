@@ -14,7 +14,7 @@ import {
 } from './locator.js';
 import { generateLocator } from './locator-gen.js';
 import { fillContentEditable, pressChord, type PressResult } from './keyboard.js';
-import { clickButton, isMouseButton } from './mouse.js';
+import { isMouseButton, mouseClick } from './mouse.js';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -276,28 +276,21 @@ export async function executeDriveBridgeRequest(
 
     case 'click': {
       const el = requireSelector(request.selector, request.visibleOnly);
-      requireEnabled(el);
-      el.scrollIntoView?.({ block: 'center', inline: 'center' });
-      (el as HTMLElement).click?.();
+      mouseClick(el, 'left');
       return { ok: true, visibleOnly: request.visibleOnly };
     }
     case 'dblclick': {
       const el = requireSelector(request.selector, request.visibleOnly);
-      requireEnabled(el);
-      el.scrollIntoView?.({ block: 'center', inline: 'center' });
-      (el as HTMLElement).click?.();
-      (el as HTMLElement).click?.();
-      const DblClick = typeof MouseEvent === 'function' ? MouseEvent : Event;
-      el.dispatchEvent(new DblClick('dblclick', { bubbles: true, cancelable: true, detail: 2 } as MouseEventInit));
+      mouseClick(el, 'left', 2);
       return { ok: true, visibleOnly: request.visibleOnly };
     }
     case 'clickButton': {
       const button = request.value ?? '';
       if (!isMouseButton(button)) {
-        throw new Error(`clickButton needs value \`right\` or \`middle\`, got \`${button}\``);
+        throw new Error(`clickButton needs value \`left\`, \`right\` or \`middle\`, got \`${button}\``);
       }
       const el = requireSelector(request.selector, request.visibleOnly);
-      return { ok: true, visibleOnly: request.visibleOnly, ...clickButton(el, button) };
+      return { ok: true, visibleOnly: request.visibleOnly, ...mouseClick(el, button) };
     }
     case 'hover': {
       const el = requireSelector(request.selector, request.visibleOnly);
