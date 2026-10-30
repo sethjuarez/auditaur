@@ -186,7 +186,9 @@ impl RealHost {
             .map(|app| app.instance_id.as_str())
             .collect();
         let started_at = OffsetDateTime::now_utc();
-        let mut child = drill::spawn_command(command, environment, log.as_deref())?;
+        let cancel = Arc::clone(&self.cancel);
+        let cancelled = move || cancel.load(Ordering::SeqCst);
+        let mut child = drill::spawn_command(command, environment, log.as_deref(), &cancelled)?;
         let deadline = Instant::now() + self.ready_timeout;
         let mut output = LaunchOutput::new(log.as_deref(), progress);
         let ready = self.wait_until_ready(

@@ -14,7 +14,69 @@ use anyhow::{anyhow, Result};
 
 /// How long a stopped tree may take to exit.
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a launch waits for processes of a previously stopped tree that were still exiting
+/// (WebView2's browser and GPU processes can take a minute or more to release their data folder).
+pub const LINGER_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_millis(25);
+
+/// Processes of stopped trees that had not finished exiting by the stop deadline. The next launch
+/// waits for them, so it doesn't start while they still hold what the app needs.
+#[cfg(windows)]
+static LINGERING: std::sync::Mutex<Vec<job::Member>> = std::sync::Mutex::new(Vec::new());
+
+/// Wait, up to `timeout`, for processes of earlier trees that were still exiting when stopped.
+/// Returns a note when it had to wait, and an error naming any that are still running. Stops
+/// early, with an error, once `cancelled` returns true.
+pub fn wait_for_lingering(
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<String>> {
+    #[cfg(windows)]
+    {
+        let mut lingering = LINGERING
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if lingering.is_empty() {
+            return Ok(None);
+        }
+        let started = Instant::now();
+        let deadline = started + timeout;
+        let names = lingering
+            .iter()
+            .map(job::Member::describe)
+            .collect::<Vec<_>>();
+        loop {
+            let slice = (Instant::now() + Duration::from_millis(200)).min(deadline);
+            lingering.retain(|member| !member.wait_until(slice));
+            if lingering.is_empty() || Instant::now() >= deadline {
+                break;
+            }
+            if cancelled() {
+                return Err(anyhow!(
+                    "cancelled while waiting for the previous app to exit"
+                ));
+            }
+        }
+        if let Some(member) = lingering.first() {
+            return Err(anyhow!(
+                "{} of the previous app is still running {} s after it was stopped, holding what the app \
+                 needs (a WebView2 app launched now fails with \"The requested resource is in use\")",
+                member.describe(),
+                started.elapsed().as_secs()
+            ));
+        }
+        Ok(Some(format!(
+            "waited {:.1} s for {} of the previous app to exit",
+            started.elapsed().as_secs_f64(),
+            names.join(", ")
+        )))
+    }
+    #[cfg(unix)]
+    {
+        let _ = (timeout, cancelled);
+        Ok(None)
+    }
+}
 
 pub struct ProcessTree {
     child: Child,
@@ -78,7 +140,7 @@ impl ProcessTree {
         // tearing down (closing its files, locks, and WebView2 data folder) only when its handle
         // is signaled. Hold handles from before the kill and wait for those too. Best effort: a
         // process started between the snapshot and the kill is still covered by the count.
-        let members = job.members().unwrap_or_default();
+        let mut members = job.members().unwrap_or_default();
         job.terminate()?;
         loop {
             let left = job.active_processes()?;
@@ -92,15 +154,23 @@ impl ProcessTree {
             }
             thread::sleep(POLL);
         }
-        for member in &members {
-            if !member.wait_until(deadline) {
-                return Err(anyhow!(
-                    "pid {} of the tree rooted at pid {pid} was still tearing down after it was stopped",
-                    member.pid
-                ));
-            }
+        members.retain(|member| !member.wait_until(deadline));
+        if members.is_empty() {
+            return Ok(format!("stopped process tree rooted at pid {pid}"));
         }
-        Ok(format!("stopped process tree rooted at pid {pid}"))
+        // Terminated, but still releasing what it held; the next launch waits for it.
+        let names = members
+            .iter()
+            .map(job::Member::describe)
+            .collect::<Vec<_>>();
+        LINGERING
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .extend(members);
+        Ok(format!(
+            "stopped process tree rooted at pid {pid}; {} still exiting, so the next launch waits for it",
+            names.join(", ")
+        ))
     }
 
     #[cfg(unix)]
@@ -242,7 +312,6 @@ mod job {
         /// that exits before it can be opened needs no waiting.
         pub fn members(&self) -> io::Result<Vec<Member>> {
             use windows_sys::Win32::System::JobObjects::JobObjectBasicProcessIdList;
-            use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
             #[repr(C)]
             struct IdList {
                 assigned: u32,
@@ -268,23 +337,74 @@ mod job {
             let listed = (list.listed as usize).min(MAX_MEMBERS);
             Ok(list.ids[..listed]
                 .iter()
-                .filter_map(|&id| {
-                    let pid = id as u32;
-                    // SAFETY: plain Win32 call; the handle is owned by the returned Member.
-                    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-                    (!handle.is_null()).then_some(Member { pid, handle })
-                })
+                .filter_map(|&id| Member::open(id as u32))
                 .collect())
         }
+    }
+
+    /// The executable's file name, e.g. `msedgewebview2.exe`; empty if it can't be read.
+    fn image_name(handle: HANDLE) -> String {
+        use windows_sys::Win32::System::Threading::{
+            QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        };
+        let mut buffer = [0u16; 1024];
+        let mut len = buffer.len() as u32;
+        // SAFETY: `buffer` holds `len` UTF-16 units; `handle` is a live process handle.
+        let ok = unsafe {
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut len)
+        };
+        if ok == 0 {
+            return String::new();
+        }
+        let path = String::from_utf16_lossy(&buffer[..len as usize]);
+        path.rsplit(['\\', '/'])
+            .next()
+            .unwrap_or_default()
+            .to_owned()
     }
 
     /// A process of the job, held open so its exit can be waited on.
     pub struct Member {
         pub pid: u32,
+        pub name: String,
         handle: HANDLE,
     }
 
+    // SAFETY: a process handle may be waited on and closed from any thread.
+    unsafe impl Send for Member {}
+
     impl Member {
+        /// Open a process to wait on. Best effort: a process that is already gone needs no waiting.
+        pub fn open(pid: u32) -> Option<Self> {
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            };
+            // SAFETY: plain Win32 calls; the handle is owned by the returned Member.
+            let mut handle = unsafe {
+                OpenProcess(
+                    PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                    0,
+                    pid,
+                )
+            };
+            if handle.is_null() {
+                handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            }
+            (!handle.is_null()).then(|| Member {
+                pid,
+                name: image_name(handle),
+                handle,
+            })
+        }
+
+        /// `msedgewebview2.exe (pid 26660)`, or `pid 26660` when the name is unknown.
+        pub fn describe(&self) -> String {
+            if self.name.is_empty() {
+                format!("pid {}", self.pid)
+            } else {
+                format!("{} (pid {})", self.name, self.pid)
+            }
+        }
         /// Wait until the process has fully exited, or `deadline` passes.
         pub fn wait_until(&self, deadline: std::time::Instant) -> bool {
             use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
@@ -499,5 +619,46 @@ mod tests {
             message.contains("already exited") || message.starts_with("stopped"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn nothing_lingering_needs_no_wait() {
+        if cfg!(unix) {
+            assert!(wait_for_lingering(Duration::ZERO, &|| false)
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    /// A process still exiting after its tree was stopped holds the next launch until it's gone.
+    #[cfg(windows)]
+    #[test]
+    fn launch_waits_for_lingering_processes() {
+        let mut child = Command::new("ping")
+            .args(["-n", "120", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let member = job::Member::open(child.id()).unwrap();
+        assert!(member
+            .describe()
+            .to_ascii_lowercase()
+            .starts_with("ping.exe (pid "));
+        LINGERING.lock().unwrap().push(member);
+
+        let error = wait_for_lingering(Duration::from_millis(100), &|| false).unwrap_err();
+        assert!(error.to_string().contains("still running"), "{error}");
+        let error = wait_for_lingering(Duration::from_secs(60), &|| true).unwrap_err();
+        assert!(error.to_string().contains("cancelled"), "{error}");
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let note = wait_for_lingering(Duration::from_secs(10), &|| false)
+            .unwrap()
+            .unwrap();
+        assert!(note.contains("to exit"), "{note}");
+        assert!(wait_for_lingering(Duration::ZERO, &|| false)
+            .unwrap()
+            .is_none());
     }
 }

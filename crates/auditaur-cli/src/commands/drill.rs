@@ -27,7 +27,7 @@ use crate::{
     commands::{debug, drive, polish, read},
     discovery::{self, DiscoveredApp, DiscoveryStatus},
     output::bounded_text,
-    process_tree::{ProcessTree, STOP_TIMEOUT},
+    process_tree::{self, ProcessTree, LINGER_TIMEOUT, STOP_TIMEOUT},
 };
 
 const EXIT_PASSED: i32 = 0;
@@ -446,7 +446,8 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
     }
 
     let spawn_start = Instant::now();
-    let mut child = match spawn_command(&options.command, &options.environment, None) {
+    // `drill run` launches once per process, so nothing can be lingering yet and this never waits.
+    let mut child = match spawn_command(&options.command, &options.environment, None, &|| false) {
         Ok(child) => {
             let root_pid = child.id();
             report.command.root_pid = Some(root_pid);
@@ -559,7 +560,15 @@ pub fn run(options: DrillRunOptions) -> Result<i32> {
     }
 
     if let Some(mut child) = child {
-        let cleanup = cleanup_child_tree(&mut child);
+        // One app per run: wait out anything still exiting now, so the run leaves nothing behind.
+        let cleanup = cleanup_child_tree(&mut child).and_then(|message| {
+            Ok(
+                match process_tree::wait_for_lingering(LINGER_TIMEOUT, &|| false)? {
+                    Some(note) => format!("{message}; {note}"),
+                    None => message,
+                },
+            )
+        });
         match cleanup {
             Ok(message) => report.push_phase(DrillPhase::passed(
                 "cleanup",
@@ -2955,14 +2964,22 @@ pub(crate) fn spawn_command(
     command: &[String],
     environment: &[(String, String)],
     log: Option<&Path>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<ProcessTree> {
     if command.is_empty() {
         return Err(anyhow!("drill run requires a command after `--`"));
     }
+    // Don't start while the previous app's processes still hold its data folder.
+    let waited = process_tree::wait_for_lingering(LINGER_TIMEOUT, cancelled)
+        .context("the previous app has not exited")?;
     let (stdout, stderr) = match log {
         Some(path) => {
-            let file = fs::File::create(path)
+            let mut file = fs::File::create(path)
                 .with_context(|| format!("failed to create `{}`", path.display()))?;
+            if let Some(note) = &waited {
+                use std::io::Write as _;
+                writeln!(file, "auditaur: {note}")?;
+            }
             (Stdio::from(file.try_clone()?), Stdio::from(file))
         }
         None => (Stdio::null(), Stdio::null()),
