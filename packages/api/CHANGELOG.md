@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/sethjuarez/auditaur/compare/api-v0.9.1...api-v0.10.0) (2026-10-30)
+
+
+### Features
+
+* **api:** redact console bodies and uncaught errors ([#121](https://github.com/sethjuarez/auditaur/issues/121)) ([85a25c2](https://github.com/sethjuarez/auditaur/commit/85a25c218558be448e1b91f5af2f80f423c68c05))
+
 ## [0.9.1](https://github.com/sethjuarez/auditaur/compare/api-v0.9.0...api-v0.9.1) (2026-10-30)
 
 
