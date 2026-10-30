@@ -7,12 +7,12 @@ sidebar:
 
 Use this guide when you already have a Tauri v2 app and want Auditaur telemetry available to humans and coding agents.
 
-Current published packages:
+Release lines (see [Compatibility](/reference/compatibility/)):
 
 | Package | Version |
 | --- | --- |
-| `tauri-plugin-auditaur` | `0.4.0` |
-| `@auditaur/api` | `0.5.1` |
+| `tauri-plugin-auditaur` | `0.4.x` |
+| `@auditaur/api` | `0.7.x` (drills need `0.7.1`+) |
 
 ## 1. Install the CLI
 
@@ -74,7 +74,7 @@ In `src-tauri\capabilities\default.json`, include `auditaur:default`:
 ## 4. Add the frontend package
 
 ```powershell
-npm install @auditaur/api@0.5.1
+npm install @auditaur/api@0.7.1
 ```
 
 Initialize Auditaur once near app startup:
