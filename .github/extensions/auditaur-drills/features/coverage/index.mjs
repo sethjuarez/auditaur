@@ -5,6 +5,7 @@ import { checkDbs, dbsProperty } from "../../lib/config.mjs";
 import { readBody } from "../../lib/server.mjs";
 import { listAppStores } from "../../lib/apps.mjs";
 import { field } from "../../lib/view-state.mjs";
+import { runIdProperty } from "../../lib/schemas.mjs";
 import { coverageSummary, coverageView } from "./view.mjs";
 
 const sourcesSchema = { type: "object", additionalProperties: false, required: ["dbs"], properties: { dbs: dbsProperty } };
@@ -35,9 +36,16 @@ export default {
     actions: [
         {
             name: "get_coverage",
-            description: "Totals, unexercised commands and events, failing commands, and tests without complete telemetry for the routed run. Always re-reads the run and stores.",
+            description: "Totals, unexercised commands and events, failing commands, and tests without complete telemetry for a run: runId, else the routed one. Always re-reads the run and stores; does not change the page.",
             readOnly: true,
-            handler: async (state) => coverageSummary(await coverageView(state, { fresh: true })),
+            inputSchema: { type: "object", additionalProperties: false, properties: { runId: runIdProperty } },
+            handler: async (state, input) => {
+                // A copy, so asking about another run leaves the page's run and cache alone.
+                const target = input.runId ? { ...state, runId: input.runId, cache: null, coverageLoad: null } : state;
+                const view = await coverageView(target, { fresh: true });
+                if (input.runId && !view.run) throw new DrillError("invalid_run", `run ${input.runId} was not found`);
+                return coverageSummary(view);
+            },
         },
         {
             name: "list_app_stores",

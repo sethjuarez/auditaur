@@ -111,9 +111,13 @@ const pageAction = (feature) => (action) => ({
     handler: (panel, input) => action.handler(panel.page(feature.page).state, input, { navigate: (path) => panel.navigate(path) }),
 });
 
+// An action that takes no input says so, so the host rejects input it would otherwise ignore.
+const NO_INPUT = { type: "object", additionalProperties: false, properties: {} };
+
 // All actions, refusing duplicate names: one would silently shadow the other.
 export function canvasActions(features, openPanel) {
-    const actions = [...appActions(features, openPanel), ...features.flatMap((feature) => (feature.actions ?? []).map(pageAction(feature)))];
+    const actions = [...appActions(features, openPanel), ...features.flatMap((feature) => (feature.actions ?? []).map(pageAction(feature)))]
+        .map((action) => (action.inputSchema ? action : { ...action, inputSchema: NO_INPUT }));
     const seen = new Set();
     for (const { name } of actions) {
         if (seen.has(name)) throw new Error(`duplicate drills canvas action \`${name}\``);

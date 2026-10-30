@@ -4,10 +4,11 @@ import { lib } from "./lib.mjs";
 
 const { cliVersion, codeFiles, versionSkew } = await lib("build-info.mjs");
 
-test("the stale check covers provider code but not the page bundle, which is served fresh", async () => {
+test("the stale check covers provider code and version stamps but not the page bundle, which is served fresh", async () => {
     const names = await codeFiles();
     assert.ok(names.includes("extension.mjs"));
     assert.ok(names.includes("lib/server.mjs"));
+    assert.ok(names.includes("version.json"), "a new version on disk must show as stale");
     assert.deepEqual(names.filter((name) => name.startsWith("ui/")), []);
 });
 

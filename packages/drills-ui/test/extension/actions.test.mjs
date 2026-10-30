@@ -52,3 +52,18 @@ test("read-only actions do not notify pages", async () => {
     await runAction(actions.health, panel, {});
     assert.equal(notified, 0);
 });
+
+test("every action declares a closed input schema, so the host rejects input it would ignore", () => {
+    for (const action of canvasActions(features, async () => {})) {
+        assert.equal(action.inputSchema?.type, "object", action.name);
+        assert.equal(action.inputSchema.additionalProperties, false, action.name);
+    }
+    assert.ok(byName(canvasActions(features, async () => {})).get_coverage.inputSchema.properties.runId);
+});
+
+test("get_coverage names a run it can't find instead of answering for the shown one", async () => {
+    const actions = byName(canvasActions(features, async () => {}));
+    const panel = new AppPanel({ features, input: {} });
+    await assert.rejects(runAction(actions.get_coverage, panel, { runId: "20000101-000000-000" }), /20000101-000000-000 was not found/);
+    assert.equal(panel.page("coverage").state.runId ?? null, null);
+});

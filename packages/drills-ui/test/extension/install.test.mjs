@@ -81,7 +81,7 @@ test("only the auditaur plugin manifest names the version", async (t) => {
     assert.equal(await pluginVersion(extension), "1.2.3");
 });
 
-test("an `init extension` copy names its version from the install stamp; the plugin wins", async (t) => {
+test("an `init extension` copy names its version from the install stamp, any other copy from its bundled stamp; the plugin wins", async (t) => {
     const plugin = scratch(t);
     const extension = join(plugin, "com.github.copilot", "extensions", "auditaur-drills");
     mkdirSync(extension, { recursive: true });
@@ -89,6 +89,9 @@ test("an `init extension` copy names its version from the install stamp; the plu
 
     writeFileSync(join(extension, "installed.json"), "not json");
     assert.deepEqual(await shippedVersion(extension), { version: null, source: null });
+
+    writeFileSync(join(extension, "version.json"), JSON.stringify({ version: "0.4.14" }));
+    assert.deepEqual(await shippedVersion(extension), { version: "0.4.14", source: "bundled" });
 
     writeFileSync(join(extension, "installed.json"), JSON.stringify({ version: "0.4.15" }));
     assert.deepEqual(await shippedVersion(extension), { version: "0.4.15", source: "init" });

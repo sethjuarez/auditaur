@@ -231,9 +231,9 @@ Install it one of two ways:
 | Copilot plugin | `copilot plugin marketplace add sethjuarez/auditaur`, then `copilot plugin install auditaur@auditaur` | The repo the session runs in | `copilot plugin update auditaur` |
 | Committed copy | `auditaur init extension` | The repo it is committed in | `auditaur init extension --force`, then reload extensions |
 
-The plugin also ships the `auditaur-debug` skill and the `auditaur mcp` server (it runs `auditaur` from `PATH`, so skip a manual MCP entry). When a repo commits its own copy, the plugin copy stays idle so the canvas has one provider. The `health` action reports which copy runs (`install`), its `version` and `versionSource` (`plugin`, or `init` from the `installed.json` stamp that `init extension` writes), and the CLI version. The panel warns when the canvas and CLI versions differ, with the fix for that install.
+The plugin also ships the `auditaur-debug` skill and the `auditaur mcp` server (it runs `auditaur` from `PATH`, so skip a manual MCP entry). When a repo commits its own copy, the plugin copy stays idle so the canvas has one provider. The `health` action reports which copy runs (`install`), its `version` and `versionSource`, `onDiskVersion` (the version now on disk), and the CLI version. `versionSource` is `plugin`, `init` (the `installed.json` stamp `init extension` writes), or `bundled` (the `version.json` every release ships, e.g. a copy installed from a release tag). The panel warns when the canvas and CLI versions differ, with the fix for that install.
 
-A running canvas keeps its loaded code: reopening the panel reuses the same extension process. After updating either copy, reload extensions (or start a new session); until then the panel shows a "changed on disk" warning.
+A running canvas keeps its loaded code: reopening the panel or touching its files reuses the same extension process, and `init extension --force` can't restart it. After updating any copy, reload extensions if your host offers it (installing the extension through the host reloads it), or start a new session; until then `health` reports `stale: true` and the panel shows a "changed on disk" warning naming both versions.
 
 To try another version of the plugin in a consumer app, point the marketplace at it:
 

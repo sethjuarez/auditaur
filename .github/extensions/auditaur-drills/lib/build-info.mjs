@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 import { INSTALL } from "./paths.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const CODE = /\.(mjs|js|css)$/;
+// Code, plus the version stamps: a new stamp on disk is an upgrade this process hasn't loaded.
+const CODE = /\.(mjs|js|css)$|^(version|installed)\.json$/;
 // The page bundle is read from disk on every request, so a new one is live without a reload.
 const SERVED_FRESH = join(ROOT, "ui");
 
@@ -55,23 +56,31 @@ export async function pluginVersion(root = ROOT) {
     }
 }
 
-// The CLI version `auditaur init extension` stamped into `installed.json`; null when absent.
-export async function installedVersion(root = ROOT) {
+async function stampVersion(path) {
     try {
-        const stamp = JSON.parse(await readFile(join(root, "installed.json"), "utf8"));
+        const stamp = JSON.parse(await readFile(path, "utf8"));
         return typeof stamp.version === "string" ? stamp.version : null;
     } catch {
         return null;
     }
 }
 
-// Which release this copy's code came from, and how it got here: `plugin` or `init` (the
-// `auditaur init extension` stamp). Null for the source copy in the Auditaur repo.
+// The CLI version `auditaur init extension` stamped into `installed.json`; null when absent.
+export const installedVersion = (root = ROOT) => stampVersion(join(root, "installed.json"));
+
+// The release stamped into `version.json` when it shipped; every copy carries it.
+export const bundledVersion = (root = ROOT) => stampVersion(join(root, "version.json"));
+
+// Which release this copy's code came from, and how it got here: `plugin`, `init` (the
+// `auditaur init extension` stamp), or `bundled` (any other copy, such as one installed from a
+// release tag). Null only when the copy carries no stamp at all.
 export async function shippedVersion(root = ROOT) {
     const plugin = await pluginVersion(root);
     if (plugin) return { version: plugin, source: "plugin" };
     const installed = await installedVersion(root);
-    return installed ? { version: installed, source: "init" } : { version: null, source: null };
+    if (installed) return { version: installed, source: "init" };
+    const bundled = await bundledVersion(root);
+    return bundled ? { version: bundled, source: "bundled" } : { version: null, source: null };
 }
 
 // Pages whose feature module failed to load (see features.mjs).
@@ -112,6 +121,7 @@ export async function health(cli) {
     const onDisk = await fingerprint().catch(() => build);
     // What this process loaded at start; a newer copy on disk shows as `stale` until a reload.
     const shipped = await version;
+    const onDiskVersion = (await shippedVersion().catch(() => shipped)).version;
     const cliInfo = cli ? await cliVersion(cli) : { version: null, error: null };
     return {
         build,
@@ -120,6 +130,7 @@ export async function health(cli) {
         install: INSTALL,
         version: shipped.version,
         versionSource: shipped.source,
+        onDiskVersion,
         cli: { path: cli ?? null, ...cliInfo },
         skew: versionSkew(shipped, cliInfo.version),
         startedAt,

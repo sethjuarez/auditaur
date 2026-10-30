@@ -5,12 +5,15 @@ import { getJson } from "../lib/api";
 import type { PageId } from "./route";
 import { isStill } from "./serverEvents";
 
+type VersionSource = "plugin" | "init" | "bundled";
+
 export interface Health {
   build: string;
   stale: boolean;
   version?: string | null;
-  versionSource?: "plugin" | "init" | null;
-  skew?: { canvas: string; cli: string; source: "plugin" | "init" } | null;
+  versionSource?: VersionSource | null;
+  onDiskVersion?: string | null;
+  skew?: { canvas: string; cli: string; source: VersionSource } | null;
   failedPages: { page: PageId; error: string }[];
 }
 

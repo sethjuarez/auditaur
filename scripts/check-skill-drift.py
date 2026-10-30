@@ -26,6 +26,9 @@ PLUGIN_MANIFEST = PLUGIN / "plugin.json"
 PLUGIN_SKILL = PLUGIN / "skills" / "auditaur-debug" / "SKILL.md"
 PLUGIN_DRILLS_EXTENSION = PLUGIN / "com.github.copilot" / "extensions" / "auditaur-drills"
 MARKETPLACE = ROOT / ".github" / "plugin" / "marketplace.json"
+# The release the canvas ships with, so every copy (plugin, `auditaur init`, `install_extension`
+# from a tag) can say which version it is.
+EXTENSION_VERSION = REPO_DRILLS_EXTENSION / "version.json"
 
 COPIES = [
     ("Auditaur debug skill", REPO_SKILL, CLI_SKILL_ASSET),
@@ -84,14 +87,16 @@ def check_copies() -> list[str]:
 
 def check_versions(version: str) -> list[str]:
     problems = []
-    for path in (PLUGIN_MANIFEST, MARKETPLACE):
+    for path in (PLUGIN_MANIFEST, MARKETPLACE, EXTENSION_VERSION):
         if not path.exists():
             return [f"missing required packaged file: {path.relative_to(ROOT)}"]
     manifest = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
     entry = marketplace_entry(json.loads(MARKETPLACE.read_text(encoding="utf-8")))
+    stamp = json.loads(EXTENSION_VERSION.read_text(encoding="utf-8"))
     for label, found in (
         (PLUGIN_MANIFEST.relative_to(ROOT).as_posix(), manifest.get("version")),
         (f"{MARKETPLACE.relative_to(ROOT).as_posix()} (auditaur entry)", entry.get("version")),
+        (EXTENSION_VERSION.relative_to(ROOT).as_posix(), stamp.get("version")),
     ):
         if found != version:
             problems.append(f"{label} version {found} does not match the workspace version {version}")
@@ -103,6 +108,8 @@ def write_json(path: Path, data: dict) -> None:
 
 
 def write(version: str) -> None:
+    # Stamp the source first, so every copy below carries it.
+    write_json(EXTENSION_VERSION, {"version": version})
     for _, source, copy in COPIES:
         if source.is_dir():
             shutil.rmtree(copy, ignore_errors=True)
