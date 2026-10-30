@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.14](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.13...auditaur-cli-v0.4.14) - 2026-10-30
+
+### Fixed
+
+- *(drills)* fail fast when the app dies or restarts mid-run ([#100](https://github.com/sethjuarez/auditaur/pull/100))
+- *(drills)* report the last observed value when expectValue fails ([#99](https://github.com/sethjuarez/auditaur/pull/99))
+- *(plugin)* set command span status from the command's result ([#98](https://github.com/sethjuarez/auditaur/pull/98))
+
 ## [0.4.13](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.12...auditaur-cli-v0.4.13) - 2026-10-30
 
 ### Added
