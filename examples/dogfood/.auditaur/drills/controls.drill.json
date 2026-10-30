@@ -46,6 +46,19 @@
       ]
     },
     {
+      "name": "drags with the button held, as pointer sensors expect",
+      "steps": [
+        {
+          "evaluate": "(() => { window.__drag = []; if (window.__dragInstalled) return; window.__dragInstalled = true; for (const type of ['pointerdown', 'pointermove', 'pointerup']) document.addEventListener(type, (event) => { if (type === 'pointermove' && !event.buttons) return; window.__drag.push(type + ':' + (event.target.id || event.target.tagName)); }); })()"
+        },
+        { "drag": { "role": "button", "name": "Hover target", "exact": true }, "to": "#drive-select" },
+        {
+          "expectValue": "(() => { const d = window.__drag; return { first: d[0], last: d.at(-1), heldMoves: d.filter((e) => e.startsWith('pointermove')).length }; })()",
+          "toEqual": { "first": "pointerdown:drive-hover-target", "last": "pointerup:drive-select", "heldMoves": 6 }
+        }
+      ]
+    },
+    {
       "name": "right- and middle-clicks like a real mouse",
       "steps": [
         {
