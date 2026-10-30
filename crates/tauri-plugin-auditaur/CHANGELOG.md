@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.23...tauri-plugin-auditaur-v0.5.0) - 2026-10-30
+
+### Fixed
+
+- *(drive)* emulate page focus so blur fires in background windows (AR-29) ([#146](https://github.com/sethjuarez/auditaur/pull/146))
+
 ## [0.4.14](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.13...tauri-plugin-auditaur-v0.4.14) - 2026-10-30
 
 ### Fixed
