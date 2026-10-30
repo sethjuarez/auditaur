@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.28](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.27...tauri-plugin-auditaur-v0.4.28) - 2026-10-30
+
+### Fixed
+
+- *(plugin)* record command spans when they start so coverage counts long-running commands ([#165](https://github.com/sethjuarez/auditaur/pull/165))
+
 ## [0.4.24](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.23...tauri-plugin-auditaur-v0.4.24) - 2026-10-30
 
 ### Fixed
