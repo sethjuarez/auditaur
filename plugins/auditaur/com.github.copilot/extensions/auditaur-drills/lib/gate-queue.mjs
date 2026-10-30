@@ -61,6 +61,10 @@ export async function readRequest(requestPath) {
 export const isExpired = (request, now = Date.now()) =>
     Number.isFinite(Number(request?.expiresAtUnixNanos)) && Number(request.expiresAtUnixNanos) / 1e6 <= now;
 
+// A request's Unix-nanosecond timestamp as ISO, or null.
+export const isoFromNanos = (nanos) =>
+    nanos != null && Number.isFinite(Number(nanos)) ? new Date(Number(nanos) / 1e6).toISOString() : null;
+
 // The answer `body` gives `gate`, checked as the runner will: a listed choice (none when the gate
 // has no choices) and every required input, except for a retry.
 export function checkAnswer(gate, body) {

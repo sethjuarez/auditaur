@@ -2,9 +2,7 @@
 // load so it never shows an answer form for a gate that stopped waiting.
 
 import { exists } from "../../lib/files.mjs";
-import { isExpired, queuePaths, readRequest } from "../../lib/gate-queue.mjs";
-
-const isoFromNanos = (nanos) => (nanos != null && Number.isFinite(Number(nanos)) ? new Date(Number(nanos) / 1e6).toISOString() : null);
+import { isExpired, isoFromNanos, queuePaths, readRequest } from "../../lib/gate-queue.mjs";
 
 // The published request in the shape the run page's gates use, so both render with one form.
 function gateOf(request) {
@@ -14,6 +12,7 @@ function gateOf(request) {
         test: "auditaur drill",
         attempt: request.attempt ?? 0,
         since: isoFromNanos(request.createdAtUnixNanos),
+        expiresAt: isoFromNanos(request.expiresAtUnixNanos),
         name: prompt.name ?? request.gateId ?? "Manual gate",
         instructions: prompt.instructions ?? "",
         selector: prompt.selector ?? null,

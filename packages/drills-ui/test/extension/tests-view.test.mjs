@@ -25,7 +25,7 @@ test("each run lists its suite names", () => {
 
 test("the active run's pending gates reach the Tests page, trimmed to what the banner shows", () => {
     const active = { ...run("r3", "running", null), status: "running" };
-    const gate = { requestId: "q", test: "auth › t", name: "Enter code", since: "2026-10-30T00:00:00Z", timeoutMs: 600_000, instructions: "x", choices: [] };
+    const gate = { requestId: "q", test: "auth › t", name: "Enter code", since: "2026-10-30T00:00:00Z", expiresAt: "2026-10-30T00:10:00.000Z", timeoutMs: 600_000, instructions: "x", choices: [] };
     const view = buildView(state([]), [active], [gate]);
-    assert.deepEqual(view.active.gates, [{ test: "auth › t", name: "Enter code", since: "2026-10-30T00:00:00Z", timeoutMs: 600_000 }]);
+    assert.deepEqual(view.active.gates, [{ test: "auth › t", name: "Enter code", since: "2026-10-30T00:00:00Z", expiresAt: "2026-10-30T00:10:00.000Z", timeoutMs: 600_000 }]);
 });

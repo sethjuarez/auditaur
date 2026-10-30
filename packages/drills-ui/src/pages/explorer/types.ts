@@ -38,6 +38,7 @@ export interface ExplorerGate {
   test: string;
   name?: string;
   since: string | null;
+  expiresAt?: string | null;
   timeoutMs: number | null;
 }
 

@@ -16,7 +16,7 @@ export function GateWaitingNotice({ runId, gates }: { runId: string; gates: Expl
       title={<>Waiting for you: {first.name || "human gate"} · {first.test}{more}</>}
     >
       <span className="gate-waiting-body">
-        <GateCountdown since={first.since} timeoutMs={first.timeoutMs} />
+        <GateCountdown since={first.since} expiresAt={first.expiresAt ?? null} timeoutMs={first.timeoutMs} />
         <OpenInLinks caption="Answer it in" links={[{ to: "run", runId }]} />
       </span>
     </Notice>

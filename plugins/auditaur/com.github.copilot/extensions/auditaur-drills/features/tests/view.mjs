@@ -66,7 +66,7 @@ export function buildView(state, runs, gates = []) {
             done: tests.filter((test) => !["pending", "running"].includes(test.status)).length,
             total: tests.length,
             current: tests.find((test) => test.status === "running")?.title ?? null,
-            gates: gates.map(({ test, name, since, timeoutMs }) => ({ test, name, since, timeoutMs })),
+            gates: gates.map(({ test, name, since, expiresAt, timeoutMs }) => ({ test, name, since, expiresAt, timeoutMs })),
         };
     }
     return {
