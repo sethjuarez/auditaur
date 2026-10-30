@@ -1,6 +1,6 @@
-import type { AuditaurExporter } from './exporter';
-import type { LogRecord } from './types';
-import { nowUnixNanos, summarizePayload } from './utils';
+import type { AuditaurExporter } from './exporter.js';
+import type { LogRecord } from './types.js';
+import { nowUnixNanos, summarizePayload } from './utils.js';
 
 const LEVELS: Record<string, number> = {
   debug: 5,

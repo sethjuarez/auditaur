@@ -1,16 +1,16 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { emit as tauriEmit, emitTo as tauriEmitTo, listen as tauriListen } from '@tauri-apps/api/event';
-import { instrumentConsole } from './console';
-import { startDriveBridge } from './drive-bridge';
-import { instrumentErrors } from './errors';
-import { instrumentedEmit, instrumentedEmitTo, instrumentedListen } from './events';
-import { AuditaurExporter } from './exporter';
-import { instrumentedInvoke } from './invoke';
-import { createAuditaurSpanExporter } from './otel';
-import { payloadPolicy } from './payload';
-import type { AuditaurClient, AuditaurFrontendConfig, AuditaurInvokeArgs } from './types';
+import { instrumentConsole } from './console.js';
+import { startDriveBridge } from './drive-bridge.js';
+import { instrumentErrors } from './errors.js';
+import { instrumentedEmit, instrumentedEmitTo, instrumentedListen } from './events.js';
+import { AuditaurExporter } from './exporter.js';
+import { instrumentedInvoke } from './invoke.js';
+import { createAuditaurSpanExporter } from './otel.js';
+import { payloadPolicy } from './payload.js';
+import type { AuditaurClient, AuditaurFrontendConfig, AuditaurInvokeArgs } from './types.js';
 
-export type { AuditaurClient, AuditaurFrontendConfig } from './types';
+export type { AuditaurClient, AuditaurFrontendConfig } from './types.js';
 
 export async function initAuditaur(config: AuditaurFrontendConfig): Promise<AuditaurClient> {
   if (!config.serviceName.trim()) {

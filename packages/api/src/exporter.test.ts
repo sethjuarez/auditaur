@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AuditaurExporter } from './exporter';
+import { AuditaurExporter } from './exporter.js';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),

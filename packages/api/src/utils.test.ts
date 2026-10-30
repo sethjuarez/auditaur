@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { consoleLogRecord } from './console';
-import { errorRecordFields, maybePayload, summarizePayload } from './utils';
+import { consoleLogRecord } from './console.js';
+import { errorRecordFields, maybePayload, summarizePayload } from './utils.js';
 
 describe('payload summaries', () => {
   it('bounds string payloads', () => {

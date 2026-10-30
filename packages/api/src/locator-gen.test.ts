@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { executeDriveBridgeRequest } from './drive-bridge';
-import { cssPath, generateLocator } from './locator-gen';
-import type { DriveBridgeRequest } from './types';
+import { executeDriveBridgeRequest } from './drive-bridge.js';
+import { cssPath, generateLocator } from './locator-gen.js';
+import type { DriveBridgeRequest } from './types.js';
 
 const $ = (selector: string) => document.querySelector(selector)!;
 

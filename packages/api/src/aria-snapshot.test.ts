@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ariaSnapshot } from './aria-snapshot';
-import { executeDriveBridgeRequest, setDriveBridgeNativeScreenshotInvokerForTests } from './drive-bridge';
-import type { DriveBridgeRequest } from './types';
+import { ariaSnapshot } from './aria-snapshot.js';
+import { executeDriveBridgeRequest, setDriveBridgeNativeScreenshotInvokerForTests } from './drive-bridge.js';
+import type { DriveBridgeRequest } from './types.js';
 
 function snap(html: string, selector?: string): string {
   document.body.innerHTML = html;

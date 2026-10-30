@@ -10,7 +10,7 @@ import {
   recordPayload,
   redactKeys,
   REDACTED,
-} from './payload';
+} from './payload.js';
 
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ label: 'main' }) }));
 

@@ -3,8 +3,8 @@ import type {
   AuditaurPayloadKind,
   AuditaurRedactErrorMessage,
   AuditaurRedactPayload,
-} from './types';
-import { errorRecordFields, maybePayload, summarizePayload } from './utils';
+} from './types.js';
+import { errorRecordFields, maybePayload, summarizePayload } from './utils.js';
 
 /** Keep in sync with `DEFAULT_REDACTION_KEYS` in crates/auditaur-core/src/redaction.rs (a test checks). */
 export const DEFAULT_REDACTION_KEYS = [

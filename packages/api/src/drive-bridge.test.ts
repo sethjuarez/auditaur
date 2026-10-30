@@ -8,8 +8,8 @@ import {
   executeDriveBridgeRequest,
   parseKeyChord,
   setDriveBridgeNativeScreenshotInvokerForTests,
-} from './drive-bridge';
-import type { DriveBridgeRequest } from './types';
+} from './drive-bridge.js';
+import type { DriveBridgeRequest } from './types.js';
 
 class FakeElement {
   parentElement: FakeElement | null = null;

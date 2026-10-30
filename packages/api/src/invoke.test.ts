@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AuditaurExporter } from './exporter';
-import { AUDITAUR_TRACE_CONTEXT_ARG, AUDITAUR_TRACEPARENT_HEADER, createAuditaurTraceContext, instrumentedInvoke } from './invoke';
-import { payloadPolicy } from './payload';
-import type { AuditaurInvokeArgs } from './types';
+import { AuditaurExporter } from './exporter.js';
+import { AUDITAUR_TRACE_CONTEXT_ARG, AUDITAUR_TRACEPARENT_HEADER, createAuditaurTraceContext, instrumentedInvoke } from './invoke.js';
+import { payloadPolicy } from './payload.js';
+import type { AuditaurInvokeArgs } from './types.js';
 
 const fullPayloads = payloadPolicy({ captureFullPayloads: true });
 

@@ -1,4 +1,4 @@
-import type { OpenTelemetrySpanExporter } from './otel';
+import type { OpenTelemetrySpanExporter } from './otel.js';
 
 export interface AuditaurFrontendConfig {
   serviceName: string;

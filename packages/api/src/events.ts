@@ -4,10 +4,10 @@ import {
   listen as tauriListen,
   type Event,
 } from '@tauri-apps/api/event';
-import type { AuditaurExporter } from './exporter';
-import { recordErrorMessage, recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
-import type { AuditaurEvent, SpanRecord, TauriEventRecord } from './types';
-import { currentWindowLabel, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
+import type { AuditaurExporter } from './exporter.js';
+import { recordErrorMessage, recordPayload, type PayloadPolicy, type RecordedPayload } from './payload.js';
+import type { AuditaurEvent, SpanRecord, TauriEventRecord } from './types.js';
+import { currentWindowLabel, nowUnixNanos, randomSpanId, randomTraceId } from './utils.js';
 
 export async function instrumentedEmit(
   exporter: AuditaurExporter,

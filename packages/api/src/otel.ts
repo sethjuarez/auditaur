@@ -1,4 +1,4 @@
-import type { SpanRecord } from './types';
+import type { SpanRecord } from './types.js';
 
 const EXPORT_SUCCESS = 0;
 const EXPORT_FAILED = 1;
