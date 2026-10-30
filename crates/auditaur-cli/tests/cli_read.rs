@@ -1290,17 +1290,25 @@ fn init_extension_installs_drills_canvas() {
         .join("index.mjs")
         .is_file());
     assert!(!extensions.join("auditaur-gate").exists());
+    // The install records which CLI wrote it, so the canvas can name `--force` when it falls behind.
+    let stamp = extensions.join("auditaur-drills").join("installed.json");
+    let stamped: Value = serde_json::from_str(&fs::read_to_string(&stamp).unwrap()).unwrap();
+    assert_eq!(stamped["version"], env!("CARGO_PKG_VERSION"));
 
     let failure = run_failure(["init", "extension", "--path", root, "--json"]);
     assert!(failure.contains("already exist"));
 
     fs::write(&drills_path, "customized").unwrap();
+    fs::write(&stamp, r#"{"version":"0.0.1"}"#).unwrap();
     let overwritten = run_json(["init", "extension", "--path", root, "--force", "--json"]);
     assert_eq!(overwritten["overwritten"], true);
     assert_eq!(overwritten["extensions"][0]["status"], "overwritten");
     assert!(fs::read_to_string(&drills_path)
         .unwrap()
         .contains("id: CANVAS_ID"));
+    assert!(fs::read_to_string(&stamp)
+        .unwrap()
+        .contains(env!("CARGO_PKG_VERSION")));
 }
 #[test]
 fn init_diagnostics_installs_versioned_config_and_guidance() {
@@ -1500,6 +1508,8 @@ fn packaged_init_drills_extension_matches_repo_extension() {
     read_tree(&installed_dir, &installed_dir, &mut installed);
     read_tree(&repo_dir, &repo_dir, &mut repo);
     assert!(installed.contains_key("ui/app.js"));
+    // The install stamp is the only file a packaged install adds.
+    assert!(installed.remove("installed.json").is_some());
     assert_eq!(installed, repo);
 }
 
