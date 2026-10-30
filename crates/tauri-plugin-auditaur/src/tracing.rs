@@ -95,6 +95,16 @@ where
             start_time_unix_nanos: now_unix_nanos(),
             attributes,
         };
+        // A command span is recorded when it opens, so a long-running or never-finishing command
+        // still counts for the test that called it; closing replaces this row.
+        if data.attributes.get("tauri.command").is_some() {
+            if let Some(sink) = self.sink() {
+                let record = span_record(&sink, data.clone(), span.metadata(), None);
+                if let Ok(store) = sink.store.lock() {
+                    let _ = store.insert_span(&record);
+                }
+            }
+        }
         span.extensions_mut().insert(data);
     }
 
@@ -119,29 +129,7 @@ where
         let Some(data) = span.extensions().get::<AuditaurSpanData>().cloned() else {
             return;
         };
-        let metadata = span.metadata();
-        let mut attributes = data.attributes;
-        let (status_code, status_message) = take_status(&mut attributes);
-        let record = SpanRecord {
-            session_id: sink.session_id.clone(),
-            trace_id: data.trace_id,
-            span_id: data.span_id,
-            parent_span_id: data.parent_span_id,
-            name: metadata.name().to_string(),
-            kind: attributes
-                .get("otel.kind")
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-                .or_else(|| Some("internal".to_string())),
-            start_time_unix_nanos: data.start_time_unix_nanos,
-            end_time_unix_nanos: Some(now_unix_nanos()),
-            status_code,
-            status_message,
-            scope_name: Some(scope_name(metadata.target())),
-            scope_version: None,
-            attributes,
-            source: TelemetrySource::Backend,
-        };
+        let record = span_record(&sink, data, span.metadata(), Some(now_unix_nanos()));
         if let Ok(store) = sink.store.lock() {
             let _ = store.insert_span(&record);
         };
@@ -183,6 +171,37 @@ where
         if let Ok(store) = sink.store.lock() {
             let _ = store.insert_log(&record);
         };
+    }
+}
+
+/// The stored form of a span: open (`end` is `None`) or closed.
+fn span_record(
+    sink: &TracingSink,
+    data: AuditaurSpanData,
+    metadata: &tracing::Metadata<'_>,
+    end_time_unix_nanos: Option<i64>,
+) -> SpanRecord {
+    let mut attributes = data.attributes;
+    let (status_code, status_message) = take_status(&mut attributes);
+    SpanRecord {
+        session_id: sink.session_id.clone(),
+        trace_id: data.trace_id,
+        span_id: data.span_id,
+        parent_span_id: data.parent_span_id,
+        name: metadata.name().to_string(),
+        kind: attributes
+            .get("otel.kind")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| Some("internal".to_string())),
+        start_time_unix_nanos: data.start_time_unix_nanos,
+        end_time_unix_nanos,
+        status_code,
+        status_message,
+        scope_name: Some(scope_name(metadata.target())),
+        scope_version: None,
+        attributes,
+        source: TelemetrySource::Backend,
     }
 }
 
@@ -428,6 +447,39 @@ mod tests {
         assert_eq!(spans[0].name, "work");
         assert_eq!(logs[0].trace_id, Some(spans[0].trace_id.clone()));
         assert_eq!(logs[0].span_id, Some(spans[0].span_id.clone()));
+    }
+
+    #[test]
+    fn command_spans_are_recorded_open_then_replaced_on_close() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = test_state(&temp);
+        let session_id = state.session_id.clone().unwrap();
+        let subscriber = Registry::default().with(state.tracing_layer());
+        let store = store_for(&temp, &session_id);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let command = tracing::info_span!(
+                "agent_chat",
+                tauri.command = "agent_chat",
+                otel.status_code = tracing::field::Empty
+            );
+            let plain = tracing::info_span!("plain");
+            let open = store.list_spans(&SpanQuery::default()).unwrap();
+            assert_eq!(open.len(), 1, "{open:?}");
+            assert_eq!(open[0].name, "agent_chat");
+            assert_eq!(open[0].end_time_unix_nanos, None);
+            assert_eq!(open[0].status_code, None);
+            command.record("otel.status_code", "OK");
+            drop(command);
+            drop(plain);
+        });
+
+        let spans = store.list_spans(&SpanQuery::default()).unwrap();
+        assert_eq!(spans.len(), 2, "{spans:?}");
+        let command = spans.iter().find(|span| span.name == "agent_chat").unwrap();
+        assert!(command.end_time_unix_nanos.is_some());
+        assert_eq!(command.status_code.as_deref(), Some("OK"));
     }
 
     #[test]
