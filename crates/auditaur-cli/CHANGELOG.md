@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.15](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.14...auditaur-cli-v0.4.15) - 2026-10-30
+
+### Added
+
+- *(drills)* live gate countdown and a "waiting for you" banner on Tests ([#106](https://github.com/sethjuarez/auditaur/pull/106))
+
+### Fixed
+
+- *(drills)* stop the Snapshots page vouching for snapshots it never saw ([#110](https://github.com/sethjuarez/auditaur/pull/110))
+- *(drills)* say why a hook failed, in its own output ([#109](https://github.com/sethjuarez/auditaur/pull/109))
+- *(drills)* number step artifacts the way reports do ([#108](https://github.com/sethjuarez/auditaur/pull/108))
+- *(cli)* wait for a stopped Windows app tree to finish tearing down ([#107](https://github.com/sethjuarez/auditaur/pull/107))
+- *(drills)* mark skipped tests in the canvas; name suites in "Last run" ([#104](https://github.com/sethjuarez/auditaur/pull/104))
+
+### Other
+
+- *(cli)* give the slow-test timeout check room on loaded CI runners ([#105](https://github.com/sethjuarez/auditaur/pull/105))
+
 ## [0.4.14](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.13...auditaur-cli-v0.4.14) - 2026-10-30
 
 ### Fixed
