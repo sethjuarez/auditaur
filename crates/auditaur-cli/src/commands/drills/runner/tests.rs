@@ -883,7 +883,9 @@ fn test_timeout_times_out_but_step_timeout_fails() {
 
 #[test]
 fn slow_tests_get_triple_the_timeout() {
-    let ran = run(r##"{ "timeoutMs": 100, "tests": [
+    // `#wait200` sleeps at most the remaining budget, so "normal" (190ms) always times out, while
+    // "slow" (570ms) leaves ~370ms of slack for a loaded CI runner.
+    let ran = run(r##"{ "timeoutMs": 190, "tests": [
         { "name": "slow", "slow": true, "steps": [{ "click": "#wait200" }] },
         { "name": "normal", "steps": [{ "click": "#wait200" }] }
     ] }"##);
