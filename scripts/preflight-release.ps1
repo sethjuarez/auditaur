@@ -43,6 +43,7 @@ try {
     Invoke-Step "API typecheck" { npm --prefix packages\api run typecheck }
     Invoke-Step "API tests" { npm --prefix packages\api test }
     Invoke-Step "API build" { npm --prefix packages\api run build }
+    Invoke-Step "API bundle tests" { npm --prefix packages\api run test:bundles }
     Invoke-Step "Docs build" { npm --prefix docs run build }
     Invoke-Step "Drill canvases typecheck" { npm --prefix packages\drills-ui run typecheck }
     Invoke-Step "Drill canvases bundle is current" {
