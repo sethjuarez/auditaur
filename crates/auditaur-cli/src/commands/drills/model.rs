@@ -74,7 +74,11 @@ pub const ACTION_KEYS: &[&str] = &[
     "expectSpan",
     "expectNoTelemetry",
     "run",
+    "dialog",
 ];
+
+/// Dialogs a `dialog` step can answer: the `@tauri-apps/plugin-dialog` functions.
+pub const DIALOG_KINDS: &[&str] = &["open", "save", "ask", "confirm", "message"];
 
 /// Matchers for `expectValue`, which asserts on a JavaScript expression's result.
 pub const VALUE_MATCHER_KEYS: &[&str] = &["toEqual", "toContain", "toMatch"];
@@ -115,6 +119,8 @@ pub const STEP_OPTION_KEYS: &[&str] = &[
     "exitCode",
     "stdout",
     "stderr",
+    "respond",
+    "expectOptions",
 ];
 
 pub const LOCATOR_KEYS: &[&str] = &[
@@ -270,6 +276,18 @@ pub enum StepKind {
     ExpectValue(ValueExpectation),
     Telemetry(TelemetryExpectation),
     Run(CommandStep),
+    Dialog(DialogStep),
+}
+
+/// `dialog`: queue the answer to the app's next native dialog (see `withDrillDialogs` in
+/// `@auditaur/api`).
+#[derive(Debug, Clone)]
+pub struct DialogStep {
+    pub kind: &'static str,
+    /// What the dialog function returns; `${NAME}` in strings expands from the drill env.
+    pub respond: Value,
+    /// A deep-partial match on the options the app opened the dialog with.
+    pub expect_options: Option<Value>,
 }
 
 /// `run`: a command run mid-test, with the same `cwd` rules as suite hooks.
@@ -1330,6 +1348,7 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
         "expectNoErrors" => &["ignore", "soft"],
         "expectValue" => &["toEqual", "toContain", "toMatch", "not", "soft"],
         "run" => &["args", "cwd", "exitCode", "stdout", "stderr"],
+        "dialog" => &["respond", "expectOptions"],
         _ => &[],
     };
     allowed.extend_from_slice(extra);
@@ -1534,7 +1553,96 @@ fn parse_step_kind(
             StepKind::ExpectValue(parse_value_expectation(ctx, map, raw, parent, path)?)
         }
         "run" => StepKind::Run(parse_command_step(ctx, map, raw, parent, path)?),
+        "dialog" => StepKind::Dialog(parse_dialog_step(ctx, map, raw, parent, path)?),
         _ => StepKind::Telemetry(parse_telemetry(ctx, map, action, raw, parent, path)?),
+    })
+}
+
+fn parse_dialog_step(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    raw: &Value,
+    parent: &str,
+    path: &str,
+) -> Option<DialogStep> {
+    let kind = match raw {
+        Value::String(kind) => match DIALOG_KINDS.iter().find(|known| **known == kind) {
+            Some(known) => Some(*known),
+            None => {
+                ctx.err(
+                    path,
+                    format!("unknown dialog {kind:?}; use {}", DIALOG_KINDS.join(", ")),
+                );
+                None
+            }
+        },
+        other => {
+            ctx.err(path, format!("expected string, found {}", type_name(other)));
+            None
+        }
+    };
+    let respond_path = join(parent, "respond");
+    let respond = match (kind, map.get("respond")) {
+        (None, _) => None,
+        // `message` returns the clicked button's label; most callers ignore it.
+        (Some("message"), None) => Some(Value::String("Ok".to_string())),
+        (Some(kind), None) => {
+            ctx.err(
+                parent,
+                format!("`dialog: {kind}` requires `respond` (use null to cancel)"),
+            );
+            None
+        }
+        (Some(kind), Some(value)) => {
+            let strings = |items: &[Value]| items.iter().all(Value::is_string);
+            let valid = match kind {
+                "open" => match value {
+                    Value::Null | Value::String(_) => true,
+                    Value::Array(items) => !items.is_empty() && strings(items),
+                    _ => false,
+                },
+                "save" => matches!(value, Value::Null | Value::String(_)),
+                "ask" | "confirm" => value.is_boolean(),
+                _ => value.is_string(),
+            };
+            if valid {
+                Some(value.clone())
+            } else {
+                let expected = match kind {
+                    "open" => "a path, a non-empty array of paths, or null (cancel)",
+                    "save" => "a path, or null (cancel)",
+                    "ask" | "confirm" => "true or false",
+                    _ => "the clicked button's label, such as \"Ok\"",
+                };
+                ctx.err(
+                    &respond_path,
+                    format!(
+                        "`{kind}` dialogs respond with {expected}, found {}",
+                        type_name(value)
+                    ),
+                );
+                None
+            }
+        }
+    };
+    let expect_options = match map.get("expectOptions") {
+        None => Some(None),
+        Some(value @ Value::Object(_)) => Some(Some(value.clone())),
+        Some(other) => {
+            ctx.err(
+                &join(parent, "expectOptions"),
+                format!(
+                    "expected an object of the dialog options to match, found {}",
+                    type_name(other)
+                ),
+            );
+            None
+        }
+    };
+    Some(DialogStep {
+        kind: kind?,
+        respond: respond?,
+        expect_options: expect_options?,
     })
 }
 
@@ -2275,6 +2383,15 @@ pub fn describe(kind: &StepKind) -> String {
                 .join(" ");
             format!("run {}", clip(&line, 60))
         }
+        StepKind::Dialog(dialog) => {
+            let answer = match &dialog.respond {
+                Value::Null => "cancel".to_string(),
+                Value::String(text) => clip(text, 60),
+                Value::Array(items) => format!("{} paths", items.len()),
+                other => other.to_string(),
+            };
+            format!("answer {} dialog with {answer}", dialog.kind)
+        }
         StepKind::ExpectValue(expectation) => {
             let not = if expectation.not { "not " } else { "" };
             format!(
@@ -2427,6 +2544,66 @@ mod tests {
         assert_eq!(test.steps[15].title, "custom title");
         assert_eq!(suite.tests[1].mode, TestMode::Fixme);
         assert_eq!(suite.tests[1].mode_reason.as_deref(), Some("needs auth"));
+    }
+
+    #[test]
+    fn parses_dialog_steps() {
+        let parsed = parse(
+            r##"{ "tests": [{ "name": "t", "steps": [
+                { "dialog": "save", "respond": "${OUT}/a.docx", "expectOptions": { "title": "Export" } },
+                { "dialog": "open", "respond": ["a.md", "b.md"] },
+                { "dialog": "open", "respond": null },
+                { "dialog": "confirm", "respond": false },
+                { "dialog": "message" }
+            ] }] }"##,
+        );
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        let steps = &parsed.suite.unwrap().tests[0].steps;
+        let titles: Vec<_> = steps.iter().map(|step| step.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "answer save dialog with ${OUT}/a.docx",
+                "answer open dialog with 2 paths",
+                "answer open dialog with cancel",
+                "answer confirm dialog with false",
+                "answer message dialog with Ok",
+            ]
+        );
+        let StepKind::Dialog(save) = &steps[0].kind else {
+            panic!("not a dialog step");
+        };
+        assert_eq!(save.kind, "save");
+        assert_eq!(
+            save.expect_options,
+            Some(serde_json::json!({ "title": "Export" }))
+        );
+    }
+
+    #[test]
+    fn rejects_bad_dialog_steps() {
+        let issues = messages(
+            r##"{ "tests": [{ "name": "t", "steps": [
+                { "dialog": "print", "respond": true },
+                { "dialog": "save" },
+                { "dialog": "open", "respond": [] },
+                { "dialog": "ask", "respond": "yes" },
+                { "dialog": "save", "respond": "a", "expectOptions": "Export" }
+            ] }] }"##,
+        );
+        let expected = [
+            "unknown dialog \"print\"",
+            "`dialog: save` requires `respond` (use null to cancel)",
+            "`open` dialogs respond with a path, a non-empty array of paths, or null",
+            "`ask` dialogs respond with true or false, found string",
+            "expected an object of the dialog options to match, found string",
+        ];
+        for needle in expected {
+            assert!(
+                issues.iter().any(|m| m.contains(needle)),
+                "{needle}: {issues:?}"
+            );
+        }
     }
 
     #[test]

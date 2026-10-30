@@ -26,6 +26,46 @@ struct Shared {
     cancel: Option<Arc<AtomicBool>>,
     /// `(who, env)` for every launch and hook that was given environment.
     envs: Vec<(String, Vec<(String, String)>)>,
+    /// The app's dialog stubs, as `withDrillDialogs` keeps them.
+    dialogs: FakeDialogs,
+    /// Every dialog answer the runner queued.
+    queued: Vec<Value>,
+}
+
+#[derive(Default)]
+struct FakeDialogs {
+    armed: bool,
+    queue: Vec<Value>,
+    log: Vec<Value>,
+    /// Bridge calls, in order.
+    calls: Vec<String>,
+}
+
+impl FakeDialogs {
+    fn state(&self) -> Value {
+        json!({ "armed": self.armed, "wrapped": true, "queue": self.queue, "log": self.log })
+    }
+
+    /// The app opening a `kind` dialog.
+    fn open(&mut self, kind: &str) {
+        if !self.armed {
+            return;
+        }
+        let outcome = match self.queue.first() {
+            None => "unexpected",
+            Some(next) if next["kind"] != kind => "mismatch",
+            Some(_) => "answered",
+        };
+        let id = self.queue.first().map(|next| next["id"].clone());
+        if outcome == "answered" {
+            self.queue.remove(0);
+        }
+        self.log.push(json!({
+            "kind": kind, "outcome": outcome, "id": id,
+            "problem": "the next queued response is for another dialog",
+            "options": { "defaultPath": "C:\\Users\\me", "token": "secret-value" },
+        }));
+    }
 }
 
 type State = Rc<RefCell<Shared>>;
@@ -73,6 +113,17 @@ impl AppDriver for FakeDriver {
             *count += 1;
             *count
         };
+        if matches!(step.kind, StepKind::Reload) {
+            // A reload starts the page, and its stubs, over.
+            state.dialogs.armed = false;
+            state.dialogs.queue.clear();
+            state.dialogs.log.clear();
+            return StepResult::Passed;
+        }
+        if let Some(kind) = target.strip_prefix("#opens-") {
+            state.dialogs.open(kind);
+            return StepResult::Passed;
+        }
         match target.as_str() {
             "#fail" | "#dieoncapture" => StepResult::Failed(ErrorInfo::new("boom")),
             "#skip" => StepResult::Skipped,
@@ -153,6 +204,49 @@ impl AppDriver for FakeDriver {
 
     fn exited(&mut self) -> Option<String> {
         self.state.borrow().dead.then(|| "crashed".to_string())
+    }
+
+    fn bridge(
+        &mut self,
+        action: &str,
+        value: Option<String>,
+        _timeout: std::time::Duration,
+    ) -> std::result::Result<Value, String> {
+        let mut guard = self.state.borrow_mut();
+        let state = &mut *guard;
+        let dialogs = &mut state.dialogs;
+        dialogs.calls.push(action.to_string());
+        match action {
+            "dialogs.arm" => {
+                let lease: Value = serde_json::from_str(&value.unwrap()).unwrap();
+                assert!(lease["leaseMs"].as_u64().unwrap() > 60_000, "{lease}");
+                *dialogs = FakeDialogs {
+                    armed: true,
+                    calls: std::mem::take(&mut dialogs.calls),
+                    ..FakeDialogs::default()
+                };
+            }
+            "dialogs.queue" if !dialogs.armed => {
+                return Err(
+                    "dialog stubs are not armed (the page reloaded, or the lease lapsed)".into(),
+                )
+            }
+            "dialogs.queue" => {
+                let entry: Value = serde_json::from_str(&value.unwrap()).unwrap();
+                state.queued.push(entry.clone());
+                dialogs.queue.push(entry);
+            }
+            "dialogs.state" => {}
+            "dialogs.disarm" => {
+                let last = dialogs.state();
+                dialogs.armed = false;
+                dialogs.queue.clear();
+                dialogs.log.clear();
+                return Ok(last);
+            }
+            other => return Err(format!("unsupported drive bridge action: {other}")),
+        }
+        Ok(dialogs.state())
     }
 
     /// Only tests that ran a `#tel` step have telemetry.
@@ -273,6 +367,9 @@ struct Ran {
     stopped: Option<Stopped>,
     /// `(title, error messages)` per reported test attempt.
     reported: Vec<(String, Vec<String>)>,
+    /// Dialog answers queued, and `dialogs.*` bridge calls, in order.
+    queued: Vec<Value>,
+    dialog_calls: Vec<String>,
     _temp: tempfile::TempDir,
 }
 
@@ -343,6 +440,8 @@ fn run_files(suites: &[&str], options: RunnerOptions) -> Ran {
     let telemetry = state.borrow().telemetry.clone();
     let since = state.borrow().since.clone();
     let envs = state.borrow().envs.clone();
+    let queued = state.borrow().queued.clone();
+    let dialog_calls = state.borrow().dialogs.calls.clone();
     Ran {
         report,
         log,
@@ -352,6 +451,8 @@ fn run_files(suites: &[&str], options: RunnerOptions) -> Ran {
         dir,
         stopped,
         reported: recorder.reported,
+        queued,
+        dialog_calls,
         _temp: temp,
     }
 }
@@ -1486,4 +1587,164 @@ fn last_failed_skips_a_run_still_in_progress() {
     assert_eq!(ids.len(), 1);
     assert!(ids.contains(&test(&ran, "fail").id));
     drop(live);
+}
+
+fn error_of(ran: &Ran, name: &str) -> String {
+    test(ran, name).attempts[0]
+        .error
+        .as_ref()
+        .map(|error| error.message.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn dialog_steps_answer_the_apps_dialogs() {
+    let ran = run(r##"{ "env": { "OUT": "C:/out" }, "tests": [
+        { "name": "export", "steps": [
+            { "dialog": "save", "respond": "${OUT}/deck.pptx", "expectOptions": { "title": "Export" } },
+            { "click": "#opens-save" }
+        ] },
+        { "name": "plain", "steps": [{ "click": "#a" }] }
+    ] }"##);
+    assert_eq!(
+        test(&ran, "export").status,
+        Status::Passed,
+        "{}",
+        error_of(&ran, "export")
+    );
+    assert_eq!(ran.queued[0]["respond"], "C:/out/deck.pptx");
+    assert_eq!(ran.queued[0]["id"], "step 1");
+    assert_eq!(ran.queued[0]["kind"], "save");
+    assert_eq!(ran.queued[0]["expect"], json!({ "title": "Export" }));
+    assert_eq!(
+        steps(&ran, "export", 0),
+        vec![
+            (
+                "answer save dialog with ${OUT}/deck.pptx".to_string(),
+                Status::Passed
+            ),
+            ("click #opens-save".to_string(), Status::Passed),
+            ("check dialogs".to_string(), Status::Passed),
+        ]
+    );
+    // The check attaches what the app logged, redacted.
+    let summary = &test(&ran, "export").attempts[0];
+    let attempt = read_attempt(&ran.dir, summary).unwrap();
+    let file = &attempt.steps[2].attachments[0].path;
+    assert!(file.ends_with("step-3-dialogs.json"), "{file}");
+    let saved = fs::read_to_string(ran.dir.join(file)).unwrap();
+    assert!(saved.contains("answered"), "{saved}");
+    assert!(!saved.contains("secret-value"), "{saved}");
+    // Every attempt in a dialog suite is armed and disarmed, even one with no dialog; it gets
+    // no extra step.
+    assert_eq!(test(&ran, "plain").status, Status::Passed);
+    assert_eq!(steps(&ran, "plain", 0).len(), 1);
+    assert_eq!(
+        ran.dialog_calls
+            .iter()
+            .filter(|call| *call == "dialogs.arm")
+            .count(),
+        2
+    );
+    assert_eq!(
+        ran.dialog_calls
+            .iter()
+            .filter(|call| *call == "dialogs.disarm")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn suites_without_dialog_steps_leave_dialogs_alone() {
+    let ran = run(r##"{ "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }] }"##);
+    assert!(ran.dialog_calls.is_empty(), "{:?}", ran.dialog_calls);
+}
+
+#[test]
+fn unexpected_and_mismatched_dialogs_fail_the_test() {
+    let ran = run(r##"{ "tests": [
+        { "name": "surprise", "steps": [{ "click": "#opens-ask" }] },
+        { "name": "wrong", "steps": [
+            { "dialog": "open", "respond": null },
+            { "click": "#opens-save" }
+        ] }
+    ] }"##);
+    let surprise = error_of(&ran, "surprise");
+    assert_eq!(test(&ran, "surprise").status, Status::Failed);
+    assert!(
+        surprise.contains("opened a `ask` dialog with nothing queued"),
+        "{surprise}"
+    );
+    let wrong = error_of(&ran, "wrong");
+    assert!(wrong.contains("did not match step 1"), "{wrong}");
+}
+
+#[test]
+fn unused_dialog_answers_fail_only_a_passing_test() {
+    let ran = run(r##"{ "expectTimeoutMs": 50, "tests": [
+        { "name": "unused", "steps": [{ "dialog": "confirm", "respond": true }] },
+        { "name": "broke", "steps": [{ "dialog": "confirm", "respond": true }, { "click": "#fail" }] }
+    ] }"##);
+    let unused = error_of(&ran, "unused");
+    assert_eq!(test(&ran, "unused").status, Status::Failed);
+    assert!(
+        unused.contains("never used: step 1 (`confirm`)"),
+        "{unused}"
+    );
+    // The real failure stands alone; its unused answer is a consequence.
+    assert_eq!(error_of(&ran, "broke"), "boom");
+    assert_eq!(ran.reported[1].1, vec!["boom".to_string()]);
+}
+
+#[test]
+fn reload_steps_re_arm_dialog_stubs() {
+    let ran = run(r##"{ "tests": [
+        { "name": "after", "steps": [
+            { "reload": true },
+            { "dialog": "message", "expectOptions": { "message": "Saved" } },
+            { "click": "#opens-message" }
+        ] },
+        { "name": "dropped", "steps": [{ "dialog": "save", "respond": "a" }, { "reload": true }] }
+    ] }"##);
+    assert_eq!(
+        test(&ran, "after").status,
+        Status::Passed,
+        "{}",
+        error_of(&ran, "after")
+    );
+    assert_eq!(ran.queued[0]["respond"], "Ok");
+    let dropped = error_of(&ran, "dropped");
+    assert!(
+        dropped.contains("step 1 (`save`) was dropped by a reload"),
+        "{dropped}"
+    );
+}
+
+#[test]
+fn dialog_answers_with_unknown_variables_fail() {
+    let ran = run(r##"{ "tests": [
+        { "name": "t", "steps": [{ "dialog": "save", "respond": "${RUN_DIR}/x.docx" }] }
+    ] }"##);
+    let error = error_of(&ran, "t");
+    assert!(
+        error.contains("uses ${RUN_DIR}, which is not in the drill env"),
+        "{error}"
+    );
+    assert!(ran.queued.is_empty());
+}
+
+#[test]
+fn suite_hook_phases_answer_dialogs_too() {
+    let ran = run(r##"{
+        "beforeAll": [{ "dialog": "open", "respond": ["a.md", "b.md"] }, { "click": "#opens-open" }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }]
+    }"##);
+    assert!(
+        ran.report.suites[0].error.is_none(),
+        "{:?}",
+        ran.report.suites[0].error
+    );
+    assert_eq!(ran.queued[0]["respond"], json!(["a.md", "b.md"]));
+    assert_eq!(test(&ran, "t").status, Status::Passed);
 }

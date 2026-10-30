@@ -4,6 +4,7 @@
 //! control: a [`Host`] launches apps and runs command hooks, and an [`AppDriver`]
 //! performs steps. Unit tests swap in fakes; [`real`] drives Tauri apps.
 
+pub mod dialogs;
 pub mod expect;
 pub mod real;
 pub mod snapshot;
@@ -28,6 +29,7 @@ use super::{
     run::{ErrorInfo, Outcome, Phase, RunWriter, Status},
     title, Selected,
 };
+use dialogs::DialogStubs;
 use snapshot::{SnapshotKind, SnapshotTarget, UpdateMode};
 
 pub const DEFAULT_TEST_TIMEOUT_MS: u64 = 30_000;
@@ -98,6 +100,16 @@ pub trait AppDriver {
     }
     /// Why the app can no longer be driven, once it has died.
     fn exited(&mut self) -> Option<String>;
+    /// A drive-bridge request outside any step action (the `dialogs.*` stubs), returning the
+    /// reply's payload or the bridge's error.
+    fn bridge(
+        &mut self,
+        action: &str,
+        _value: Option<String>,
+        _timeout: Duration,
+    ) -> std::result::Result<Value, String> {
+        Err(format!("this app driver cannot send `{action}`"))
+    }
     fn close(&mut self) -> Result<()>;
 }
 
@@ -217,6 +229,8 @@ pub fn execute(
             attempt: None,
             env: selected.suite.env.clone(),
             env_file: None,
+            dialogs: None,
+            uses_dialogs: dialogs::suite_uses_dialogs(selected.suite),
         }
         .run()?;
         if stopped.is_some() {
@@ -263,6 +277,9 @@ struct SuiteRun<'r, 'p> {
     env: Vec<(String, String)>,
     /// Where setup hooks write environment; removed when the suite ends.
     env_file: Option<tempfile::TempPath>,
+    /// The app's dialog stubs, while a phase of a suite with `dialog` steps runs.
+    dialogs: Option<DialogStubs>,
+    uses_dialogs: bool,
 }
 
 /// Failures collected while running a list of steps.
@@ -439,11 +456,18 @@ impl SuiteRun<'_, '_> {
         let since = now_unix_nanos();
 
         self.auto_snapshots = 0;
-        let tally = self.run_steps(
-            driver,
-            &suite.before_all,
-            &Budget::new(Phase::BeforeAll, timeout_ms, None, since),
-        )?;
+        let tally =
+            match self.arm_dialogs(driver, Phase::BeforeAll, Duration::from_millis(timeout_ms))? {
+                Some(error) => failed_tally(error),
+                None => {
+                    let tally = self.run_steps(
+                        driver,
+                        &suite.before_all,
+                        &Budget::new(Phase::BeforeAll, timeout_ms, None, since),
+                    )?;
+                    self.with_dialog_check(driver, Phase::BeforeAll, tally)?
+                }
+            };
         if let Some(error) = tally.first_error() {
             self.error = Some(error);
         }
@@ -470,11 +494,21 @@ impl SuiteRun<'_, '_> {
 
         if self.exited.is_none() && !self.options.cancelled() {
             self.auto_snapshots = 0;
-            let tally = self.run_steps(
+            let tally = match self.arm_dialogs(
                 driver,
-                &suite.after_all,
-                &Budget::new(Phase::AfterAll, timeout_ms, None, since),
-            )?;
+                Phase::AfterAll,
+                Duration::from_millis(timeout_ms),
+            )? {
+                Some(error) => failed_tally(error),
+                None => {
+                    let tally = self.run_steps(
+                        driver,
+                        &suite.after_all,
+                        &Budget::new(Phase::AfterAll, timeout_ms, None, since),
+                    )?;
+                    self.with_dialog_check(driver, Phase::AfterAll, tally)?
+                }
+            };
             if let Some(error) = tally.first_error() {
                 self.error.get_or_insert(error);
             }
@@ -608,6 +642,11 @@ impl SuiteRun<'_, '_> {
     ) -> Result<Tally> {
         let suite = self.selected.suite;
         self.auto_snapshots = 0;
+        // beforeEach, the test and afterEach each get `timeout_ms`.
+        let budget_all = Duration::from_millis(timeout_ms.saturating_mul(3));
+        if let Some(error) = self.arm_dialogs(driver, Phase::BeforeEach, budget_all)? {
+            return Ok(failed_tally(error));
+        }
         let budget = Budget::new(Phase::BeforeEach, timeout_ms, Some(id.to_string()), since)
             .for_test(&test.name);
         let mut tally = self.run_steps(driver, &suite.before_each, &budget)?;
@@ -626,6 +665,21 @@ impl SuiteRun<'_, '_> {
                 .for_test(&test.name);
             let after = self.run_steps(driver, &suite.after_each, &budget)?;
             tally.merge(after);
+        }
+        self.with_dialog_check(driver, Phase::AfterEach, tally)
+    }
+
+    /// Fold the phase's dialog check into its tally.
+    fn with_dialog_check(
+        &mut self,
+        driver: &mut dyn AppDriver,
+        phase: Phase,
+        mut tally: Tally,
+    ) -> Result<Tally> {
+        let failed = tally.hard.is_some() || tally.skipped;
+        if let Some(error) = self.check_dialogs(driver, phase, failed)? {
+            tally.all.push(error.clone());
+            tally.soft.get_or_insert(error);
         }
         Ok(tally)
     }
@@ -686,6 +740,12 @@ impl SuiteRun<'_, '_> {
             };
             let snapshot = self.snapshot_target(step, &budget.snapshot_base);
             let tracing = self.tracing();
+            let reload = matches!(step.kind, StepKind::Reload);
+            if reload {
+                if let Some(stubs) = self.dialogs.as_mut() {
+                    stubs.before_reload(driver);
+                }
+            }
             let mut ctx = StepCtx {
                 writer: &mut *self.writer,
                 deadline,
@@ -701,9 +761,18 @@ impl SuiteRun<'_, '_> {
                 StepKind::Run(command) => {
                     run_command(&mut *self.host, &self.env, step, command, &mut ctx)
                 }
+                StepKind::Dialog(dialog) => match &self.dialogs {
+                    Some(stubs) => stubs.queue(driver, &self.env, step, dialog, &ctx),
+                    None => StepResult::Failed(ErrorInfo::new("dialog stubs are not armed")),
+                },
                 _ if gate => budget.untimed(|| driver.run_step(step, &mut ctx)),
                 _ => driver.run_step(step, &mut ctx),
             };
+            if reload && result == StepResult::Passed {
+                if let Some(stubs) = self.dialogs.as_mut() {
+                    stubs.after_reload(driver);
+                }
+            }
             // Evidence captured below is not part of the step's duration.
             ctx.writer.step_ended();
             if ctx.wrote_baseline {
@@ -790,6 +859,92 @@ impl SuiteRun<'_, '_> {
         if self.exited.is_none() {
             self.exited = driver.exited();
         }
+    }
+
+    /// Arm the app's dialog stubs for a phase taking up to `budget`, in suites with `dialog`
+    /// steps. Empty phases aren't armed. A failure is recorded as its own step and returned.
+    fn arm_dialogs(
+        &mut self,
+        driver: &mut dyn AppDriver,
+        phase: Phase,
+        budget: Duration,
+    ) -> Result<Option<ErrorInfo>> {
+        let suite = self.selected.suite;
+        let empty = match phase {
+            Phase::BeforeAll => suite.before_all.is_empty(),
+            Phase::AfterAll => suite.after_all.is_empty(),
+            _ => false,
+        };
+        if !self.uses_dialogs || empty || self.exited.is_some() {
+            return Ok(None);
+        }
+        match DialogStubs::arm(driver, budget) {
+            Ok(stubs) => {
+                self.dialogs = Some(stubs);
+                Ok(None)
+            }
+            Err(message) => {
+                let index = self
+                    .writer
+                    .step_started(phase, "arm dialog stubs", "dialog")?;
+                let error = ErrorInfo {
+                    step: Some(index),
+                    ..ErrorInfo::new(message)
+                };
+                self.writer
+                    .step_finished(Status::Failed, false, Some(error.clone()))?;
+                Ok(Some(error))
+            }
+        }
+    }
+
+    /// Check and disarm the phase's dialog stubs. Records a `check dialogs` step, with the
+    /// app's dialog log attached, when a dialog opened or something went wrong; returns the
+    /// failure. `failed` phases don't wait for, or complain about, unused answers.
+    fn check_dialogs(
+        &mut self,
+        driver: &mut dyn AppDriver,
+        phase: Phase,
+        failed: bool,
+    ) -> Result<Option<ErrorInfo>> {
+        let Some(stubs) = self.dialogs.take() else {
+            return Ok(None);
+        };
+        // A crash no step noticed is the real failure; don't report it as a stub error.
+        self.probe_exit(driver);
+        if self.exited.is_some() {
+            return Ok(None);
+        }
+        let settle = Duration::from_millis(
+            self.suite()
+                .expect_timeout_ms
+                .unwrap_or(DEFAULT_EXPECT_TIMEOUT_MS),
+        );
+        let failed = failed || self.options.cancelled();
+        let (record, problems) = stubs.finish(driver, settle, failed);
+        let opened = record["log"].as_array().is_some_and(|log| !log.is_empty());
+        if problems.is_empty() && !opened {
+            return Ok(None);
+        }
+        let index = self.writer.step_started(phase, "check dialogs", "dialog")?;
+        let record = redact_json(&record, &[]).value;
+        self.writer.attach(
+            "dialogs",
+            "application/json",
+            &format!("step-{}-dialogs.json", index + 1),
+            &serde_json::to_vec_pretty(&record)?,
+        )?;
+        if problems.is_empty() {
+            self.writer.step_finished(Status::Passed, false, None)?;
+            return Ok(None);
+        }
+        let error = ErrorInfo {
+            step: Some(index),
+            ..ErrorInfo::new(problems.join("\n"))
+        };
+        self.writer
+            .step_finished(Status::Failed, false, Some(error.clone()))?;
+        Ok(Some(error))
     }
 
     fn tracing(&self) -> bool {
@@ -1091,6 +1246,15 @@ impl Budget {
 }
 
 /// A deadline that never arrives in practice, for waits bounded by something else.
+/// A phase that failed before any step ran.
+fn failed_tally(error: ErrorInfo) -> Tally {
+    Tally {
+        all: vec![error.clone()],
+        hard: Some((Status::Failed, error)),
+        ..Tally::default()
+    }
+}
+
 fn far_future() -> Instant {
     Instant::now() + Duration::from_secs(365 * 24 * 60 * 60)
 }

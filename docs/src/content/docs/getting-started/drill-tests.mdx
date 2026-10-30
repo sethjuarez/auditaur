@@ -87,7 +87,7 @@ Every step accepts `name` and `timeoutMs`.
 | --- | --- |
 | Actions | `click`, `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `select` + `value` or `values`, `check`, `uncheck` |
 | Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload` |
-| Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop) |
+| Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop), `dialog` + `respond` (answer a [native dialog](#native-dialogs)) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
 | Value assertions | `expectValue` (JavaScript) + one of `toEqual` (deep JSON equality), `toContain` (substring or array element), `toMatch` (regex string) |
 | Telemetry assertions | `expectIpc` (+ `status`, `count`, `maxMs`), `expectEvent` (+ `count`), `expectLog` (+ `level`, `attributes`, `count`), `expectSpan` (+ `status`, `attributes`, `count`), `expectNoTelemetry` (+ `in`), `expectNoErrors` (+ `ignore`) |
@@ -132,6 +132,42 @@ A `gate` step pauses the test until a person acts. It takes the same object as a
 ```
 
 Custom `choices` replace the default Continue, so include one with `"outcome": "continue"` or the test can't proceed. Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait is off the test clock, as with Playwright's `page.pause()`: the gate's own `timeoutMs` (default 5 minutes) or a step `timeoutMs` bounds it, and the test's remaining budget is unchanged when it resumes.
+
+### Native dialogs
+
+Native file and message dialogs would block an unattended run, so a `dialog` step queues the answer to the next one the app opens, like Playwright's `page.once('dialog')`:
+
+```json
+{ "dialog": "save", "respond": "${FIXTURE}/deck.docx", "expectOptions": { "filters": [{ "name": "Word", "extensions": ["docx"] }] } },
+{ "click": { "role": "button", "name": "Export" } }
+```
+
+| `dialog` | `respond` |
+| --- | --- |
+| `open` | a path, an array of paths, or `null` (cancel) |
+| `save` | a path, or `null` (cancel) |
+| `ask`, `confirm` | `true` or `false` |
+| `message` | the clicked button's label (default `"Ok"`) |
+
+Answers are used in order. `respond` strings expand `${NAME}` from the drill env; an unknown name fails the step. `expectOptions` matches the options the app passed like Playwright's `toMatchObject` (listed keys only; arrays element by element): `title`, `filters`, `defaultPath`, …, and for `ask`, `confirm`, and `message`, also `message`. The test fails if a dialog opens with nothing queued, opens a different kind or options than the next answer, or if an answer is never used. A `check dialogs` step attaches what the app asked for, redacted.
+
+The app must open dialogs through `withDrillDialogs` from `@auditaur/api` 0.11.0 or later. Tauri's internal invoke can't be patched, so the wrapper replaces the plugin module:
+
+```ts
+// src/dialogs.ts — the app's only import of the dialog plugin
+import * as dialog from '@tauri-apps/plugin-dialog';
+import { withDrillDialogs } from '@auditaur/api';
+
+export const { open, save, ask, confirm, message } = withDrillDialogs(dialog);
+```
+
+A lint rule keeps direct imports out:
+
+```json
+"no-restricted-imports": ["error", { "paths": [{ "name": "@tauri-apps/plugin-dialog", "message": "Import from src/dialogs instead." }] }]
+```
+
+Outside a drill the wrapper calls the real plugin. The runner arms it only in suites with `dialog` steps, for each test (and non-empty `beforeAll`/`afterAll`), on a lease that lapses shortly after the test's time budget, and re-arms it after `reload`; answers queued before a reload fail as dropped. A gate held past the lease disarms it, which fails loudly. The stub returns paths as-is: it doesn't add them to the fs or asset scope, so allow fixture paths in the app's capabilities.
 
 ### Locators
 
