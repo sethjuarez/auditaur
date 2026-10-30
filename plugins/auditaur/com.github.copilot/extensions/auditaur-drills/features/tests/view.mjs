@@ -1,7 +1,11 @@
 // The explorer's view model: every suite and test with its latest result and recent history, and
 // whether the view's filter shows it.
 
+import { join } from "node:path";
 import { loadSuites } from "../../lib/cli.mjs";
+import { readEvents } from "../../lib/events.mjs";
+import { pendingGates } from "../../lib/gates.mjs";
+import { RUNS_DIR } from "../../lib/paths.mjs";
 import { readRuns, resultOf } from "../../lib/runs.mjs";
 
 function matches(test, filter) {
@@ -10,7 +14,8 @@ function matches(test, filter) {
     return words.every((word) => haystack.includes(word));
 }
 
-export function buildView(state, runs) {
+// `gates` are the active run's pending gates; the Tests page only says one is waiting and for how long.
+export function buildView(state, runs, gates = []) {
     const { filter } = state.view.get();
     const byRun = runs.map((run) => {
         const tests = new Map();
@@ -61,6 +66,7 @@ export function buildView(state, runs) {
             done: tests.filter((test) => !["pending", "running"].includes(test.status)).length,
             total: tests.length,
             current: tests.find((test) => test.status === "running")?.title ?? null,
+            gates: gates.map(({ test, name, since, timeoutMs }) => ({ test, name, since, timeoutMs })),
         };
     }
     return {
@@ -84,7 +90,10 @@ export function buildView(state, runs) {
 
 export async function snapshot(state, force = false) {
     await loadSuites(state, force);
-    return buildView(state, await readRuns(state));
+    const runs = await readRuns(state);
+    const active = runs.find((run) => run.status === "running");
+    const gates = active ? await pendingGates(active, await readEvents(join(state.workspace, RUNS_DIR, active.runId, "events.jsonl"))) : [];
+    return buildView(state, runs, gates);
 }
 
 // The tests the filter leaves on screen, as the agent would name them.

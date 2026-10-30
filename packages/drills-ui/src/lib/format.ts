@@ -12,3 +12,11 @@ export function since(ts: string | null | undefined): number | null {
 }
 
 export const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+// Milliseconds as a clock, rounded up so it never shows 0:00 early: "9:05" or "1:02:03".
+export function clock(raw: number): string {
+  const total = Math.max(0, Math.ceil(raw / 1000));
+  const [h, m, s] = [Math.floor(total / 3600), Math.floor((total % 3600) / 60), total % 60];
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}

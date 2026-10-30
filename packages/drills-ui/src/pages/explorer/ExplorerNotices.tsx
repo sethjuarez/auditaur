@@ -1,6 +1,7 @@
 // The explorer's messages: run progress, failed actions or launches, and unreadable drill files.
 import { ProgressBar } from "@primer/react";
 import { Notice, Notices } from "../../components/Notice";
+import { GateWaitingNotice } from "./GateWaitingNotice";
 import type { ExplorerState } from "./types";
 
 interface Props {
@@ -15,6 +16,7 @@ export function ExplorerNotices({ state, actionError, loadError }: Props) {
   const pct = active?.total ? Math.round((100 * active.done) / active.total) : 0;
   return (
     <Notices>
+      {active?.gates?.length ? <GateWaitingNotice runId={active.runId} gates={active.gates} /> : null}
       {active && (
         <Notice tone="info" className="run" title={<span className="nums">Running {active.done}/{active.total}{active.current ? ` · ${active.current}` : ""}</span>}>
           <ProgressBar progress={pct} barSize="small" aria-label="Run progress" className="run-progress" />

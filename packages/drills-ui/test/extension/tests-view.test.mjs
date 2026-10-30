@@ -22,3 +22,10 @@ test("each run lists its suite names", () => {
     assert.deepEqual(view.runs[0].suites, ["auth"]);
     assert.equal(view.runs[0].totals.skipped, 1);
 });
+
+test("the active run's pending gates reach the Tests page, trimmed to what the banner shows", () => {
+    const active = { ...run("r3", "running", null), status: "running" };
+    const gate = { requestId: "q", test: "auth › t", name: "Enter code", since: "2026-10-30T00:00:00Z", timeoutMs: 600_000, instructions: "x", choices: [] };
+    const view = buildView(state([]), [active], [gate]);
+    assert.deepEqual(view.active.gates, [{ test: "auth › t", name: "Enter code", since: "2026-10-30T00:00:00Z", timeoutMs: 600_000 }]);
+});

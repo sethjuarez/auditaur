@@ -17,6 +17,7 @@
 .gate h2 { margin: 0; flex: 1; min-width: 0; font-size: var(--text-body-size-medium); font-weight: var(--base-text-weight-semibold); }
 .gate-body { display: flex; flex-direction: column; gap: var(--base-size-8); padding: var(--base-size-12); }
 .gate-meta, .gate-note { font-size: var(--text-caption-size); }
+.gate-countdown.urgent { color: var(--fgColor-attention); font-weight: var(--base-text-weight-semibold); }
 .gate p { margin: 0; }
 .gate-instructions { white-space: pre-wrap; }
 .gate-fields { display: flex; flex-direction: column; gap: var(--base-size-12); }
