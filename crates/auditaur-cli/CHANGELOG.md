@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.13](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.12...auditaur-cli-v0.4.13) - 2026-10-30
+
+### Added
+
+- *(drills)* save app output, aria snapshot, and an evidence manifest on failure ([#95](https://github.com/sethjuarez/auditaur/pull/95))
+
+### Fixed
+
+- *(drills)* wait for the whole app process tree to exit before the next launch ([#96](https://github.com/sethjuarez/auditaur/pull/96))
+
 ## [0.4.12](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.11...auditaur-cli-v0.4.12) - 2026-10-29
 
 ### Fixed
