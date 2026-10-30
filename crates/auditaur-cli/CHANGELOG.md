@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.22](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.21...auditaur-cli-v0.4.22) - 2026-10-30
+
+### Added
+
+- *(drill)* answer native dialogs with dialog steps (AR-24) ([#138](https://github.com/sethjuarez/auditaur/pull/138))
+
 ## [0.4.21](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.20...auditaur-cli-v0.4.21) - 2026-10-30
 
 ### Added
