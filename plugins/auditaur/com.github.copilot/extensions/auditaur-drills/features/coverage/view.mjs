@@ -43,13 +43,16 @@ async function coverageFor(state, run, fresh) {
     return state.coverageLoad.promise;
 }
 
+// The apps the run's suites launched, by service name, so the store picker can suggest their stores.
+export const runApps = (run) => [...new Set((run.suites ?? []).map((suite) => suite.app?.serviceName).filter((name) => typeof name === "string" && name))];
+
 export async function coverageView(state, { fresh = false } = {}) {
     const { run, runs } = await pickRun(state);
     const view = {
         pinned: state.runId,
         runs: runs.map((candidate) => ({ runId: candidate.runId, status: candidate.status })),
         dbs: state.dbs,
-        run: run ? { runId: run.runId, status: run.status } : null,
+        run: run ? { runId: run.runId, status: run.status, apps: runApps(run) } : null,
         coverage: null,
         error: null,
     };
@@ -60,12 +63,16 @@ export async function coverageView(state, { fresh = false } = {}) {
 
 const unexercised = (items, key) => items.filter((item) => !item.tests.length).map((item) => item[key]);
 
+export const hasBaseline = (coverage) => (coverage.sources ?? []).some((source) => !source.error);
+
 export function coverageSummary(view) {
     const coverage = view.coverage;
     if (!coverage) return { run: view.run, error: view.error, dbs: view.dbs };
     return {
         run: view.run,
         sources: coverage.sources,
+        // Without a readable store, every count is out of only what the run touched.
+        baseline: hasBaseline(coverage),
         totals: coverage.totals,
         unexercisedCommands: unexercised(coverage.commands, "command"),
         unexercisedEvents: unexercised(coverage.events, "event"),

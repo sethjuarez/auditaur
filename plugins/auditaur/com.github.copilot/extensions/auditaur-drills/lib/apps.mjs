@@ -23,5 +23,7 @@ export async function listAppStores(state) {
             sessions: 1,
         });
     }
-    return { stores: [...stores.values()], error: null };
+    // Newest first: stale stores from old sessions sink to the bottom.
+    const newest = (store) => Date.parse(store.startedAt ?? "") || 0;
+    return { stores: [...stores.values()].sort((a, b) => newest(b) - newest(a)), error: null };
 }

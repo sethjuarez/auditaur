@@ -6,7 +6,7 @@ import { CommandList } from "./CommandList";
 import { CoverageMap } from "./CoverageMap";
 import { EventList } from "./EventList";
 import { TestCoverageRow } from "./TestCoverageRow";
-import { shownCommands, shownEvents, shownTests, type Coverage, type CoverageState } from "./types";
+import { hasBaseline, shownCommands, shownEvents, shownTests, type Coverage, type CoverageState } from "./types";
 
 const EMPTY = {
   commands: "No IPC commands were recorded. Compare with app telemetry to list commands no test called.",
@@ -17,8 +17,11 @@ const EMPTY = {
 
 function CoverageList({ coverage, ui, comparing }: { coverage: Coverage; ui: CoverageState["ui"]; comparing: boolean }) {
   const titles = new Map(coverage.tests.map((test) => [test.id, test.title]));
+  const baseline = hasBaseline(coverage);
   const empty = ui.missedOnly
-    ? <EmptyState icon={CheckCircleIcon} title="Nothing unexercised here." />
+    ? baseline || ui.tab === "tests"
+      ? <EmptyState icon={CheckCircleIcon} title="Nothing unexercised here." />
+      : <EmptyState icon={InfoIcon} title="Nothing can show as unexercised without app telemetry to compare with." />
     : <EmptyState icon={InfoIcon} title={EMPTY[ui.tab]} />;
   if (ui.tab === "commands") {
     const items = shownCommands(coverage, ui.missedOnly);

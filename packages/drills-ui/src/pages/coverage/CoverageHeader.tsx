@@ -12,7 +12,7 @@ import { CoverageMeters } from "./CoverageMeters";
 import { CoverageTabs } from "./CoverageTabs";
 import { MissedToggle } from "./MissedToggle";
 import { StorePicker } from "./StorePicker";
-import type { CoverageState, CoverageTab } from "./types";
+import { hasBaseline, type CoverageState, type CoverageTab } from "./types";
 
 interface Props {
   state: CoverageState | null;
@@ -46,14 +46,14 @@ export function CoverageHeader({ state, loadError, busy, select, reload, setTab,
           <span id="open-in"><OpenInLinks caption="Open this run in" links={runLinks(run.runId, "coverage")} /></span>
         </div>
       )}
-      {coverage && <CoverageMeters totals={coverage.totals} />}
+      {coverage && <CoverageMeters totals={coverage.totals} baseline={hasBaseline(coverage)} />}
       {coverage && state && (
         <div className="row coverage-toolbar">
           <CoverageTabs coverage={coverage} tab={state.ui.tab} missedOnly={state.ui.missedOnly} pick={setTab} />
           <MissedToggle checked={state.ui.missedOnly} set={setMissedOnly} />
         </div>
       )}
-      {state && <StorePicker dbs={state.dbs} busy={busy} apply={setStores} />}
+      {state && <StorePicker dbs={state.dbs} apps={run?.apps ?? []} busy={busy} apply={setStores} />}
     </PageHeader>
   );
 }

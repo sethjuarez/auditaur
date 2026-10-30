@@ -27,6 +27,8 @@
 .coverage-stores-using { margin-left: auto; font-size: var(--text-caption-size); }
 .coverage-stores-body { display: flex; flex-direction: column; gap: var(--base-size-8); padding: var(--base-size-12); }
 .coverage-stores-lede { margin: 0; }
+.coverage-stores-suggest { gap: var(--base-size-8); align-items: center; }
+.coverage-no-baseline { margin: 0; display: flex; gap: var(--base-size-4); align-items: center; font-size: var(--text-body-size-small); }
 #store-error:empty { display: none; }
 .coverage-stores-loading { display: flex; padding: var(--base-size-8) 0; }
 .coverage-stores-none { padding: var(--base-size-4) 0; }
