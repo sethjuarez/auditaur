@@ -1,7 +1,8 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { AuditaurExporter } from './exporter';
 import type { AuditaurInvokeArgs, AuditaurTraceContextCarrier, SpanRecord, TauriIpcCallRecord } from './types';
-import { currentWindowLabel, errorRecordFields, maybePayload, nowUnixNanos, randomSpanId, randomTraceId, summarizePayload } from './utils';
+import { recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
+import { currentWindowLabel, errorRecordFields, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
 
 export const AUDITAUR_TRACE_CONTEXT_ARG = 'auditaurTraceContext';
 export const AUDITAUR_TRACEPARENT_HEADER = 'traceparent';
@@ -18,8 +19,7 @@ export async function instrumentedInvoke<T>(
   exporter: AuditaurExporter,
   command: string,
   args: AuditaurInvokeArgs | undefined,
-  maxPayloadBytes: number,
-  captureFullPayloads: boolean,
+  policy: PayloadPolicy,
   propagateTraceContext: boolean,
 ): Promise<T> {
   const start = nowUnixNanos();
@@ -33,14 +33,17 @@ export async function instrumentedInvoke<T>(
   try {
     const result = await tauriInvoke<T>(command, invokeArgs, invokeOptions);
     const end = nowUnixNanos();
-    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, args, maxPayloadBytes, captureFullPayloads));
-    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, args, result, maxPayloadBytes, captureFullPayloads));
+    const recordedArgs = recordPayload(policy, 'invokeArgs', command, args ?? {});
+    const recordedResult = recordPayload(policy, 'invokeResult', command, result);
+    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, recordedArgs));
+    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'OK', undefined, windowLabel, recordedArgs, recordedResult.summary));
     return result;
   } catch (error) {
     const fields = errorRecordFields(error);
     const end = nowUnixNanos();
-    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, args, maxPayloadBytes, captureFullPayloads));
-    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, args, undefined, maxPayloadBytes, captureFullPayloads));
+    const recordedArgs = recordPayload(policy, 'invokeArgs', command, args ?? {});
+    exporter.addSpan(invokeSpan(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, recordedArgs));
+    exporter.addTauriIpcCall(ipcCall(command, traceId, spanId, start, end, 'ERROR', fields.message, windowLabel, recordedArgs, undefined));
     throw error;
   }
 }
@@ -79,9 +82,7 @@ function invokeSpan(
   statusCode: 'OK' | 'ERROR',
   statusMessage: string | undefined,
   windowLabel: string,
-  args: Record<string, unknown> | undefined,
-  maxPayloadBytes: number,
-  captureFullPayloads: boolean,
+  args: RecordedPayload,
 ): SpanRecord {
   return {
     sessionId: '',
@@ -97,8 +98,8 @@ function invokeSpan(
       'tauri.command': command,
       'tauri.window.label': windowLabel,
       'auditaur.source': 'frontend',
-      'tauri.command.args.summary': summarizePayload(args ?? {}, maxPayloadBytes),
-      'tauri.command.args': maybePayload(args ?? {}, captureFullPayloads, maxPayloadBytes),
+      'tauri.command.args.summary': args.summary,
+      'tauri.command.args': args.json,
     },
     source: 'frontend',
   };
@@ -113,10 +114,8 @@ function ipcCall(
   status: 'OK' | 'ERROR',
   errorMessage: string | undefined,
   windowLabel: string,
-  args: Record<string, unknown> | undefined,
-  result: unknown,
-  maxPayloadBytes: number,
-  captureFullPayloads: boolean,
+  args: RecordedPayload,
+  resultSummary: string | undefined,
 ): TauriIpcCallRecord {
   return {
     sessionId: '',
@@ -128,8 +127,8 @@ function ipcCall(
     traceId,
     spanId,
     windowLabel,
-    argsJson: maybePayload(args ?? {}, captureFullPayloads, maxPayloadBytes),
+    argsJson: args.json,
     argsRedacted: true,
-    resultSummary: status === 'OK' ? summarizePayload(result, maxPayloadBytes) : undefined,
+    resultSummary,
   };
 }

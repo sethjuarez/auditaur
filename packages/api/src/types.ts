@@ -8,7 +8,20 @@ export interface AuditaurFrontendConfig {
   instrumentTauriInvoke?: boolean;
   propagateTauriInvokeTraceContext?: boolean;
   instrumentTauriEvents?: boolean;
+  /** Record whole invoke args and event payloads as JSON (still key-redacted). Default `false`. */
   captureFullPayloads?: boolean;
+  /**
+   * Record text summaries of invoke args/results and event payloads. Default `true`. Summaries are
+   * key-redacted and capped at `maxPayloadBytes`. Set `false` to record no payload content at all.
+   */
+  payloadSummaries?: boolean;
+  /** Extra keys whose values become `[REDACTED]` (case-insensitive, any depth), on top of the defaults. */
+  redactKeys?: string[];
+  /**
+   * Rewrite a payload before it is recorded, e.g. drop a transcript. Runs before key redaction.
+   * If it throws, the payload is recorded as `[REDACTED]`.
+   */
+  redactPayload?: AuditaurRedactPayload;
   maxPayloadBytes?: number;
   batchIntervalMs?: number;
   maxBatchSize?: number;
@@ -25,6 +38,14 @@ export interface AuditaurClient {
   flush(): Promise<void>;
   shutdown(): Promise<void>;
 }
+
+export type AuditaurPayloadKind = 'invokeArgs' | 'invokeResult' | 'eventPayload';
+
+/** `name` is the command or event name. Return what should be recorded in place of `payload`. */
+export type AuditaurRedactPayload = (
+  payload: unknown,
+  context: { kind: AuditaurPayloadKind; name: string },
+) => unknown;
 
 export interface AuditaurDriveBridgeConfig {
   pollIntervalMs?: number;

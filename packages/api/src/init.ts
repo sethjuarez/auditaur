@@ -7,6 +7,7 @@ import { instrumentedEmit, instrumentedEmitTo, instrumentedListen } from './even
 import { AuditaurExporter } from './exporter';
 import { instrumentedInvoke } from './invoke';
 import { createAuditaurSpanExporter } from './otel';
+import { payloadPolicy } from './payload';
 import type { AuditaurClient, AuditaurFrontendConfig, AuditaurInvokeArgs } from './types';
 
 export type { AuditaurClient, AuditaurFrontendConfig } from './types';
@@ -17,7 +18,7 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
   }
 
   const maxPayloadBytes = config.maxPayloadBytes ?? 16_384;
-  const captureFullPayloads = config.captureFullPayloads ?? false;
+  const policy = payloadPolicy(config);
   const propagateTauriInvokeTraceContext = config.propagateTauriInvokeTraceContext ?? true;
   const exporter = new AuditaurExporter(
     config.batchIntervalMs ?? 1_000,
@@ -44,8 +45,7 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
           exporter,
           command,
           args,
-          maxPayloadBytes,
-          captureFullPayloads,
+          policy,
           propagateTauriInvokeTraceContext,
         );
       }
@@ -53,19 +53,19 @@ export async function initAuditaur(config: AuditaurFrontendConfig): Promise<Audi
     },
     emit(event: string, payload?: unknown): Promise<void> {
       if (config.instrumentTauriEvents ?? true) {
-        return instrumentedEmit(exporter, event, payload, maxPayloadBytes, captureFullPayloads);
+        return instrumentedEmit(exporter, event, payload, policy);
       }
       return tauriEmit(event, payload);
     },
     emitTo(target: string, event: string, payload?: unknown): Promise<void> {
       if (config.instrumentTauriEvents ?? true) {
-        return instrumentedEmitTo(exporter, target, event, payload, maxPayloadBytes, captureFullPayloads);
+        return instrumentedEmitTo(exporter, target, event,         payload, policy);
       }
       return tauriEmitTo(target, event, payload);
     },
     listen<T>(event: string, handler: Parameters<typeof tauriListen<T>>[1]): Promise<() => void> {
       if (config.instrumentTauriEvents ?? true) {
-        return instrumentedListen<T>(exporter, event, handler, maxPayloadBytes, captureFullPayloads);
+        return instrumentedListen<T>(exporter, event, handler, policy);
       }
       return tauriListen<T>(event, handler);
     },
