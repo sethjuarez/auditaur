@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/sethjuarez/auditaur/compare/api-v0.10.0...api-v0.10.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **api:** withhold a console error whose text redactConsole removed ([#128](https://github.com/sethjuarez/auditaur/issues/128)) ([bce28a2](https://github.com/sethjuarez/auditaur/commit/bce28a26f8c6dde27921d19ceb740d73ed713cc3))
+
 ## [0.10.0](https://github.com/sethjuarez/auditaur/compare/api-v0.9.1...api-v0.10.0) (2026-10-30)
 
 
