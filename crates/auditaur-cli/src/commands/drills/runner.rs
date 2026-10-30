@@ -63,6 +63,12 @@ impl StepCtx<'_> {
     pub fn expired(&self) -> bool {
         Instant::now() >= self.deadline
     }
+
+    /// A run-dir file name for this step's artifact: `step-<n>-<rest>`, where `n` is the 1-based
+    /// step number reports and the canvas show (`step_index` is 0-based).
+    pub fn artifact(&self, rest: &str) -> String {
+        format!("step-{}-{rest}", self.step_index + 1)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -905,7 +911,7 @@ fn run_command(
         report.remove("always");
     }
     if let Ok(bytes) = serde_json::to_vec_pretty(&shown) {
-        let file = format!("step-{}-run.json", ctx.step_index);
+        let file = ctx.artifact("run.json");
         if let Err(error) = ctx
             .writer
             .attach("command output", "application/json", &file, &bytes)

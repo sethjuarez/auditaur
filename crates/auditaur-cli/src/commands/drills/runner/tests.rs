@@ -461,6 +461,8 @@ fn run_steps_check_exit_code_and_output_in_order() {
     );
     let attempt = read_attempt(&ran.dir, &test(&ran, "ok").attempts[0]).unwrap();
     let saved = &attempt.steps[1].attachments[0];
+    // Named by the 1-based step number reports show: steps[1] is "Step 2".
+    assert!(saved.path.ends_with("step-2-run.json"), "{}", saved.path);
     let written = fs::read_to_string(ran.dir.join(&saved.path)).unwrap();
     assert!(written.contains("out of git log -1"), "{written}");
     assert!(!written.contains("secret-value"), "{written}");
