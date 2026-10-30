@@ -7,15 +7,35 @@
 //! in. It lasts across reloads. WebView2 only; WebKit has no equivalent.
 
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use tauri::{AppHandle, Manager, Runtime};
 
 static EMULATED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
+type Emulator = Box<dyn Fn(Option<&str>) + Send + Sync>;
+
+/// Set when the drive bridge registers. The poll command can't take an `AppHandle` without
+/// changing its public signature, so it reaches the app through this.
+static EMULATOR: OnceLock<Emulator> = OnceLock::new();
+
+/// Remember `app` so a later drive request can turn on focus emulation.
+pub(crate) fn arm<R: Runtime>(app: &AppHandle<R>) {
+    if EMULATOR.get().is_none() {
+        let app = app.clone();
+        let _ = EMULATOR.set(Box::new(move |label| emulate(&app, label)));
+    }
+}
+
 /// Turn on focus emulation for the window `label` names (every window when `None`), once each.
 /// Best effort: a failure is logged and never fails the drive request.
-pub(crate) fn emulate_for_drive<R: Runtime>(app: &AppHandle<R>, label: Option<&str>) {
+pub(crate) fn emulate_for_drive(label: Option<&str>) {
+    if let Some(emulate) = EMULATOR.get() {
+        emulate(label);
+    }
+}
+
+fn emulate<R: Runtime>(app: &AppHandle<R>, label: Option<&str>) {
     let windows: Vec<_> = match label {
         Some(label) => app.get_webview_window(label).into_iter().collect(),
         None => app.webview_windows().into_values().collect(),

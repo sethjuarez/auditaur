@@ -63,6 +63,7 @@ pub async fn register_drive_bridge<R: Runtime>(
     window_label: Option<String>,
 ) -> Result<(), AuditaurError> {
     state.register_drive_bridge(window_label)?;
+    crate::focus::arm(&app);
     if let Some((bridge_dir, alive)) = state.start_bridge_notifier_if_needed() {
         crate::start_drive_bridge_request_notifier(&app, bridge_dir, alive);
     }
@@ -70,8 +71,7 @@ pub async fn register_drive_bridge<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn poll_drive_bridge_request<R: Runtime>(
-    app: AppHandle<R>,
+pub async fn poll_drive_bridge_request(
     state: State<'_, AuditaurState>,
     window_label: Option<String>,
 ) -> Result<Option<auditaur_core::drive_bridge::DriveBridgeRequest>, AuditaurError> {
@@ -79,7 +79,7 @@ pub async fn poll_drive_bridge_request<R: Runtime>(
     if request.is_some() {
         // Before the first action, make the page behave as focused (see `focus`).
         let _ = tauri::async_runtime::spawn_blocking(move || {
-            crate::focus::emulate_for_drive(&app, window_label.as_deref())
+            crate::focus::emulate_for_drive(window_label.as_deref())
         })
         .await;
     }
