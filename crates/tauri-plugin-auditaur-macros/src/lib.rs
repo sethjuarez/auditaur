@@ -41,6 +41,10 @@ fn expand_instrument_ipc(attr: TokenStream2, item: TokenStream2) -> TokenStream2
         Ok(args) => args,
         Err(error) => return error.to_compile_error(),
     };
+    let mut function = match syn::parse2::<ItemFn>(item) {
+        Ok(function) => function,
+        Err(error) => return error.to_compile_error(),
+    };
 
     let auditaur_crate = dependency_crate_path("tauri-plugin-auditaur", "tauri_plugin_auditaur");
     let tracing_crate = dependency_crate_path("tracing", "tracing");
@@ -51,14 +55,16 @@ fn expand_instrument_ipc(attr: TokenStream2, item: TokenStream2) -> TokenStream2
         args,
         quote!(auditaur_trace_context),
         quote!(#traceparent_field),
+        status_fields(&tracing_crate),
     ) {
         Ok(args) => args,
         Err(error) => return error.to_compile_error(),
     };
+    record_outcome(&mut function, &auditaur_crate);
 
     quote! {
         #[#tracing_crate::instrument(#(#instrument_args),*)]
-        #item
+        #function
     }
 }
 
@@ -111,10 +117,12 @@ fn expand_auditaur_command(attr: TokenStream2, item: TokenStream2) -> TokenStrea
         args,
         quote!(#injected_skip_args),
         quote!(#traceparent_field),
+        status_fields(&tracing_crate),
     ) {
         Ok(args) => args,
         Err(error) => return error.to_compile_error(),
     };
+    record_outcome(&mut function, &auditaur_crate);
 
     quote! {
         #[#tauri_crate::command]
@@ -123,10 +131,60 @@ fn expand_auditaur_command(attr: TokenStream2, item: TokenStream2) -> TokenStrea
     }
 }
 
+/// Span fields the command's outcome is recorded into when it returns, keyed by their
+/// token text so ones the caller already declares are not added twice.
+fn status_fields(tracing_crate: &TokenStream2) -> Vec<(String, TokenStream2)> {
+    ["status_code", "status_message"]
+        .into_iter()
+        .map(|name| {
+            let ident = format_ident!("{name}");
+            (
+                format!("otel . {name}"),
+                quote!(otel.#ident = #tracing_crate::field::Empty),
+            )
+        })
+        .collect()
+}
+
+/// Wrap the body so the command span records OK, or ERROR with the error, when it returns.
+///
+/// The probe is resolved at the concrete return type, so a `Result` behind any alias still
+/// reports its error. `impl Trait` returns cannot be named in a binding and keep an unset
+/// status.
+fn record_outcome(function: &mut ItemFn, auditaur_crate: &TokenStream2) {
+    let return_type = match &function.sig.output {
+        syn::ReturnType::Default => quote!(()),
+        syn::ReturnType::Type(_, ty) => {
+            if token_stream_mentions(&quote!(#ty), "impl") {
+                return;
+            }
+            quote!(#ty)
+        }
+    };
+    let block = &function.block;
+    let call = if function.sig.asyncness.is_some() {
+        quote!(async move #block.await)
+    } else {
+        quote!((move || -> #return_type #block)())
+    };
+    let status = quote!(#auditaur_crate::command_status);
+    *function.block = syn::parse_quote!({
+        #[allow(clippy::redundant_closure_call, clippy::redundant_async_block)]
+        let auditaur_command_result: #return_type = #call;
+        {
+            #[allow(unused_imports)]
+            use #status::{PlainOutcome as _, ResultOutcome as _, SerializableErrorOutcome as _};
+            #status::record((&&#status::OutcomeProbe(&auditaur_command_result)).auditaur_outcome());
+        }
+        auditaur_command_result
+    });
+}
+
 fn merge_instrument_args(
     args: InstrumentArgs,
     injected_skip_arg: TokenStream2,
     traceparent_field: TokenStream2,
+    status_fields: Vec<(String, TokenStream2)>,
 ) -> syn::Result<Vec<TokenStream2>> {
     let mut instrument_args = Vec::new();
     let mut skip_args = None;
@@ -171,7 +229,13 @@ fn merge_instrument_args(
     if !skip_all {
         instrument_args.push(quote!(skip(#skip_args)));
     }
-    instrument_args.push(quote!(fields(#fields_args)));
+    let declared = fields_args.to_string();
+    let missing_status_fields: Vec<_> = status_fields
+        .into_iter()
+        .filter(|(name, _)| !declared.contains(name.as_str()))
+        .map(|(_, field)| field)
+        .collect();
+    instrument_args.push(quote!(fields(#fields_args #(, #missing_status_fields)*)));
 
     Ok(instrument_args)
 }
@@ -288,6 +352,21 @@ mod tests {
         assert!(expanded.contains("skip (app , auditaur_trace_context)"));
         assert!(expanded.contains("command = \"emit_backend_event\""));
         assert!(expanded.contains("traceparent ="));
+    }
+
+    #[test]
+    fn declares_only_the_status_fields_the_caller_did_not() {
+        let expanded = expand_instrument_ipc(
+            quote!(fields(status_code = 3, otel.status_message = "custom")),
+            quote! {
+                fn load_user(auditaur_trace_context: Option<IpcTraceContext>) {}
+            },
+        )
+        .to_string();
+
+        assert!(expanded.contains("otel . status_code = :: tracing :: field :: Empty"));
+        assert!(!expanded.contains("otel . status_message = :: tracing :: field :: Empty"));
+        assert!(expanded.contains("command_status :: record"));
     }
 
     #[test]

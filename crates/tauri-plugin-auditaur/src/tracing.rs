@@ -120,25 +120,26 @@ where
             return;
         };
         let metadata = span.metadata();
+        let mut attributes = data.attributes;
+        let (status_code, status_message) = take_status(&mut attributes);
         let record = SpanRecord {
             session_id: sink.session_id.clone(),
             trace_id: data.trace_id,
             span_id: data.span_id,
             parent_span_id: data.parent_span_id,
             name: metadata.name().to_string(),
-            kind: data
-                .attributes
+            kind: attributes
                 .get("otel.kind")
                 .and_then(Value::as_str)
                 .map(ToString::to_string)
                 .or_else(|| Some("internal".to_string())),
             start_time_unix_nanos: data.start_time_unix_nanos,
             end_time_unix_nanos: Some(now_unix_nanos()),
-            status_code: None,
-            status_message: None,
+            status_code,
+            status_message,
             scope_name: Some(scope_name(metadata.target())),
             scope_version: None,
-            attributes: data.attributes,
+            attributes,
             source: TelemetrySource::Backend,
         };
         if let Ok(store) = sink.store.lock() {
@@ -183,6 +184,22 @@ where
             let _ = store.insert_log(&record);
         };
     }
+}
+
+/// Lift the OpenTelemetry `otel.status_code` / `otel.status_message` span fields (as
+/// `tracing-opentelemetry` names them) out of the attributes into the span's status.
+fn take_status(attributes: &mut Value) -> (Option<String>, Option<String>) {
+    let Value::Object(fields) = attributes else {
+        return (None, None);
+    };
+    let code = fields
+        .remove("otel.status_code")
+        .and_then(|value| value.as_str().map(str::to_ascii_uppercase))
+        .filter(|code| matches!(code.as_str(), "OK" | "ERROR"));
+    let message = fields
+        .remove("otel.status_message")
+        .and_then(|value| value.as_str().map(ToString::to_string));
+    (code, message)
 }
 
 #[derive(Debug, Clone)]
@@ -491,6 +508,99 @@ mod tests {
             Some("00112233445566778899aabbccddeeff")
         );
         assert_eq!(logs[0].span_id.as_deref(), Some(spans[0].span_id.as_str()));
+    }
+
+    #[test]
+    fn otel_status_fields_become_the_span_status() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = test_state(&temp);
+        let session_id = state.session_id.clone().unwrap();
+        let subscriber = Registry::default().with(state.tracing_layer());
+
+        tracing::subscriber::with_default(subscriber, || {
+            let ok = tracing::info_span!("saved", otel.status_code = tracing::field::Empty);
+            ok.record("otel.status_code", "OK");
+            drop(ok);
+            let failed = tracing::info_span!(
+                "failed",
+                otel.status_code = "error",
+                otel.status_message = "disk full"
+            );
+            drop(failed);
+            drop(tracing::info_span!("plain"));
+        });
+
+        let store = store_for(&temp, &session_id);
+        let spans = store.list_spans(&SpanQuery::default()).unwrap();
+        let by_name = |name: &str| spans.iter().find(|span| span.name == name).unwrap();
+        assert_eq!(by_name("saved").status_code.as_deref(), Some("OK"));
+        assert_eq!(by_name("failed").status_code.as_deref(), Some("ERROR"));
+        assert_eq!(
+            by_name("failed").status_message.as_deref(),
+            Some("disk full")
+        );
+        assert!(by_name("failed")
+            .attributes
+            .get("otel.status_code")
+            .is_none());
+        assert_eq!(by_name("plain").status_code, None);
+    }
+
+    #[crate::instrument_ipc]
+    fn saves(auditaur_trace_context: Option<crate::IpcTraceContext>) -> Result<u8, String> {
+        Ok(1)
+    }
+
+    #[crate::instrument_ipc]
+    fn refuses(auditaur_trace_context: Option<crate::IpcTraceContext>) -> Result<u8, String> {
+        Err("disk full".into())
+    }
+
+    type CmdOutcome = Result<(), String>;
+
+    #[crate::instrument_ipc]
+    async fn refuses_later(auditaur_trace_context: Option<crate::IpcTraceContext>) -> CmdOutcome {
+        Err::<(), _>("offline".to_string())?;
+        Ok(())
+    }
+
+    #[crate::instrument_ipc]
+    fn names(auditaur_trace_context: Option<crate::IpcTraceContext>) -> String {
+        "auditaur".into()
+    }
+
+    #[test]
+    fn instrumented_commands_record_their_outcome() {
+        let _guard = crate::test_support::global_state_lock();
+        let temp = TempDir::new().unwrap();
+        let state = test_state(&temp);
+        let session_id = state.session_id.clone().unwrap();
+        let subscriber = Registry::default().with(state.tracing_layer());
+
+        tracing::subscriber::with_default(subscriber, || {
+            saves(None).unwrap();
+            refuses(None).unwrap_err();
+            tauri::async_runtime::block_on(refuses_later(None)).unwrap_err();
+            names(None);
+        });
+
+        let store = store_for(&temp, &session_id);
+        let spans = store.list_spans(&SpanQuery::default()).unwrap();
+        let status = |name: &str| {
+            let span = spans.iter().find(|span| span.name == name).unwrap();
+            (span.status_code.clone(), span.status_message.clone())
+        };
+        assert_eq!(status("saves"), (Some("OK".into()), None));
+        assert_eq!(
+            status("refuses"),
+            (Some("ERROR".into()), Some("disk full".into()))
+        );
+        assert_eq!(
+            status("refuses_later"),
+            (Some("ERROR".into()), Some("offline".into()))
+        );
+        assert_eq!(status("names"), (Some("OK".into()), None));
     }
 
     #[test]

@@ -201,12 +201,16 @@ pub fn judge(expectation: &TelemetryExpectation, telemetry: &RelatedTelemetry) -
             let what =
                 format!("span `{}`{status_text}", name_label(name)) + &with_attributes(attributes);
             let seen = || {
-                let mut names = BTreeMap::<&str, usize>::new();
+                let mut names = BTreeMap::<(&str, &str), usize>::new();
                 for span in &telemetry.spans {
-                    *names.entry(&span.name).or_default() += 1;
+                    *names
+                        .entry((&span.name, span_status(span).as_str()))
+                        .or_default() += 1;
                 }
                 listing(
-                    names.into_iter().map(|(name, n)| format!("{name} ×{n}")),
+                    names
+                        .into_iter()
+                        .map(|((name, status), n)| format!("{name} ({status}) ×{n}")),
                     "no spans",
                 )
             };
@@ -623,7 +627,10 @@ mod tests {
             &telemetry,
         );
         assert_eq!(missing.judgement, Judgement::Pending);
-        assert_eq!(missing.actual, "0 matching; seen: chat.send ×2, startup ×1");
+        assert_eq!(
+            missing.actual,
+            "0 matching; seen: chat.send (error) ×1, chat.send (ok) ×1, startup (unset) ×1"
+        );
     }
 
     #[test]
