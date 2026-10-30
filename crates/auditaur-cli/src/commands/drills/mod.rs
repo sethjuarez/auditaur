@@ -670,10 +670,42 @@ pub fn validate(options: ValidateOptions) -> Result<i32> {
     Ok(i32::from(!valid))
 }
 
-/// Missing default directories mean "no drills yet" rather than an error.
+/// Missing default directories mean "no drills yet" rather than an error. Drill files elsewhere
+/// under `.auditaur` are not run, so they are named rather than silently skipped.
 fn discover_or_empty(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let existing: Vec<PathBuf> = roots.iter().filter(|root| root.exists()).cloned().collect();
+    for stray in stray_drill_files(Path::new(".auditaur")) {
+        eprintln!(
+            "warning: `{}` is outside {DEFAULT_DRILLS_DIR} and won't run; move it under {DEFAULT_DRILLS_DIR}",
+            display_path(&stray)
+        );
+    }
     discover(&existing)
+}
+
+/// Drill files under `auditaur_dir` but outside its `drills` folder (and run output).
+fn stray_drill_files(auditaur_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(auditaur_dir) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => {
+                if !["drills", "drill-runs"].contains(&name.as_str())
+                    && !SKIPPED_DIRS.contains(&name.as_str())
+                {
+                    let _ = walk(&path, &mut files);
+                }
+            }
+            Ok(_) if name.ends_with(DRILL_FILE_SUFFIX) => files.push(path),
+            _ => {}
+        }
+    }
+    files.sort();
+    files
 }
 
 fn format_tags(tags: &[String]) -> String {
@@ -736,6 +768,27 @@ mod tests {
             .collect();
         assert_eq!(names, ["b.drill.json", "nested/a.drill.json"]);
         assert!(discover(&[dir.path().join("missing")]).is_err());
+    }
+
+    #[test]
+    fn names_drill_files_outside_the_drills_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "drills/in.drill.json", SUITE);
+        write(dir.path(), "drill-runs/r/copy.drill.json", SUITE);
+        write(dir.path(), "stray.drill.json", SUITE);
+        write(dir.path(), "tests/also.drill.json", SUITE);
+        write(dir.path(), "config.json", "{}");
+        let names: Vec<String> = stray_drill_files(dir.path())
+            .iter()
+            .map(|file| {
+                file.strip_prefix(dir.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(names, ["stray.drill.json", "tests/also.drill.json"]);
+        assert!(stray_drill_files(&dir.path().join("missing")).is_empty());
     }
 
     #[test]

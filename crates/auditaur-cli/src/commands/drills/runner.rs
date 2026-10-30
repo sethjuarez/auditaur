@@ -1113,8 +1113,13 @@ fn run_command(
         let got = exit_code.map_or("no exit code".to_string(), |code| {
             format!("exit code {code}")
         });
+        let stdout = if text(&shown, "stdout").trim().is_empty() {
+            String::new()
+        } else {
+            format!("; {}", tail("stdout"))
+        };
         return fail(format!(
-            "expected `{}` to exit with {}, got {got}; {}",
+            "expected `{}` to exit with {}, got {got}; {}{stdout}",
             command.run,
             command.exit_code,
             tail("stderr")
