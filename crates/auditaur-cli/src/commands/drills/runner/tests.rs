@@ -1036,12 +1036,12 @@ fn setup_hook_failure_skips_launch_and_teardown_respects_always() {
         "setup stops at the first failure, launch never happens, teardown skips non-always hooks"
     );
     let suite = &ran.report.suites[0];
-    assert!(suite
-        .error
-        .as_ref()
-        .unwrap()
-        .message
-        .contains("setup hook `bad` failed"));
+    let message = &suite.error.as_ref().unwrap().message;
+    // The hook's own output says why, so `drill show` and the canvas need no trip to the file.
+    assert!(
+        message.contains("setup hook `bad` failed; stderr: it broke"),
+        "{message}"
+    );
     let statuses: Vec<_> = suite
         .hooks
         .iter()
