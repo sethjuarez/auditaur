@@ -1,4 +1,5 @@
-// The snapshots canvas's view model: every snapshot step of a run that did not match its baseline.
+// The snapshots canvas's view model: every snapshot step of a run that did not match its baseline,
+// and the named screenshots the run saved.
 
 import { join } from "node:path";
 import { RUNS_DIR, attemptDir } from "../../lib/paths.mjs";
@@ -33,22 +34,46 @@ function snapshotStep(step, index, owner) {
     };
 }
 
-async function collect(state, run) {
+// A named `screenshot` step's saved image, shown for reference (it has no baseline to review).
+function screenshotStep(step, index, owner) {
+    // A failed step's image is failure evidence, not the screenshot it was asked for.
+    if (step.action !== "screenshot" || step.status !== "passed") return null;
+    const image = (step.attachments ?? []).find((attachment) => attachment.contentType?.startsWith("image/"));
+    if (!image) return null;
+    return {
+        id: `${owner.key}/${owner.attempt ?? "hooks"}/${index}`,
+        suite: owner.suite,
+        test: owner.title,
+        stepIndex: index,
+        step: step.title,
+        file: { path: image.path, contentType: image.contentType },
+    };
+}
+
+// Every snapshot result and named screenshot of a run, in step order.
+async function collectAll(state, run) {
     const runDir = join(state.workspace, RUNS_DIR, run.runId);
     const items = [];
+    const screenshots = [];
+    const visit = (steps, owner) => (steps ?? []).forEach((step, index) => {
+        items.push(snapshotStep(step, index, owner));
+        screenshots.push(screenshotStep(step, index, owner));
+    });
     for (const suite of run.suites ?? []) {
-        const hooks = { key: `hooks:${suite.id}`, suite: suite.suite, title: "suite hooks", attempt: null };
-        (suite.hooks ?? []).forEach((step, index) => items.push(snapshotStep(step, index, hooks)));
+        visit(suite.hooks, { key: `hooks:${suite.id}`, suite: suite.suite, title: "suite hooks", attempt: null });
         for (const test of suite.tests ?? []) {
             // Only the last attempt counts: a retry checks (and may rewrite) the same baselines.
             const attempt = (test.attempts ?? []).map((each) => each.attempt).filter(Number.isSafeInteger).at(-1);
             if (attempt == null) continue;
             const report = await readJson(join(runDir, attemptDir(test.id, attempt), "attempt.json")).catch(() => null);
-            const owner = { key: test.id, suite: suite.suite, title: test.title, attempt };
-            (report?.steps ?? []).forEach((step, index) => items.push(snapshotStep(step, index, owner)));
+            visit(report?.steps, { key: test.id, suite: suite.suite, title: test.title, attempt });
         }
     }
-    return items.filter(Boolean);
+    return { items: items.filter(Boolean), screenshots: screenshots.filter(Boolean) };
+}
+
+async function collect(state, run) {
+    return (await collectAll(state, run)).items;
 }
 
 async function actualBytes(state, runId, item) {
@@ -85,10 +110,13 @@ export async function snapshotsView(state) {
         pinned: state.runId,
         run: null,
         items: [],
+        screenshots: [],
     };
     if (!run) return view;
     view.run = { runId: run.runId, status: run.status, startedAt: run.startedAt };
-    view.items = await Promise.all((await collect(state, run)).map((item) => withStatus(state, run.runId, item)));
+    const { items, screenshots } = await collectAll(state, run);
+    view.items = await Promise.all(items.map((item) => withStatus(state, run.runId, item)));
+    view.screenshots = screenshots;
     return view;
 }
 
@@ -107,6 +135,7 @@ export function snapshotsSummary(view) {
             message,
             attachments: Object.fromEntries(Object.entries(files).map(([name, file]) => [name, file.path])),
         })),
+        screenshots: view.screenshots.map(({ suite, test, step, file }) => ({ suite, test, step, attachment: file.path })),
     };
 }
 

@@ -19,3 +19,11 @@
 
 .accept-all-lede { margin: 0 0 var(--base-size-8); }
 .accept-all-files { margin: 0; padding-left: var(--base-size-20, 20px); display: flex; flex-direction: column; gap: var(--base-size-4); overflow-wrap: anywhere; }
+
+.snap-shots { display: flex; flex-direction: column; gap: var(--base-size-8); margin-top: var(--base-size-16); }
+.snap-shots-title { margin: 0; font-size: var(--text-body-size-medium); font-weight: var(--base-text-weight-semibold); }
+.snap-shots-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--base-size-12); }
+.snap-shot { margin: 0; display: flex; flex-direction: column; overflow: hidden; }
+.snap-shot img { display: block; width: 100%; height: auto; background: var(--bgColor-muted); }
+.snap-shot figcaption { display: flex; flex-direction: column; gap: 2px; padding: var(--base-size-8); }
+.snap-shot-step { font-size: var(--text-body-size-small); font-weight: var(--base-text-weight-semibold); overflow-wrap: anywhere; }
