@@ -74,11 +74,16 @@ impl ProcessTree {
         if job.active_processes()? == 0 {
             return Ok(format!("process tree rooted at pid {pid} already exited"));
         }
+        // A process leaves the job's active count as soon as it is terminated, but it finishes
+        // tearing down (closing its files, locks, and WebView2 data folder) only when its handle
+        // is signaled. Hold handles from before the kill and wait for those too. Best effort: a
+        // process started between the snapshot and the kill is still covered by the count.
+        let members = job.members().unwrap_or_default();
         job.terminate()?;
         loop {
             let left = job.active_processes()?;
             if left == 0 {
-                return Ok(format!("stopped process tree rooted at pid {pid}"));
+                break;
             }
             if Instant::now() >= deadline {
                 return Err(anyhow!(
@@ -87,6 +92,15 @@ impl ProcessTree {
             }
             thread::sleep(POLL);
         }
+        for member in &members {
+            if !member.wait_until(deadline) {
+                return Err(anyhow!(
+                    "pid {} of the tree rooted at pid {pid} was still tearing down after it was stopped",
+                    member.pid
+                ));
+            }
+        }
+        Ok(format!("stopped process tree rooted at pid {pid}"))
     }
 
     #[cfg(unix)]
@@ -223,6 +237,70 @@ mod job {
                 Ok(info.ActiveProcesses)
             }
         }
+
+        /// Handles to the job's processes, to wait on their full exit. Best effort: a process
+        /// that exits before it can be opened needs no waiting.
+        pub fn members(&self) -> io::Result<Vec<Member>> {
+            use windows_sys::Win32::System::JobObjects::JobObjectBasicProcessIdList;
+            use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+            #[repr(C)]
+            struct IdList {
+                assigned: u32,
+                listed: u32,
+                ids: [usize; MAX_MEMBERS],
+            }
+            const MAX_MEMBERS: usize = 1024;
+            let mut list = Box::new(IdList {
+                assigned: 0,
+                listed: 0,
+                ids: [0; MAX_MEMBERS],
+            });
+            // SAFETY: the buffer has the JOBOBJECT_BASIC_PROCESS_ID_LIST layout and its true size.
+            check(unsafe {
+                QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicProcessIdList,
+                    &mut *list as *mut IdList as *mut c_void,
+                    size_of::<IdList>() as u32,
+                    null_mut(),
+                )
+            })?;
+            let listed = (list.listed as usize).min(MAX_MEMBERS);
+            Ok(list.ids[..listed]
+                .iter()
+                .filter_map(|&id| {
+                    let pid = id as u32;
+                    // SAFETY: plain Win32 call; the handle is owned by the returned Member.
+                    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                    (!handle.is_null()).then_some(Member { pid, handle })
+                })
+                .collect())
+        }
+    }
+
+    /// A process of the job, held open so its exit can be waited on.
+    pub struct Member {
+        pub pid: u32,
+        handle: HANDLE,
+    }
+
+    impl Member {
+        /// Wait until the process has fully exited, or `deadline` passes.
+        pub fn wait_until(&self, deadline: std::time::Instant) -> bool {
+            use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+            use windows_sys::Win32::System::Threading::WaitForSingleObject;
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let ms = u32::try_from(left.as_millis()).unwrap_or(u32::MAX - 1);
+            // SAFETY: `self.handle` is a live process handle.
+            unsafe { WaitForSingleObject(self.handle, ms) == WAIT_OBJECT_0 }
+        }
+    }
+
+    impl Drop for Member {
+        fn drop(&mut self) {
+            // SAFETY: opened in `members`, closed once.
+            unsafe { CloseHandle(self.handle) };
+        }
     }
 
     impl Drop for Job {
@@ -319,27 +397,59 @@ mod tests {
         }
     }
 
-    fn running(pid: u32) -> bool {
-        if cfg!(windows) {
-            let output = Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
-        } else {
+    /// Watches a pid for exit. On Windows it holds a handle opened while the process runs: a
+    /// terminated process can stay listed (`tasklist`) while others still hold handles to it,
+    /// but its handle is signaled the moment it exits, and the pid cannot be reused under us.
+    struct Watch {
+        pid: u32,
+        #[cfg(windows)]
+        handle: windows_sys::Win32::Foundation::HANDLE,
+    }
+
+    impl Watch {
+        fn new(pid: u32) -> Self {
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+                // SAFETY: plain Win32 call; the handle is closed on drop.
+                let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                assert!(!handle.is_null(), "pid {pid} is not running");
+                Self { pid, handle }
+            }
+            #[cfg(unix)]
+            Self { pid }
+        }
+
+        fn running(&self) -> bool {
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+                use windows_sys::Win32::System::Threading::WaitForSingleObject;
+                // SAFETY: `self.handle` is a live process handle.
+                unsafe { WaitForSingleObject(self.handle, 0) == WAIT_TIMEOUT }
+            }
+            #[cfg(unix)]
             Command::new("kill")
-                .args(["-0", &pid.to_string()])
+                .args(["-0", &self.pid.to_string()])
                 .status()
                 .unwrap()
                 .success()
         }
     }
 
+    #[cfg(windows)]
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            // SAFETY: opened in `new`, closed once.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.handle) };
+        }
+    }
+
     fn stops_the_grandchild(orphan: bool) {
         let dir = tempfile::tempdir().unwrap();
         let mut tree = ProcessTree::spawn(&mut tree_command(dir.path(), orphan)).unwrap();
-        let grandchild = grandchild_pid(dir.path());
-        assert!(running(grandchild));
+        let grandchild = Watch::new(grandchild_pid(dir.path()));
+        assert!(grandchild.running());
         if orphan {
             let deadline = Instant::now() + Duration::from_secs(30);
             while tree.try_wait().unwrap().is_none() {
@@ -353,7 +463,11 @@ mod tests {
             "{message}"
         );
         // `stop` returns only once the whole tree is gone.
-        assert!(!running(grandchild), "pid {grandchild} survived: {message}");
+        assert!(
+            !grandchild.running(),
+            "pid {} survived: {message}",
+            grandchild.pid
+        );
     }
 
     #[test]
