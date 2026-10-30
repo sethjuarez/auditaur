@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { requireEditable, requireEnabled } from './actionability.js';
+import { setChecked } from './checkable.js';
 import { ariaSnapshot } from './aria-snapshot.js';
 import { armDrillDialogs, disarmDrillDialogs, drillDialogState, queueDrillDialog } from './drill-dialogs.js';
 import type { AuditaurExporter } from './exporter.js';
@@ -325,14 +326,12 @@ export async function executeDriveBridgeRequest(
     }
     case 'check': {
       const el = requireSelector(request.selector, request.visibleOnly);
-      requireEnabled(el);
-      setChecked(el, true);
+      await setChecked(el, true);
       return { ok: true, checked: true, visibleOnly: request.visibleOnly };
     }
     case 'uncheck': {
       const el = requireSelector(request.selector, request.visibleOnly);
-      requireEnabled(el);
-      setChecked(el, false);
+      await setChecked(el, false);
       return { ok: true, checked: false, visibleOnly: request.visibleOnly };
     }
     case 'evaluate': {
@@ -619,20 +618,6 @@ function selectElementValues(el: Element, values: string[], visibleOnly: boolean
     missingValues,
     ...(missingValues.length ? { error: `option value(s) not found: ${missingValues.join(', ')}` } : {}),
   };
-}
-
-function setChecked(el: Element, checked: boolean): void {
-  if (!(el instanceof HTMLInputElement) || (el.type !== 'checkbox' && el.type !== 'radio')) {
-    throw new Error('selector is not a checkbox or radio input');
-  }
-  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked');
-  if (descriptor?.set) {
-    descriptor.set.call(el, checked);
-  } else {
-    el.checked = checked;
-  }
-  el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 async function evaluateExpression(expression: string): Promise<Record<string, unknown>> {
