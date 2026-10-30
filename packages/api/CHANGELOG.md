@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.3](https://github.com/sethjuarez/auditaur/compare/api-v0.12.2...api-v0.12.3) (2026-10-30)
+
+
+### Bug Fixes
+
+* **drive:** select waits for options and matches labels, like Playwright ([#161](https://github.com/sethjuarez/auditaur/issues/161)) ([3228cda](https://github.com/sethjuarez/auditaur/commit/3228cdae7353e2726df13be89c3f9e7d648c583a))
+
 ## [0.12.2](https://github.com/sethjuarez/auditaur/compare/api-v0.12.1...api-v0.12.2) (2026-10-30)
 
 
