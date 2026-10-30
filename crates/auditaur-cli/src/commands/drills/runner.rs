@@ -79,7 +79,9 @@ pub trait AppDriver {
     /// Session details recorded on the suite.
     fn app_info(&self) -> Value;
     fn run_step(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepResult;
-    /// Attach evidence (screenshot, DOM) to the failing step. Best effort.
+    /// Attach evidence to the failing step: a screenshot, DOM and aria snapshots, the app's
+    /// output, and a manifest of what is missing and why. Also called after the app exited,
+    /// so its output is kept. Best effort.
     fn capture_failure(&mut self, _ctx: &mut StepCtx<'_>) {}
     /// Attach a trace of the step that just ran (screenshot, DOM), for `--trace`. Best effort.
     fn capture_step(&mut self, _ctx: &mut StepCtx<'_>) {}
@@ -101,6 +103,9 @@ pub trait Host {
         suite: &DrillSuite,
         env: &[(String, String)],
     ) -> Result<Box<dyn AppDriver>>;
+    /// Attach what the failed launch left (the app's output) to the running launch step.
+    /// Best effort.
+    fn capture_launch_failure(&mut self, _writer: &mut RunWriter) {}
     fn run_hook(
         &mut self,
         hook: &Value,
@@ -399,6 +404,7 @@ impl SuiteRun<'_, '_> {
                 Ok(None)
             }
             Err(error) => {
+                self.host.capture_launch_failure(&mut *self.writer);
                 let error = ErrorInfo {
                     step: Some(index),
                     ..ErrorInfo::new(format!("app launch failed: {error:#}"))
@@ -712,10 +718,12 @@ impl SuiteRun<'_, '_> {
             // run so one pass records every new baseline.
             let soft = is_soft(step) || ctx.wrote_baseline;
             if !soft {
-                if let Some(reason) = driver.exited() {
+                // Evidence first: even a dead app leaves its output behind.
+                let exited = driver.exited();
+                driver.capture_failure(&mut ctx);
+                // The app may have died during capture.
+                if let Some(reason) = exited.or_else(|| driver.exited()) {
                     self.exited = Some(reason);
-                } else {
-                    driver.capture_failure(&mut ctx);
                 }
             } else if tracing {
                 budget.untimed(|| driver.capture_step(&mut ctx));

@@ -74,7 +74,7 @@ impl AppDriver for FakeDriver {
             *count
         };
         match target.as_str() {
-            "#fail" => StepResult::Failed(ErrorInfo::new("boom")),
+            "#fail" | "#dieoncapture" => StepResult::Failed(ErrorInfo::new("boom")),
             "#skip" => StepResult::Skipped,
             "#newbaseline" => {
                 ctx.wrote_baseline = true;
@@ -131,7 +131,12 @@ impl AppDriver for FakeDriver {
     }
 
     fn capture_failure(&mut self, ctx: &mut StepCtx<'_>) {
-        self.state.borrow_mut().log.push("capture".to_string());
+        let mut state = self.state.borrow_mut();
+        state.log.push("capture".to_string());
+        if state.calls.contains_key("#dieoncapture") {
+            state.dead = true;
+        }
+        drop(state);
         ctx.writer
             .attach("failure", "text/plain", "failure.txt", b"evidence")
             .unwrap();
@@ -194,6 +199,16 @@ impl Host for FakeHost {
         Ok(Box::new(FakeDriver {
             state: self.state.clone(),
         }))
+    }
+
+    fn capture_launch_failure(&mut self, writer: &mut RunWriter) {
+        self.state
+            .borrow_mut()
+            .log
+            .push("capture launch".to_string());
+        writer
+            .attach("app output", "text/plain", "launch.log", b"printed")
+            .unwrap();
     }
 
     fn run_hook(
@@ -892,6 +907,12 @@ fn launch_failure_leaves_tests_not_run() {
     assert_eq!(ran.report.totals.not_run, 1);
     assert_eq!(ran.report.status, Status::Failed);
     assert!(!ran.log.contains(&"close".to_string()));
+    // The failed launch step keeps what the app printed.
+    assert!(ran.log.contains(&"capture launch".to_string()));
+    let launch = &suite.hooks[0];
+    assert_eq!(launch.action, "launch");
+    assert_eq!(launch.attachments.len(), 1, "{:?}", launch.attachments);
+    assert!(ran.dir.join(&launch.attachments[0].path).is_file());
 }
 
 #[test]
@@ -905,6 +926,16 @@ fn before_all_failure_fails_the_suite_and_skips_tests() {
     assert_eq!(ran.report.totals.not_run, 1);
     assert!(ran.log.contains(&"click #aa".to_string()));
     assert!(ran.log.contains(&"close".to_string()));
+}
+
+#[test]
+fn app_dying_during_capture_still_stops_the_suite() {
+    let ran = run(r##"{
+        "afterEach": [{ "click": "#ae" }],
+        "tests": [{ "name": "t", "steps": [{ "click": "#dieoncapture" }] }]
+    }"##);
+    assert!(ran.log.contains(&"capture".to_string()));
+    assert!(!ran.log.contains(&"click #ae".to_string()), "{:?}", ran.log);
 }
 
 #[test]
@@ -928,7 +959,15 @@ fn app_exit_stops_the_suite() {
         .message
         .contains("app exited: crashed"));
     assert_eq!(test(&ran, "after").status, Status::Pending);
-    assert!(!ran.log.contains(&"capture".to_string()));
+    // Evidence is still captured, so the crash keeps its output.
+    assert_eq!(
+        ran.log.iter().filter(|line| *line == "capture").count(),
+        1,
+        "{:?}",
+        ran.log
+    );
+    let attempt = read_attempt(&ran.dir, &dies.attempts[0]).unwrap();
+    assert_eq!(attempt.steps[0].attachments.len(), 1);
     assert!(!ran.log.contains(&"click #ae".to_string()));
     assert!(!ran.log.contains(&"click #aa".to_string()));
     assert!(ran.log.contains(&"close".to_string()));
@@ -1386,6 +1425,7 @@ fn cancel_while_waiting_for_the_app_interrupts_instead_of_failing() {
         cancel_flag(),
     );
     assert_eq!(ran.stopped, Some(Stopped::Cancelled));
+    // No launch evidence: a cancel is not a launch failure.
     assert_eq!(ran.log, vec!["launch", "hook down"]);
     assert!(ran.report.suites[0].error.is_none());
     assert_eq!(ran.report.totals.not_run, 1);
