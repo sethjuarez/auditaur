@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.16](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-macros-v0.4.15...tauri-plugin-auditaur-macros-v0.4.16) - 2026-10-30
+
+### Added
+
+- *(drills)* count backend command spans in coverage ([#116](https://github.com/sethjuarez/auditaur/pull/116))
+
 ## [0.4.14](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-macros-v0.4.13...tauri-plugin-auditaur-macros-v0.4.14) - 2026-10-30
 
 ### Fixed

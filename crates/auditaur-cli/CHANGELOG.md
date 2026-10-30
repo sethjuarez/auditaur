@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.16](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.15...auditaur-cli-v0.4.16) - 2026-10-30
+
+### Added
+
+- *(drills)* name the canvas version and its upgrade fix ([#119](https://github.com/sethjuarez/auditaur/pull/119))
+- *(drills)* count backend command spans in coverage ([#116](https://github.com/sethjuarez/auditaur/pull/116))
+
+### Fixed
+
+- *(drills)* stop coverage claiming 100% with nothing to compare against ([#115](https://github.com/sethjuarez/auditaur/pull/115))
+- *(drills)* point a step's expectTimeoutMs at timeoutMs ([#112](https://github.com/sethjuarez/auditaur/pull/112))
+
 ## [0.4.15](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.14...auditaur-cli-v0.4.15) - 2026-10-30
 
 ### Added
