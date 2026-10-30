@@ -9,6 +9,8 @@ export interface Gate {
   test: string;
   attempt?: number;
   since: string | null;
+  // When the runner stops waiting (its own deadline); the countdown prefers it to since + timeoutMs.
+  expiresAt?: string | null;
   name: string;
   instructions: string;
   selector: string | null;

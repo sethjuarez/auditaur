@@ -44,6 +44,16 @@ async function waitingRun() {
 
 const responderOf = async (path) => JSON.parse(await readFile(path, "utf8")).responder;
 
+test("a waiting gate counts down to the runner's own deadline", async () => {
+    const { state } = await waitingRun();
+    const { pendingGates } = await lib("gates.mjs");
+    const { readEvents } = await lib("events.mjs");
+    const events = await readEvents(join(state.workspace, ".auditaur", "drill-runs", RUN, "events.jsonl"));
+    const [gate] = await pendingGates({ status: "running", suites: [] }, events);
+    const request = JSON.parse(await readFile(join(state.workspace, "human-gates", "requests", "gate-1.json"), "utf8"));
+    assert.equal(gate.expiresAt, new Date(Number(request.expiresAtUnixNanos) / 1e6).toISOString());
+});
+
 test("the run page's form records a human answer", async () => {
     const { state, responsePath } = await waitingRun();
     const req = Readable.from([Buffer.from(JSON.stringify({ requestId: "gate-1", choiceId: "ok" }))]);

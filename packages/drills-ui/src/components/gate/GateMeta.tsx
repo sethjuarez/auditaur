@@ -10,7 +10,7 @@ export function GateMeta({ gate }: { gate: Gate }) {
       <div className="gate-meta muted">
         {gate.test}
         {gate.since ? ` · waiting since ${new Date(gate.since).toLocaleTimeString()}` : ""}
-        {gate.timeoutMs ? <> · <GateCountdown since={gate.since} timeoutMs={gate.timeoutMs} /></> : null}
+        {gate.timeoutMs ? <> · <GateCountdown since={gate.since} expiresAt={gate.expiresAt ?? null} timeoutMs={gate.timeoutMs} /></> : null}
       </div>
       <p className="gate-instructions">{gate.instructions}</p>
       {gate.selector && (

@@ -1,10 +1,9 @@
 import { join, resolve } from "node:path";
 import { RUNS_DIR } from "./paths.mjs";
-import { exists } from "./files.mjs";
 import { pickRun } from "./runs.mjs";
 import { readEvents } from "./events.mjs";
 import { DrillError } from "./errors.mjs";
-import { GATE_REQUEST_ID, publishAnswer, queuePaths } from "./gate-queue.mjs";
+import { GATE_REQUEST_ID, isoFromNanos, publishAnswer, queuePaths, readRequest } from "./gate-queue.mjs";
 
 // Pending gates whose request file is still published, with what the panel needs to answer them.
 export async function pendingGates(run, events) {
@@ -14,12 +13,15 @@ export async function pendingGates(run, events) {
     const gates = [];
     for (const waiting of events.gates) {
         const request = waiting.gate?.request ?? null;
-        if (request && !(await exists(request.requestPath))) continue;
+        const published = request ? await readRequest(request.requestPath) : null;
+        if (request && !published) continue;
         gates.push({
             requestId: request?.requestId ?? null,
             test: waiting.testId ? titles.get(waiting.testId) ?? waiting.testId : `${suites.get(waiting.suiteId) ?? waiting.suiteId} (hook)`,
             attempt: waiting.attempt,
             since: waiting.since,
+            // The runner's own deadline, so a countdown does not drift from when it really times out.
+            expiresAt: isoFromNanos(published?.expiresAtUnixNanos),
             name: waiting.gate?.name,
             instructions: waiting.gate?.instructions,
             selector: waiting.gate?.selector ?? null,
