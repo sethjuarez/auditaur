@@ -1,0 +1,54 @@
+---
+title: Playwright conformance
+description: Where drill steps match Playwright, and where they intentionally or currently differ.
+---
+
+Drill steps follow Playwright's semantics, so a Playwright habit should do the same thing in a drill. Events come from the drive bridge inside the page, not from CDP, so they're synthetic (`isTrusted: false`); the bridge runs the default actions a real browser would. This page lists every known difference. Anything not listed should behave like Playwright; report a mismatch as a bug.
+
+## Locators
+
+| Behavior | Playwright | Drills |
+| --- | --- | --- |
+| Strictness | An action or assertion on several matches fails | Same, at once; `toHaveCount` counts them all, and `nth` picks one |
+| Text, label, placeholder, role `name` | Case-insensitive substring, whitespace normalized; `exact` is a case-sensitive whole match | Same |
+| `getByRole` | Skips elements hidden from assistive tech | Same |
+| `getByAltText`, `getByTitle` | Supported | Not supported; use CSS (`img[alt="Logo"]`) |
+| Chaining (`locator.locator()`) | Supported | `within` on a locator; the container's `nth` applies before the inner search |
+| `filter({ has, hasText })`, `and`/`or` | Supported | Not supported; use CSS `:has()` or `within` |
+| CSS | Pierces open shadow roots; adds `:has-text()`, `:visible` | Plain `querySelectorAll`: no shadow piercing, no Playwright pseudo-classes |
+
+## Actions
+
+| Behavior | Playwright | Drills |
+| --- | --- | --- |
+| Actionability | Visible, stable, enabled, editable, receives events | Visible, enabled and editable, as listed in [Steps](/getting-started/drill-tests/#steps). No stable (animation) check and no hit-test, so an overlay doesn't intercept a click |
+| `click`, `dblclick`, right and middle click | Real mouse input | The event sequence Edge fires for a real click, with default actions. See [Mouse clicks](/getting-started/drill-tests/#mouse-clicks) |
+| `press` | Real key input | Playwright's US key definitions and chords. Default actions for `Tab`, `Enter`, `Space`, editing keys and select-all only; arrows, `Home`, `End` and `Escape` dispatch events but don't scroll or move the caret. See [Keyboard input](/getting-started/drill-tests/#keyboard-input) |
+| `type` | `pressSequentially`: key events per character | Inserts the whole value at the caret with one `input` event and no key events. Requires an editable target, which Playwright doesn't. Use `press` for per-key handlers |
+| `fill` | Replaces the value; contenteditable through the browser's editing | Same; fails if a contenteditable doesn't end up with `value` |
+| `select`, `check`, `uncheck` | `selectOption`, `check`, `uncheck` | Same |
+| `drag` | `dragTo` with real mouse input | Same sequence, including HTML5 drag and drop. No pointer capture, and dnd-kit's `delay` activation never elapses |
+| `paste` | No direct equivalent (keyboard shortcut plus the system clipboard) | Fires a `paste` event with the given clipboard data; the system clipboard is never touched |
+| Window focus | Pages always act focused | Same on Windows; on macOS and Linux keep the app in front |
+
+## Assertions
+
+| Behavior | Playwright | Drills |
+| --- | --- | --- |
+| Retry window | `expect` retries for 5s by default; `{ timeout }` overrides | Same: suite `expectTimeoutMs` (default 5s) or step `timeoutMs` |
+| `not`, soft assertions | `expect(...).not`, `expect.soft` | `"not": true`, `"soft": true` |
+| `toHaveText` string | Whole match, whitespace normalized, case-sensitive | Same |
+| `toHaveText`, `toContainText` source | `textContent` (unless `useInnerText`) | `innerText`, so text in hidden descendants doesn't count |
+| `toHaveText` on several elements | Takes an array | Strict; assert each element with `nth` |
+| `expect.poll` | Re-runs a function until it passes | `expectValue`, with `toEqual`, `toContain` or `toMatch` |
+| `toMatchAriaSnapshot`, `toHaveScreenshot` | Supported | Supported; `--update-snapshots` updates them |
+| Timeouts | Test 30s, expect 5s, `test.slow()` triples | Same: `timeoutMs`, `expectTimeoutMs`, `"slow": true` |
+
+## Structure
+
+| Behavior | Playwright | Drills |
+| --- | --- | --- |
+| Isolation | A fresh browser context per test | One app launch per suite; reset in `beforeEach`, e.g. with `clearStorage`. Web storage persists across suites. See [A suite is one app launch](/getting-started/drill-tests/#a-suite-is-one-app-launch) |
+| Serial mode | `test.describe.configure({ mode: 'serial' })` | `"serial": true`; a failure skips the rest |
+| `page.once('dialog')` | Answers a browser dialog | `dialog` steps answer Tauri's native dialogs |
+| `page.pause()` | Opens the inspector | `gate` waits for a person, off the test clock |
