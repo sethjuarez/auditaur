@@ -53,6 +53,7 @@ pub(crate) const AUDITAUR_DRILLS_EXTENSION_FILES: &[(&str, &str)] = drills_exten
     "lib/build-info.mjs",
     "lib/cli.mjs",
     "lib/config.mjs",
+    "lib/deferral.mjs",
     "lib/errors.mjs",
     "lib/events.mjs",
     "lib/features.mjs",
