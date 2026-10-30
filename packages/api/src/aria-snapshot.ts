@@ -10,7 +10,7 @@
  * Roles come from {@link roleOf}; elements without a role are transparent and their text
  * merges into the parent. Hidden elements are skipped.
  */
-import { accessibleName, NAME_FROM_CONTENT, normalizeText, roleOf, SKIPPED_TAGS } from './locator';
+import { accessibleName, NAME_FROM_CONTENT, normalizeText, roleOf, SKIPPED_TAGS } from './locator.js';
 
 interface AriaNode {
   role: string;

@@ -1,6 +1,6 @@
-import type { AuditaurExporter } from './exporter';
-import type { FrontendErrorRecord } from './types';
-import { currentWindowLabel, errorRecordFields, nowUnixNanos } from './utils';
+import type { AuditaurExporter } from './exporter.js';
+import type { FrontendErrorRecord } from './types.js';
+import { currentWindowLabel, errorRecordFields, nowUnixNanos } from './utils.js';
 
 export function instrumentErrors(exporter: AuditaurExporter): () => void {
   if (typeof window === 'undefined') {

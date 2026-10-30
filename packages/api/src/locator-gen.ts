@@ -4,7 +4,7 @@
  * text, `#id`, role + name + nth, then a CSS path. Agents use it (via the `locate`
  * bridge action) to turn a CSS selector into a locator that survives markup changes.
  */
-import { accessibleName, labelsOf, normalizeText, queryLocator, roleOf, type LocatorSpec } from './locator';
+import { accessibleName, labelsOf, normalizeText, queryLocator, roleOf, type LocatorSpec } from './locator.js';
 
 /** A locator in drill-file form: a CSS string or `{ role, name, exact, nth, ... }`. */
 export type DrillLocator = string | Record<string, string | number | boolean>;

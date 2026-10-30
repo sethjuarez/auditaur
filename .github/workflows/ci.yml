@@ -62,6 +62,9 @@ jobs:
       # Runs the built dist/ through consumer bundlers (esbuild, rolldown); they rewrite code (AR-9).
       - run: npm run test:bundles
         working-directory: packages/api
+      # Packs the api, installs the tarball, and imports it with plain Node (AR-19).
+      - run: npm run test:node-import
+        working-directory: packages/api
       - run: npm audit --audit-level=moderate
         working-directory: packages/api
         continue-on-error: true

@@ -1,8 +1,8 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import type { AuditaurExporter } from './exporter';
-import type { AuditaurInvokeArgs, AuditaurTraceContextCarrier, SpanRecord, TauriIpcCallRecord } from './types';
-import { recordErrorMessage, recordPayload, type PayloadPolicy, type RecordedPayload } from './payload';
-import { currentWindowLabel, nowUnixNanos, randomSpanId, randomTraceId } from './utils';
+import type { AuditaurExporter } from './exporter.js';
+import type { AuditaurInvokeArgs, AuditaurTraceContextCarrier, SpanRecord, TauriIpcCallRecord } from './types.js';
+import { recordErrorMessage, recordPayload, type PayloadPolicy, type RecordedPayload } from './payload.js';
+import { currentWindowLabel, nowUnixNanos, randomSpanId, randomTraceId } from './utils.js';
 
 export const AUDITAUR_TRACE_CONTEXT_ARG = 'auditaurTraceContext';
 export const AUDITAUR_TRACEPARENT_HEADER = 'traceparent';

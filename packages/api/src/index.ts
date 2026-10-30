@@ -1,16 +1,16 @@
-export { initAuditaur } from './init';
-export { DEFAULT_REDACTION_KEYS, REDACTED, recordedErrorMessage, recordedPayload } from './payload';
-export type { RecordedPayload } from './payload';
+export { initAuditaur } from './init.js';
+export { DEFAULT_REDACTION_KEYS, REDACTED, recordedErrorMessage, recordedPayload } from './payload.js';
+export type { RecordedPayload } from './payload.js';
 export {
   AUDITAUR_TRACE_CONTEXT_ARG,
   createAuditaurTraceContext,
-} from './invoke';
+} from './invoke.js';
 export {
   createAuditaurSpanExporter,
   hrTimeToUnixNanos,
   readableSpanToSpanRecord,
-} from './otel';
-export type { AuditaurClient, AuditaurFrontendConfig } from './init';
+} from './otel.js';
+export type { AuditaurClient, AuditaurFrontendConfig } from './init.js';
 export type {
   AuditaurOpenTelemetrySpanExporterOptions,
   AuditaurSpanSink,
@@ -21,7 +21,7 @@ export type {
   ReadableSpanLike,
   SpanContextLike,
   TimedEventLike,
-} from './otel';
+} from './otel.js';
 export type {
   AuditaurDriveBridgeConfig,
   FrontendErrorRecord,
@@ -39,4 +39,4 @@ export type {
   AuditaurTraceContextCarrier,
   DriveBridgeRequest,
   DriveBridgeResponse,
-} from './types';
+} from './types.js';

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AuditaurExportFailure, FrontendErrorRecord, LogRecord, OTelBatch, SpanEventRecord, SpanRecord, TauriEventRecord, TauriIpcCallRecord } from './types';
+import type { AuditaurExportFailure, FrontendErrorRecord, LogRecord, OTelBatch, SpanEventRecord, SpanRecord, TauriEventRecord, TauriIpcCallRecord } from './types.js';
 
 const EXPORT_COMMAND = 'plugin:auditaur|export_otel_batch';
 

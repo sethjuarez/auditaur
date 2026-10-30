@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { executeDriveBridgeRequest } from './drive-bridge';
+import { executeDriveBridgeRequest } from './drive-bridge.js';
 import {
   accessibleName,
   describeLocator,
@@ -8,8 +8,8 @@ import {
   queryLocator,
   resolveLocator,
   type LocatorSpec,
-} from './locator';
-import type { DriveBridgeRequest } from './types';
+} from './locator.js';
+import type { DriveBridgeRequest } from './types.js';
 
 const always = () => true;
 

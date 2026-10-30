@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { ariaSnapshot } from './aria-snapshot';
-import type { AuditaurExporter } from './exporter';
+import { ariaSnapshot } from './aria-snapshot.js';
+import type { AuditaurExporter } from './exporter.js';
 import {
   describeLocator,
   elementText as locatorText,
@@ -9,13 +9,13 @@ import {
   parseLocator,
   queryLocator,
   resolveLocator,
-} from './locator';
-import { generateLocator } from './locator-gen';
+} from './locator.js';
+import { generateLocator } from './locator-gen.js';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
   DriveBridgeResponse,
-} from './types';
+} from './types.js';
 
 const REGISTER_COMMAND = 'plugin:auditaur|register_drive_bridge';
 const POLL_COMMAND = 'plugin:auditaur|poll_drive_bridge_request';

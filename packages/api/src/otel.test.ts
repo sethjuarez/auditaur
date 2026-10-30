@@ -5,8 +5,8 @@ import {
   hrTimeToUnixNanos,
   readableSpanToSpanRecord,
   type ReadableSpanLike,
-} from './otel';
-import type { SpanRecord } from './types';
+} from './otel.js';
+import type { SpanRecord } from './types.js';
 
 describe('OpenTelemetry span exporter', () => {
   it('converts hrtime tuples to unix nanoseconds', () => {
