@@ -73,6 +73,7 @@ export function buildView(state, runs) {
             runId: run.runId,
             status: run.status,
             totals: run.totals,
+            suites: (run.suites ?? []).map((suite) => suite.suite).filter(Boolean),
             durationMs: run.durationMs,
             startedAt: run.startedAt,
         })),

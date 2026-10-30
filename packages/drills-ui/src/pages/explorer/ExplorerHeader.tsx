@@ -16,6 +16,8 @@ interface Props {
   change: (patch: ViewPatch) => void;
 }
 
+const suiteNames = (suites: string[]) => (suites.length > 2 ? `${suites.slice(0, 2).join(", ")} +${suites.length - 2}` : suites.join(", "));
+
 function LastRun({ run }: { run: ExplorerRun | undefined }) {
   if (!run) return <span id="last-run" className="muted last-run">No runs yet</span>;
   const tone = run.status === "passed" ? "passed" : run.status === "interrupted" ? "interrupted" : "failed";
@@ -23,7 +25,9 @@ function LastRun({ run }: { run: ExplorerRun | undefined }) {
   return (
     <span id="last-run" className="muted last-run nums">
       Last run <span className={`status-text ${tone}`}>{run.status}</span>
+      {run.suites?.length ? ` · ${suiteNames(run.suites)}` : ""}
       {` · ${Number(totals.passed)}/${Number(totals.tests)} passed`}
+      {totals.skipped ? ` · ${Number(totals.skipped)} skipped` : ""}
       {totals.flaky ? ` · ${Number(totals.flaky)} flaky` : ""}
       {` · ${ms(run.durationMs)} · `}
       <span className="path">{run.runId}</span>

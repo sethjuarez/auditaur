@@ -27,7 +27,9 @@ export interface ExplorerSuite {
 export interface ExplorerRun {
   runId: string;
   status: string;
-  totals?: { passed?: number; failed?: number; notRun?: number; tests?: number; flaky?: number };
+  totals?: { passed?: number; failed?: number; notRun?: number; tests?: number; flaky?: number; skipped?: number };
+  /** Suite names in run order. */
+  suites?: string[];
   durationMs?: number;
   startedAt?: string;
 }
