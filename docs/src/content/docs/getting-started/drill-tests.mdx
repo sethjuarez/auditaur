@@ -110,6 +110,8 @@ The events are synthetic (`isTrusted: false`), so the bridge also performs the b
 
 Other keys (arrows, `Home`, `End`, `PageUp`, `Escape`, …) only dispatch events: the bridge doesn't scroll, move a caret or close anything. That's enough for apps that handle those keys themselves, such as menus, lists and keyboard drag and drop. The reply reports `defaultAction` and `defaultPrevented`.
 
+`fill` on a contenteditable (CodeMirror, ProseMirror, Lexical, …) selects its content and lets the browser replace it, as Playwright does, so the editor updates its own state. The step fails if the element's text doesn't end up equal to `value`, rather than passing without effect. A child of an editor fills the whole editor. A plain contenteditable without `white-space: pre` collapses repeated spaces and tabs, so such values fail honestly. In those cases drive the editor with `click` and `type`, or set it through `evaluate`.
+
 `expectValue` re-evaluates its expression until the matcher passes, like Playwright's `expect.poll`; a throw counts as a miss. Use it for app state the DOM doesn't show:
 
 ```json
@@ -233,6 +235,16 @@ Setup hooks can add computed values, such as a temp fixture path, by appending `
 // scripts/make-fixture.mjs
 fs.appendFileSync(process.env.AUDITAUR_DRILL_ENV_FILE, `APP_PROJECT=${dir}\n`);
 ```
+
+### A suite is one app launch
+
+Each suite launches the app once; its tests, retries included, share that instance, and the app closes before the next suite starts. That keeps suites fast, so state carries between tests:
+
+- Reset what a test depends on in `beforeEach`: navigate home, clear storage, or `run` a script that resets fixtures.
+- Put work that needs a fresh process, such as first-run flows or startup flags in `env`, in its own suite.
+- For full per-test isolation, give each test its own single-test suite, at the cost of a launch per test.
+
+If the app exits or restarts mid-suite, the suite's remaining tests stop rather than running against a different instance.
 
 ## Snapshots
 

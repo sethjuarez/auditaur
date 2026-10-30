@@ -491,6 +491,72 @@ function deleteText(el: Element, forward: boolean): EditOutcome {
   });
 }
 
+/**
+ * Replace a contenteditable's content like Playwright's `fill`: focus, select all, then let the
+ * browser edit, so editors such as CodeMirror and ProseMirror update their own state. Throws when
+ * the element's text doesn't end up equal to `value`, rather than passing without effect.
+ */
+export async function fillContentEditable(target: Element, value: string): Promise<void> {
+  // A child of an editor (a `.cm-line`, a span) is editable too; fill the whole editing host.
+  const el = editingHost(target);
+  (el as HTMLElement).focus();
+  selectAll(el);
+  // Editors sync their selection from `selectionchange`, which fires asynchronously.
+  await nextTask();
+  const outcome = value ? insertText(el, value) : deleteSelection(el);
+  if (outcome === 'failed') {
+    el.textContent = value;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: value }));
+  }
+  // Editors may commit on a later task or frame; poll briefly and stop on the first match.
+  const deadline = Date.now() + FILL_SETTLE_MS;
+  let actual = editableText(el);
+  while (!editableTextMatches(actual, value) && Date.now() < deadline) {
+    await delay(16);
+    actual = editableText(el);
+  }
+  if (!editableTextMatches(actual, value)) {
+    throw new Error(
+      `fill did not set the contenteditable's text (it reads ${JSON.stringify(actual.slice(0, 200))}); ` +
+        'the editor may need `click` then `type`, or an `evaluate` that uses its API',
+    );
+  }
+}
+
+const FILL_SETTLE_MS = 500;
+
+function editingHost(el: Element): Element {
+  let host = el;
+  while (host.parentElement && (host.parentElement as HTMLElement).isContentEditable) host = host.parentElement;
+  return host;
+}
+
+function deleteSelection(el: Element): EditOutcome {
+  return edit(el, 'deleteContentBackward', null, 'delete', undefined, () => false);
+}
+
+function editableText(el: Element): string {
+  return ((el as HTMLElement).innerText ?? el.textContent ?? '').replace(/\r\n?/g, '\n');
+}
+
+/**
+ * Browsers render runs of spaces as NBSP and end a block with a `<br>` that `innerText` reports as
+ * one trailing newline; allow exactly those, nothing else.
+ */
+function editableTextMatches(actual: string, value: string): boolean {
+  const expected = value.replace(/\r\n?/g, '\n');
+  const seen = expected.includes('\u00a0') ? actual : actual.replace(/\u00a0/g, ' ');
+  return seen === expected || seen === `${expected}\n`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /** Select an editable element's whole content. */
 export function selectAll(el: Element): void {
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {

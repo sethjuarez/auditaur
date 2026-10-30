@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { keyDefinition, pressChord } from './keyboard.js';
+import { fillContentEditable, keyDefinition, pressChord } from './keyboard.js';
 
 function $(selector: string): HTMLElement {
   return document.querySelector(selector) as HTMLElement;
@@ -235,5 +235,65 @@ describe('pressChord', () => {
     const input = $('#i') as HTMLInputElement;
     expect(pressChord(input, 'Control+s')).toMatchObject({ defaultAction: 'none' });
     expect(input.value).toBe('');
+  });
+});
+
+describe('fillContentEditable (AR-26)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('replaces the content and fires input', async () => {
+    document.body.innerHTML = '<div id="ce" contenteditable="true">old <b>x</b></div>';
+    const inputs: string[] = [];
+    $('#ce').addEventListener('input', (event) => inputs.push((event as InputEvent).inputType));
+    await fillContentEditable($('#ce'), 'new text');
+    expect($('#ce').textContent).toBe('new text');
+    expect(inputs.length).toBeGreaterThan(0);
+  });
+
+  it('lets an editor apply the edit through beforeinput', async () => {
+    document.body.innerHTML = '<div id="ce" contenteditable="true">old</div>';
+    $('#ce').addEventListener('beforeinput', (event) => {
+      event.preventDefault();
+      $('#ce').textContent = (event as InputEvent).data ?? '';
+    });
+    await fillContentEditable($('#ce'), 'from editor');
+    expect($('#ce').textContent).toBe('from editor');
+  });
+
+  it('fails loudly when the text does not change', async () => {
+    document.body.innerHTML = '<div id="ce" contenteditable="true">old</div>';
+    // An editor that owns its DOM and restores it.
+    $('#ce').addEventListener('input', () => {
+      $('#ce').textContent = 'old';
+    });
+    await expect(fillContentEditable($('#ce'), 'new')).rejects.toThrow(/fill did not set the contenteditable's text \(it reads "old"\)/);
+  });
+
+  it('fills the whole editing host when given a child of it', async () => {
+    document.body.innerHTML = '<div id="ce" contenteditable="true"><div id="line">one</div><div>two</div></div>';
+    await fillContentEditable($('#line'), 'all');
+    expect($('#ce').textContent).toBe('all');
+  });
+
+  it('waits for an editor that commits on a later task', async () => {
+    document.body.innerHTML = '<div id="ce" contenteditable="true">old</div>';
+    $('#ce').addEventListener('beforeinput', (event) => {
+      event.preventDefault();
+      const data = (event as InputEvent).data ?? '';
+      setTimeout(() => ($('#ce').textContent = data), 50);
+    });
+    await fillContentEditable($('#ce'), 'later');
+    expect($('#ce').textContent).toBe('later');
+  });
+
+  it('does not treat a missing trailing newline as a match', async () => {
+    document.body.innerHTML = '<div id="ce" contenteditable="true">old</div>';
+    $('#ce').addEventListener('beforeinput', (event) => {
+      event.preventDefault();
+      $('#ce').textContent = 'end';
+    });
+    await expect(fillContentEditable($('#ce'), 'end\n')).rejects.toThrow(/it reads "end"/);
   });
 });

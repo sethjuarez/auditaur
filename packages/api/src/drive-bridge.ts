@@ -12,7 +12,7 @@ import {
   resolveLocator,
 } from './locator.js';
 import { generateLocator } from './locator-gen.js';
-import { pressChord, type PressResult } from './keyboard.js';
+import { fillContentEditable, pressChord, type PressResult } from './keyboard.js';
 import type {
   AuditaurDriveBridgeConfig,
   DriveBridgeRequest,
@@ -294,7 +294,11 @@ export async function executeDriveBridgeRequest(
     }
     case 'fill': {
       const el = requireSelector(request.selector, request.visibleOnly);
-      setElementValue(el, request.value ?? '');
+      if ((el as HTMLElement).isContentEditable) {
+        await fillContentEditable(el, request.value ?? '');
+      } else {
+        setElementValue(el, request.value ?? '');
+      }
       return { ok: true, visibleOnly: request.visibleOnly };
     }
     case 'type': {
@@ -497,8 +501,6 @@ function setElementValue(el: Element, value: string): void {
     setNativeValue(el, HTMLTextAreaElement.prototype, value);
   } else if (el instanceof HTMLInputElement) {
     setNativeValue(el, HTMLInputElement.prototype, value);
-  } else if ((el as HTMLElement).isContentEditable) {
-    el.textContent = value;
   } else if ('value' in el) {
     (el as HTMLInputElement).value = value;
   } else {
