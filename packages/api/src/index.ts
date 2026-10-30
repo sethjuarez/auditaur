@@ -1,6 +1,6 @@
 export { initAuditaur } from './init.js';
-export { DEFAULT_REDACTION_KEYS, REDACTED, recordedErrorMessage, recordedPayload } from './payload.js';
-export type { RecordedPayload } from './payload.js';
+export { DEFAULT_REDACTION_KEYS, REDACTED, recordedConsole, recordedError, recordedErrorMessage, recordedPayload } from './payload.js';
+export type { RecordedConsole, RecordedError, RecordedPayload } from './payload.js';
 export {
   AUDITAUR_TRACE_CONTEXT_ARG,
   createAuditaurTraceContext,
@@ -34,6 +34,7 @@ export type {
   AuditaurExportFailure,
   AuditaurInvokeArgs,
   AuditaurPayloadKind,
+  AuditaurRedactConsole,
   AuditaurRedactErrorMessage,
   AuditaurRedactPayload,
   AuditaurTraceContextCarrier,
