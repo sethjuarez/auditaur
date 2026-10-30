@@ -70,7 +70,7 @@ class FakeElement {
 class FakeInputElement extends FakeElement {}
 class FakeTextAreaElement extends FakeElement {}
 class FakeSelectElement extends FakeElement {
-  options: Array<{ value: string; selected: boolean }> = [];
+  options: Array<{ value: string; selected: boolean; label?: string; closest?: () => null }> = [];
 
   get selectedOptions(): Array<{ value: string; selected: boolean }> {
     return this.options.filter((option) => option.selected);
@@ -293,8 +293,8 @@ describe('drive bridge selector operations', () => {
     const button = new FakeElement('#button');
     const select = new FakeSelectElement('#select');
     select.options = [
-      { value: 'one', selected: false },
-      { value: 'two', selected: false },
+      { value: 'one', selected: false, label: 'One', closest: () => null },
+      { value: 'two', selected: false, label: 'Two', closest: () => null },
     ];
     const input = new FakeInputElement('#check') as FakeInputElement & { checked: boolean; type: string };
     input.type = 'checkbox';
