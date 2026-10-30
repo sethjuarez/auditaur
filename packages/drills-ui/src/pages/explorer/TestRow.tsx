@@ -6,6 +6,7 @@ import type { MouseEvent } from "react";
 import { DisclosureRow } from "../../components/DisclosureRow";
 import { HistoryDots } from "../../components/HistoryDots";
 import { OpenInLinks } from "../../components/OpenIn";
+import { ResultLabel } from "../../components/ResultLabel";
 import { StatusIcon } from "../../components/StatusIcon";
 import { Tags } from "../../components/Tags";
 import { ms } from "../../lib/format";
@@ -55,6 +56,7 @@ export function TestRow({ test, open, disabled, run, toggle }: Props) {
   const trailing = (
     <>
       <HistoryDots history={test.history} />
+      <ResultLabel result={test.last?.result} reason={test.last?.error ?? test.modeReason} />
       <span className="duration muted nums">{ms(test.last?.durationMs)}</span>
       <IconButton size="small" variant="invisible" icon={PlayIcon} className="test-run" data-run-test={test.id} disabled={disabled} aria-label={`Run ${test.title}`} description="Run this test" onClick={onRun} />
     </>

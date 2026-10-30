@@ -2,6 +2,7 @@
 // its attempts.
 import { Label } from "@primer/react";
 import { DisclosureRow } from "../../components/DisclosureRow";
+import { ResultLabel } from "../../components/ResultLabel";
 import { StatusIcon } from "../../components/StatusIcon";
 import { Tags } from "../../components/Tags";
 import { ms, since } from "../../lib/format";
@@ -34,7 +35,12 @@ export function LiveTestRow({ test, runId, waiting, open, toggle }: Props) {
       toggle={toggle}
       status={<StatusIcon status={status} />}
       name={name}
-      trailing={<span className="duration muted nums">{ms(live ?? test.durationMs)}</span>}
+      trailing={
+        <>
+          <ResultLabel result={test.result} reason={last?.error} />
+          <span className="duration muted nums">{ms(live ?? test.durationMs)}</span>
+        </>
+      }
     >
       <AttemptDetail test={test} runId={runId} />
     </DisclosureRow>
