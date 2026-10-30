@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/sethjuarez/auditaur/compare/api-v0.8.0...api-v0.9.0) (2026-10-30)
+
+
+### Features
+
+* **api:** redact invoke/emit error messages; export redaction test helpers ([#113](https://github.com/sethjuarez/auditaur/issues/113)) ([f728cdd](https://github.com/sethjuarez/auditaur/commit/f728cdd2f63bead0bc78c2ef160cf7e8c597ab3d))
+
 ## [0.8.0](https://github.com/sethjuarez/auditaur/compare/api-v0.7.1...api-v0.8.0) (2026-10-30)
 
 
