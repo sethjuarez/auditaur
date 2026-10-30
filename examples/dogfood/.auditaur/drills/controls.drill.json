@@ -39,6 +39,17 @@
       ]
     },
     {
+      "name": "fires blur even when the window is in the background",
+      "tags": ["@windows"],
+      "steps": [
+        { "run": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/take-foreground.ps1"], "timeoutMs": 15000 },
+        {
+          "expectValue": "(() => { const input = document.querySelector('#drive-input'); let fired = false; input.addEventListener('blur', () => { fired = true; }, { once: true }); input.focus(); input.blur(); return { hasFocus: document.hasFocus(), fired }; })()",
+          "toEqual": { "hasFocus": true, "fired": true }
+        }
+      ]
+    },
+    {
       "name": "matches the aria snapshot",
       "steps": [
         { "expect": "section.card:has(#failing-command)", "toMatchAriaSnapshot": "commands" }
