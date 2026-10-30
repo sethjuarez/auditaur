@@ -254,7 +254,8 @@ fn expand(value: &Value, env: &[(String, String)]) -> Result<Value, String> {
     }
 }
 
-fn unexpanded(text: &str) -> Option<String> {
+/// The first `${NAME}` left after expansion, which names a variable the drill env lacks.
+pub(super) fn unexpanded(text: &str) -> Option<String> {
     let start = text.find("${")? + 2;
     let end = text[start..].find('}')?;
     Some(text[start..start + end].to_string())

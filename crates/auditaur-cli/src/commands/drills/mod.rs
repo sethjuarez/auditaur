@@ -984,6 +984,17 @@ mod tests {
                 Valid,
                 json!({ "press": "Enter", "target": { "placeholder": "Name" } }),
             ),
+            (Valid, json!({ "paste": "hello" })),
+            (
+                Valid,
+                json!({ "paste": { "html": "<b>x</b>", "files": ["a.png"] }, "target": "#editor" }),
+            ),
+            (Invalid, json!({ "paste": "" })),
+            (Invalid, json!({ "paste": {} })),
+            (Invalid, json!({ "paste": { "text": "a", "image": "b" } })),
+            (Invalid, json!({ "paste": { "files": [] } })),
+            (Invalid, json!({ "paste": { "files": "a.png" } })),
+            (Invalid, json!({ "paste": 3 })),
             (
                 Valid,
                 json!({ "waitFor": { "text": "Hi", "exact": true }, "state": "hidden" }),

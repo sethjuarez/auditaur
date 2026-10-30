@@ -127,6 +127,25 @@
       "steps": [
         { "expect": "section.card:has(#failing-command)", "toHaveScreenshot": "commands" }
       ]
+    },
+    {
+      "name": "pastes text, html and files like Ctrl+V",
+      "steps": [
+        {
+          "evaluate": "(() => { window.__pasted = null; const zone = Object.assign(document.createElement('div'), { id: 'paste-zone', tabIndex: 0, textContent: 'Paste zone' }); zone.addEventListener('paste', (event) => { event.preventDefault(); const data = event.clipboardData; const file = data.files[0]; window.__pasted = { types: [...data.types], text: data.getData('text/plain'), file: file && file.name + ' ' + file.type, nonEmpty: !!file && file.size > 0 }; }); const editor = Object.assign(document.createElement('div'), { id: 'paste-editor', contentEditable: 'true', textContent: 'start' }); document.body.append(zone, editor); })()"
+        },
+        { "fill": "#drive-input", "value": "ab" },
+        { "paste": "X\nY", "target": "#drive-input" },
+        { "expect": "#drive-input", "toHaveValue": "abX Y" },
+        { "paste": { "html": "<b>bold</b>", "text": "bold" }, "target": "#paste-editor" },
+        { "expectValue": "document.querySelector('#paste-editor b')?.textContent", "toEqual": "bold" },
+        { "paste": { "text": "note", "files": ["index.html"] }, "target": "#paste-zone" },
+        {
+          "expectValue": "window.__pasted",
+          "toEqual": { "types": ["text/plain", "Files"], "text": "note", "file": "index.html text/html", "nonEmpty": true }
+        },
+        { "evaluate": "(() => { document.querySelector('#paste-zone').remove(); document.querySelector('#paste-editor').remove(); document.querySelector('#drive-input').value = 'ready'; })()" }
+      ]
     }
   ]
 }
