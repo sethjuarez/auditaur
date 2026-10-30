@@ -84,6 +84,7 @@
         { "$ref": "#/$defs/stepType" },
         { "$ref": "#/$defs/stepPress" },
         { "$ref": "#/$defs/stepHover" },
+        { "$ref": "#/$defs/stepDrag" },
         { "$ref": "#/$defs/stepSelect" },
         { "$ref": "#/$defs/stepCheck" },
         { "$ref": "#/$defs/stepUncheck" },
@@ -130,6 +131,10 @@
     "stepHover": {
       "type": "object", "additionalProperties": false, "required": ["hover"],
       "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "hover": { "$ref": "#/$defs/locator" } }
+    },
+    "stepDrag": {
+      "type": "object", "additionalProperties": false, "required": ["drag", "to"],
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "drag": { "$ref": "#/$defs/locator", "description": "Element to press and drag, as in Playwright's dragTo." }, "to": { "$ref": "#/$defs/locator", "description": "Element whose center the drag is released over." } }
     },
     "stepSelect": {
       "type": "object", "additionalProperties": false, "required": ["select"],

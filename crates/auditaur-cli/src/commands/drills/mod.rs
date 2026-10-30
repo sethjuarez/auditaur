@@ -926,6 +926,13 @@ mod tests {
             (Invalid, json!({ "dblclick": "#a", "button": "right" })),
             (
                 Valid,
+                json!({ "drag": "#a", "to": { "role": "listitem", "nth": 2 } }),
+            ),
+            (Invalid, json!({ "drag": "#a" })),
+            (Invalid, json!({ "drag": "#a", "to": 3 })),
+            (Invalid, json!({ "hover": "#a", "to": "#b" })),
+            (
+                Valid,
                 json!({ "click": { "role": "button", "name": "Go", "exact": true, "nth": -1 } }),
             ),
             (Valid, json!({ "fill": "#a", "value": "" })),

@@ -85,7 +85,7 @@ Every step accepts `name` and `timeoutMs`.
 
 | Kind | Steps |
 | --- | --- |
-| Actions | `click` (+ optional `button`: `left`, `right` or `middle`), `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `select` + `value` or `values`, `check`, `uncheck` |
+| Actions | `click` (+ optional `button`: `left`, `right` or `middle`), `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `drag` + `to`, `select` + `value` or `values`, `check`, `uncheck` |
 | Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload` |
 | Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop), `dialog` + `respond` (answer a [native dialog](#native-dialogs)) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
@@ -108,6 +108,16 @@ Assertions retry until they pass or their retry window runs out: the suite's `ex
 { "click": { "role": "treeitem", "name": "notes.md" }, "button": "right" },
 { "click": { "role": "menuitem", "name": "Move to project" } }
 ```
+
+### Drag and drop
+
+`drag` works like Playwright's `dragTo`. It hovers and presses the `drag` element at its center, moves to the center of `to` in five steps with the left button held, waiting a frame between steps, and releases there. Pointer-event libraries such as dnd-kit's `PointerSensor` see a press, moves past their activation distance, and a release, so sortable reorders work. Each move hit-tests the point, so `pointerover` and `pointerout` follow the elements under it; the `click` goes to the nearest element containing both the press and the release. The step waits for `to` to be visible and for the `drag` element to be visible and enabled.
+
+```json
+{ "drag": { "role": "button", "name": "Move row 1" }, "to": { "role": "button", "name": "Move row 3" } }
+```
+
+If the dragged element is inside `draggable="true"` and its `dragstart` isn't cancelled, the step sends Chromium's HTML5 sequence instead: `pointercancel`, then `drag`, `dragenter`, `dragleave` and `dragover` per move, `drop` if the last `dragover` was cancelled, and `dragend`. Events carry a `DataTransfer` the app can fill in `dragstart`. A refused drop doesn't fail the step, as in Playwright; assert the result. Events are synthetic, so pointer capture isn't available (dnd-kit listens on the document and doesn't need it), and an activation `delay` constraint never elapses between steps. For delay sensors, use dnd-kit's keyboard sensor with `press`. Needs @auditaur/api 0.13.0 or newer.
 
 ### Keyboard input
 
