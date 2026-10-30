@@ -295,7 +295,7 @@ function activatesOnEnter(el: Element): boolean {
 }
 
 /** Disabled itself or through a disabled `fieldset`. */
-function isDisabled(el: Element): boolean {
+export function isDisabled(el: Element): boolean {
   if ((el as HTMLButtonElement).disabled) {
     return true;
   }
@@ -347,7 +347,8 @@ function submitImplicitly(input: HTMLInputElement): boolean {
   return true;
 }
 
-const TABBABLE =
+/** Elements that can take focus; `tabindex=-1` ones only by script or mouse. */
+export const TABBABLE =
   'a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable]:not([contenteditable="false"])';
 
 /** Sequential focus navigation: positive `tabIndex` first in order, then document order. */

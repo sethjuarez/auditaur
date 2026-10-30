@@ -85,7 +85,7 @@ Every step accepts `name` and `timeoutMs`.
 
 | Kind | Steps |
 | --- | --- |
-| Actions | `click`, `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `select` + `value` or `values`, `check`, `uncheck` |
+| Actions | `click` (+ optional `button`: `left`, `right` or `middle`), `dblclick`, `fill` + `value`, `type` + `value`, `press` (+ optional `target`; chords like `Control+s` or `ControlOrMeta+Shift+K`), `hover`, `select` + `value` or `values`, `check`, `uncheck` |
 | Waits | `waitFor` + `state` (`visible`, `hidden`, `attached`, `detached`), `sleep`, `reload` |
 | Other | `evaluate` (JavaScript), `run` (a command), `screenshot` (attachment only), `gate` (human-in-the-loop), `dialog` + `respond` (answer a [native dialog](#native-dialogs)) |
 | UI assertions | `expect` + one of `toBeVisible`, `toBeHidden`, `toExist`, `toHaveText`, `toContainText`, `toHaveValue`, `toBeChecked`, `toHaveCount`, `toMatchAriaSnapshot`, `toHaveScreenshot` |
@@ -93,6 +93,15 @@ Every step accepts `name` and `timeoutMs`.
 | Telemetry assertions | `expectIpc` (+ `status`, `count`, `maxMs`), `expectEvent` (+ `count`), `expectLog` (+ `level`, `attributes`, `count`), `expectSpan` (+ `status`, `attributes`, `count`), `expectNoTelemetry` (+ `in`), `expectNoErrors` (+ `ignore`) |
 
 Assertions retry until they pass or their retry window runs out: the suite's `expectTimeoutMs` (default 5s), or the step's own `timeoutMs`, like Playwright's `expect(..., { timeout })`. Add `"soft": true` to record a failure and keep going. Add `"not": true` to negate any assertion except snapshots and `expectNoErrors`. `toHaveText` and `toHaveValue` take a string or `{ "pattern": "regex" }`; `toContainText` takes a string.
+
+### Mouse buttons
+
+`click` with `"button": "right"` opens context menus. It fires the events Edge on Windows fires for a real right-click, all on the target at its center: hover events, then `pointerdown`, `mousedown`, focus, `pointerup`, `mouseup`, `auxclick` and `contextmenu`, with the same event types, flags, `button: 2` and `which: 3`. `"middle"` fires the same sequence with `button: 1` and no `contextmenu`. As in Edge, cancelling `pointerdown` suppresses `mousedown`, `mouseup` and the focus change, and cancelling `mousedown` suppresses the focus change. The reply reports `contextMenuPrevented`. As Playwright does, the step waits for a disabled target (native `disabled`, a disabled fieldset, or inside `aria-disabled="true"`) to become enabled. The webview's own context menu never opens. There's no hit-testing, so an overlay covering the target doesn't intercept the click. Needs @auditaur/api 0.12.0 or newer.
+
+```json
+{ "click": { "role": "treeitem", "name": "notes.md" }, "button": "right" },
+{ "click": { "role": "menuitem", "name": "Move to project" } }
+```
 
 ### Keyboard input
 

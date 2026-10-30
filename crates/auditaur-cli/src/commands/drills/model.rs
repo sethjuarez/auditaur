@@ -101,6 +101,7 @@ pub const SCREENSHOT_OPTION_KEYS: &[&str] =
 
 /// Step option keys that only apply to some actions.
 pub const STEP_OPTION_KEYS: &[&str] = &[
+    "button",
     "value",
     "values",
     "target",
@@ -239,7 +240,11 @@ pub struct Step {
 
 #[derive(Debug, Clone)]
 pub enum StepKind {
-    Click(Locator),
+    Click {
+        target: Locator,
+        /// `None` for the main (left) button.
+        button: Option<MouseButton>,
+    },
     Dblclick(Locator),
     Fill {
         target: Locator,
@@ -395,6 +400,52 @@ impl WaitState {
             Self::Detached => "detached",
             Self::Visible => "visible",
             Self::Hidden => "hidden",
+        }
+    }
+}
+
+/// A `click` step's non-main `button`, as in Playwright's `click({ button })`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Right,
+    Middle,
+}
+
+impl MouseButton {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Middle => "middle",
+        }
+    }
+}
+
+/// `Some(None)` for no `button` or `"left"`; `None` after reporting an invalid one.
+fn parse_button(
+    ctx: &mut Ctx,
+    map: &Map<String, Value>,
+    parent: &str,
+) -> Option<Option<MouseButton>> {
+    match map.get("button") {
+        None => Some(None),
+        Some(Value::String(button)) => match button.as_str() {
+            "left" => Some(None),
+            "right" => Some(Some(MouseButton::Right)),
+            "middle" => Some(Some(MouseButton::Middle)),
+            other => {
+                ctx.err(
+                    &join(parent, "button"),
+                    format!("unknown button {other:?}; use left, right or middle"),
+                );
+                None
+            }
+        },
+        Some(other) => {
+            ctx.err(
+                &join(parent, "button"),
+                format!("expected string, found {}", type_name(other)),
+            );
+            None
         }
     }
 }
@@ -1335,6 +1386,7 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
     let mut allowed: Vec<&str> = STEP_COMMON_KEYS.to_vec();
     allowed.push(action);
     let extra: &[&str] = match action {
+        "click" => &["button"],
         "fill" | "type" => &["value"],
         "press" | "screenshot" => &["target"],
         "select" => &["value", "values"],
@@ -1418,7 +1470,14 @@ fn parse_step_kind(
         }
     };
     Some(match action {
-        "click" => StepKind::Click(parse_locator(ctx, raw, path)?),
+        "click" => {
+            let target = parse_locator(ctx, raw, path);
+            let button = parse_button(ctx, map, parent)?;
+            StepKind::Click {
+                target: target?,
+                button,
+            }
+        }
         "dblclick" => StepKind::Dblclick(parse_locator(ctx, raw, path)?),
         "hover" => StepKind::Hover(parse_locator(ctx, raw, path)?),
         "check" => StepKind::Check(parse_locator(ctx, raw, path)?),
@@ -2334,7 +2393,14 @@ fn parse_locator(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Locator> {
 /// Default human-readable title for a step.
 pub fn describe(kind: &StepKind) -> String {
     match kind {
-        StepKind::Click(target) => format!("click {target}"),
+        StepKind::Click {
+            target,
+            button: None,
+        } => format!("click {target}"),
+        StepKind::Click {
+            target,
+            button: Some(button),
+        } => format!("{}-click {target}", button.as_str()),
         StepKind::Dblclick(target) => format!("double-click {target}"),
         StepKind::Fill { target, value } => format!("fill {target} with {value:?}"),
         StepKind::Type { target, value } => format!("type {value:?} into {target}"),

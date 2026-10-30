@@ -108,7 +108,7 @@
     "stepTimeout": { "type": "integer", "minimum": 1, "description": "On assertions, how long this step retries (overrides the suite's expectTimeoutMs); on actions, how long the step may take." },
     "stepClick": {
       "type": "object", "additionalProperties": false, "required": ["click"],
-      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "click": { "$ref": "#/$defs/locator" } }
+      "properties": { "name": { "$ref": "#/$defs/stepName" }, "timeoutMs": { "$ref": "#/$defs/stepTimeout" }, "click": { "$ref": "#/$defs/locator" }, "button": { "enum": ["left", "right", "middle"], "description": "Mouse button, as in Playwright's click({ button }); right fires contextmenu." } }
     },
     "stepDblclick": {
       "type": "object", "additionalProperties": false, "required": ["dblclick"],

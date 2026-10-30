@@ -465,6 +465,9 @@ fn timed_out(message: impl Into<String>) -> StepResult {
 pub(crate) const LOCATOR_PREFIX: &str = "locator:";
 /// The bridge's error when an action's target is missing (or not visible).
 const SELECTOR_NOT_FOUND: &str = "selector not found";
+/// The bridge's reply when an action that requires an enabled target finds it disabled; `act`
+/// waits for it to become enabled, like Playwright's actionability checks.
+const ELEMENT_DISABLED: &str = "element is disabled";
 
 pub(crate) fn bridge_selector(locator: &Locator) -> String {
     fn put<T: serde::Serialize>(spec: &mut Value, key: &str, value: Option<T>) {
@@ -677,6 +680,8 @@ impl Evidence {
 const MIN_DRILL_API_VERSION: &str = "0.7.1";
 /// First `@auditaur/api` release with `withDrillDialogs` and the `dialogs.*` bridge actions.
 const MIN_DIALOG_API_VERSION: &str = "0.11.0";
+/// First `@auditaur/api` release with the `clickButton` bridge action (right and middle clicks).
+const MIN_BUTTON_CLICK_API_VERSION: &str = "0.12.0";
 
 /// Matches nothing, so the probe exercises the bridge's not-found reply.
 const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
@@ -729,6 +734,17 @@ fn explain(error: String) -> String {
         )
     } else {
         error
+    }
+}
+
+/// Like [`explain`], but names the release an action newer than drill support needs.
+fn explain_action(action: &str, error: String) -> String {
+    if action == "clickButton" && error.contains("unsupported drive bridge action") {
+        format!(
+            "{error}\n`click` with `button` needs @auditaur/api {MIN_BUTTON_CLICK_API_VERSION} or newer in the app"
+        )
+    } else {
+        explain(error)
     }
 }
 
@@ -822,7 +838,20 @@ impl BridgeDriver {
 
     fn step(&mut self, step: &Step, ctx: &mut StepCtx<'_>) -> StepOutcome {
         match &step.kind {
-            StepKind::Click(target) => self.act(ctx, "click", target, None, Vec::new()),
+            StepKind::Click {
+                target,
+                button: None,
+            } => self.act(ctx, "click", target, None, Vec::new()),
+            StepKind::Click {
+                target,
+                button: Some(button),
+            } => self.act(
+                ctx,
+                "clickButton",
+                target,
+                Some(button.as_str().to_string()),
+                Vec::new(),
+            ),
             StepKind::Dblclick(target) => self.act(ctx, "dblclick", target, None, Vec::new()),
             StepKind::Hover(target) => self.act(ctx, "hover", target, None, Vec::new()),
             StepKind::Check(target) => self.act(ctx, "check", target, None, Vec::new()),
@@ -1217,16 +1246,25 @@ impl BridgeDriver {
         value: Option<String>,
         values: Vec<String>,
     ) -> StepOutcome {
+        // Name the step as written, not the bridge action.
+        let shown = match (action, value.as_deref()) {
+            ("clickButton", Some(button)) => format!("{button}-click"),
+            _ => action.to_string(),
+        };
+        let mut disabled = false;
         loop {
             self.poll(ctx, target, true, true)
                 .map_err(|error| match error {
+                    StepResult::TimedOut(_) if disabled => timed_out(format!(
+                        "{shown}: timed out waiting for `{target}` to be enabled"
+                    )),
                     StepResult::TimedOut(_) => timed_out(format!(
-                        "{action}: timed out waiting for `{target}` to be visible"
+                        "{shown}: timed out waiting for `{target}` to be visible"
                     )),
                     other => other,
                 })?;
             if ctx.expired() {
-                return Err(timed_out(format!("{action}: step timed out")));
+                return Err(timed_out(format!("{shown}: step timed out")));
             }
             let reply = self.request_full(
                 ctx,
@@ -1240,23 +1278,37 @@ impl BridgeDriver {
             match reply {
                 Ok(reply) if reply.ok => return Ok(()),
                 Ok(reply) if reply.error.as_deref() == Some(SELECTOR_NOT_FOUND) => {
+                    disabled = false;
+                    thread::sleep(WAIT_POLL.min(ctx.remaining()));
+                }
+                Ok(reply) if reply.error.as_deref() == Some(ELEMENT_DISABLED) => {
+                    if ctx.expired() {
+                        return Err(timed_out(format!(
+                            "{shown}: timed out waiting for `{target}` to be enabled"
+                        )));
+                    }
+                    disabled = true;
                     thread::sleep(WAIT_POLL.min(ctx.remaining()));
                 }
                 Ok(reply) => {
-                    return Err(failed(explain(format!(
-                        "{action} `{target}` failed: {}",
-                        reply
-                            .error
-                            .unwrap_or_else(|| "bridge returned ok=false".to_string())
-                    ))))
+                    return Err(failed(explain_action(
+                        action,
+                        format!(
+                            "{shown} `{target}` failed: {}",
+                            reply
+                                .error
+                                .unwrap_or_else(|| "bridge returned ok=false".to_string())
+                        ),
+                    )))
                 }
                 Err(_) if ctx.expired() => {
-                    return Err(timed_out(format!("{action}: step timed out")))
+                    return Err(timed_out(format!("{shown}: step timed out")))
                 }
                 Err(error) => {
-                    return Err(failed(explain(format!(
-                        "{action} `{target}` failed: {error:#}"
-                    ))))
+                    return Err(failed(explain_action(
+                        action,
+                        format!("{shown} `{target}` failed: {error:#}"),
+                    )))
                 }
             }
         }
