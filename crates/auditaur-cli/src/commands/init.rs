@@ -260,6 +260,10 @@ pub fn extension(path: Option<&Path>, force: bool, json: bool) -> Result<()> {
         if status != "skipped" {
             write_extension_files(dir, files, force)?;
         }
+        // A repair mixes old and new files, so only a whole install records its version.
+        if matches!(status, "installed" | "overwritten") {
+            write_install_stamp(dir)?;
+        }
         extensions.push(InitExtension {
             name,
             path: output.to_string_lossy().to_string(),
@@ -352,6 +356,18 @@ fn file_path(dir: &Path, relative: &str) -> PathBuf {
 }
 
 /// Writes the entry point last, so an interrupted install never looks complete.
+/// Records which CLI installed the extension, so the canvas can tell when it is older than the
+/// CLI it drives and name the fix (`auditaur init extension --force`). Not a code file, so it
+/// does not mark the running extension stale.
+const EXTENSION_INSTALL_STAMP: &str = "installed.json";
+
+fn write_install_stamp(dir: &Path) -> Result<()> {
+    let output = dir.join(EXTENSION_INSTALL_STAMP);
+    let stamp = serde_json::json!({ "version": env!("CARGO_PKG_VERSION") });
+    fs::write(&output, format!("{stamp:#}\n"))
+        .with_context(|| format!("failed to write {}", output.display()))
+}
+
 fn write_extension_files(dir: &Path, files: &[(&str, &str)], overwrite: bool) -> Result<()> {
     for (relative, contents) in files.iter().rev() {
         let output = file_path(dir, relative);

@@ -8,7 +8,9 @@ import { isStill } from "./serverEvents";
 export interface Health {
   build: string;
   stale: boolean;
-  skew?: { plugin: string; cli: string } | null;
+  version?: string | null;
+  versionSource?: "plugin" | "init" | null;
+  skew?: { canvas: string; cli: string; source: "plugin" | "init" } | null;
   failedPages: { page: PageId; error: string }[];
 }
 

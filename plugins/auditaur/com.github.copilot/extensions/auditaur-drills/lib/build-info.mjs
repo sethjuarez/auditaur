@@ -41,7 +41,7 @@ export async function fingerprint() {
 
 const startedAt = new Date().toISOString();
 const running = fingerprint();
-const version = pluginVersion();
+const version = shippedVersion();
 let failedPages = [];
 
 // The Auditaur plugin version when this copy ships in the plugin
@@ -53,6 +53,25 @@ export async function pluginVersion(root = ROOT) {
     } catch {
         return null;
     }
+}
+
+// The CLI version `auditaur init extension` stamped into `installed.json`; null when absent.
+export async function installedVersion(root = ROOT) {
+    try {
+        const stamp = JSON.parse(await readFile(join(root, "installed.json"), "utf8"));
+        return typeof stamp.version === "string" ? stamp.version : null;
+    } catch {
+        return null;
+    }
+}
+
+// Which release this copy's code came from, and how it got here: `plugin` or `init` (the
+// `auditaur init extension` stamp). Null for the source copy in the Auditaur repo.
+export async function shippedVersion(root = ROOT) {
+    const plugin = await pluginVersion(root);
+    if (plugin) return { version: plugin, source: "plugin" };
+    const installed = await installedVersion(root);
+    return installed ? { version: installed, source: "init" } : { version: null, source: null };
 }
 
 // Pages whose feature module failed to load (see features.mjs).
@@ -81,25 +100,28 @@ export function cliVersion(cli, run = runVersion, now = Date.now()) {
     return value;
 }
 
-// The plugin's canvas and the CLI it drives ship together; a different CLI may not read what the
-// canvas expects. Null when either version is unknown (a committed copy has no plugin version).
-export function versionSkew(plugin, cli) {
-    return plugin && cli && plugin !== cli ? { plugin, cli } : null;
+// The canvas and the CLI it drives ship together; a different CLI may not read what the canvas
+// expects. `source` says which fix applies. Null when either version is unknown.
+export function versionSkew(shipped, cli) {
+    const canvas = shipped?.version;
+    return canvas && cli && canvas !== cli ? { canvas, cli, source: shipped.source } : null;
 }
 
 export async function health(cli) {
     const build = await running;
     const onDisk = await fingerprint().catch(() => build);
-    const plugin = await version;
+    // What this process loaded at start; a newer copy on disk shows as `stale` until a reload.
+    const shipped = await version;
     const cliInfo = cli ? await cliVersion(cli) : { version: null, error: null };
     return {
         build,
         onDisk,
         stale: onDisk !== build,
         install: INSTALL,
-        version: plugin,
+        version: shipped.version,
+        versionSource: shipped.source,
         cli: { path: cli ?? null, ...cliInfo },
-        skew: versionSkew(plugin, cliInfo.version),
+        skew: versionSkew(shipped, cliInfo.version),
         startedAt,
         pid: process.pid,
         failedPages,

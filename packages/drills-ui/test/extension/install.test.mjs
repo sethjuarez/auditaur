@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { lib } from "./lib.mjs";
 
 const { INSTALL, locate, projectCopy, projectDir, projectRepo, sessionRepo } = await lib("paths.mjs");
-const { pluginVersion } = await lib("build-info.mjs");
+const { pluginVersion, shippedVersion } = await lib("build-info.mjs");
 
 function scratch(t) {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "drills-install-")));
@@ -79,4 +79,20 @@ test("only the auditaur plugin manifest names the version", async (t) => {
 
     writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "auditaur", version: "1.2.3" }));
     assert.equal(await pluginVersion(extension), "1.2.3");
+});
+
+test("an `init extension` copy names its version from the install stamp; the plugin wins", async (t) => {
+    const plugin = scratch(t);
+    const extension = join(plugin, "com.github.copilot", "extensions", "auditaur-drills");
+    mkdirSync(extension, { recursive: true });
+    assert.deepEqual(await shippedVersion(extension), { version: null, source: null });
+
+    writeFileSync(join(extension, "installed.json"), "not json");
+    assert.deepEqual(await shippedVersion(extension), { version: null, source: null });
+
+    writeFileSync(join(extension, "installed.json"), JSON.stringify({ version: "0.4.15" }));
+    assert.deepEqual(await shippedVersion(extension), { version: "0.4.15", source: "init" });
+
+    writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "auditaur", version: "0.4.16" }));
+    assert.deepEqual(await shippedVersion(extension), { version: "0.4.16", source: "plugin" });
 });

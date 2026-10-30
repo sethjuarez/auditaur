@@ -11,13 +11,22 @@ export function HealthNotices({ health }: { health: Health | null }) {
       <Notices>
         {health.stale && (
           <Notice tone="warning" title="The drills extension changed on disk">
-            This panel still runs the old code. Reload extensions to pick up the change.
+            This panel still runs the old code. Reopening the canvas reuses the same process, so reload extensions
+            (or restart the session) to pick up the change.
           </Notice>
         )}
         {health.skew && (
-          <Notice tone="warning" title="The Auditaur CLI doesn't match the plugin">
-            The plugin is {health.skew.plugin} but the CLI is {health.skew.cli}. Install the matching CLI or set
-            AUDITAUR_BIN to it.
+          <Notice tone="warning" title="The drills canvas doesn't match the Auditaur CLI">
+            The canvas is {health.skew.canvas} but the CLI is {health.skew.cli}.{" "}
+            {health.skew.source === "init" ? (
+              <>
+                Run <code>auditaur init extension --force</code>, then reload extensions.
+              </>
+            ) : (
+              <>
+                Install the matching CLI, or set <code>AUDITAUR_BIN</code> to it.
+              </>
+            )}
           </Notice>
         )}
         {health.failedPages.map(({ page, error }) => (
