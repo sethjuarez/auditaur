@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/sethjuarez/auditaur/compare/api-v0.11.1...api-v0.12.0) (2026-10-30)
+
+
+### Features
+
+* **drive:** right and middle click with click's button option (AR-27) ([#150](https://github.com/sethjuarez/auditaur/issues/150)) ([3e78612](https://github.com/sethjuarez/auditaur/commit/3e786121865bab3e4f2147f7a2714c466af2e06b))
+
 ## [0.11.1](https://github.com/sethjuarez/auditaur/compare/api-v0.11.0...api-v0.11.1) (2026-10-30)
 
 
