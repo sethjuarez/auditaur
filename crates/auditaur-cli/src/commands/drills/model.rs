@@ -57,6 +57,7 @@ pub const ACTION_KEYS: &[&str] = &[
     "type",
     "press",
     "hover",
+    "drag",
     "select",
     "check",
     "uncheck",
@@ -123,6 +124,7 @@ pub const STEP_OPTION_KEYS: &[&str] = &[
     "stderr",
     "respond",
     "expectOptions",
+    "to",
 ];
 
 pub const LOCATOR_KEYS: &[&str] = &[
@@ -264,6 +266,11 @@ pub enum StepKind {
         target: Option<Locator>,
     },
     Hover(Locator),
+    /// Press `source`, move to `to` with the button held, and release.
+    Drag {
+        source: Locator,
+        to: Locator,
+    },
     Select {
         target: Locator,
         values: Vec<String>,
@@ -1417,6 +1424,7 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
         "expectValue" => &["toEqual", "toContain", "toMatch", "not", "soft"],
         "run" => &["args", "cwd", "exitCode", "stdout", "stderr"],
         "dialog" => &["respond", "expectOptions"],
+        "drag" => &["to"],
         _ => &[],
     };
     allowed.extend_from_slice(extra);
@@ -1496,6 +1504,20 @@ fn parse_step_kind(
         }
         "dblclick" => StepKind::Dblclick(parse_locator(ctx, raw, path)?),
         "hover" => StepKind::Hover(parse_locator(ctx, raw, path)?),
+        "drag" => {
+            let source = parse_locator(ctx, raw, path);
+            let to = match map.get("to") {
+                Some(value) => parse_locator(ctx, value, &join(parent, "to")),
+                None => {
+                    ctx.err(parent, "`drag` requires `to`, the locator to drop on");
+                    None
+                }
+            };
+            StepKind::Drag {
+                source: source?,
+                to: to?,
+            }
+        }
         "check" => StepKind::Check(parse_locator(ctx, raw, path)?),
         "uncheck" => StepKind::Uncheck(parse_locator(ctx, raw, path)?),
         "fill" | "type" => {
@@ -2426,6 +2448,7 @@ pub fn describe(kind: &StepKind) -> String {
         } => format!("press {key} on {target}"),
         StepKind::Press { key, target: None } => format!("press {key}"),
         StepKind::Hover(target) => format!("hover {target}"),
+        StepKind::Drag { source, to } => format!("drag {source} to {to}"),
         StepKind::Select { target, values } => format!("select {} in {target}", values.join(", ")),
         StepKind::Check(target) => format!("check {target}"),
         StepKind::Uncheck(target) => format!("uncheck {target}"),
@@ -2979,6 +3002,25 @@ mod tests {
         assert!(messages(r##"{ "env": [], "tests": [] }"##)
             .iter()
             .any(|m| m.contains("expected object of strings")));
+    }
+
+    #[test]
+    fn drag_steps_need_a_drop_target() {
+        let ok = parse(
+            r##"{ "tests": [{ "name": "a", "steps": [{ "drag": { "role": "button", "name": "Move row 1" }, "to": "#row-3" }] }] }"##,
+        );
+        assert!(ok.issues.is_empty(), "{:?}", ok.issues);
+        let suite = ok.suite.unwrap();
+        let step = &suite.tests[0].steps[0];
+        assert!(matches!(step.kind, StepKind::Drag { .. }));
+        assert!(step.title.starts_with("drag "), "{}", step.title);
+        assert!(step.title.contains(" to "), "{}", step.title);
+        let issues = messages(
+            r##"{ "tests": [{ "name": "a", "steps": [{ "drag": "#a" }, { "click": "#a", "to": "#b" }] }] }"##,
+        );
+        assert_eq!(issues.len(), 2, "{issues:?}");
+        assert!(issues[0].contains("`drag` requires `to`"), "{issues:?}");
+        assert!(issues[1].contains("`to`"), "{issues:?}");
     }
 
     #[test]

@@ -686,6 +686,8 @@ const MIN_DRILL_API_VERSION: &str = "0.7.1";
 const MIN_DIALOG_API_VERSION: &str = "0.11.0";
 /// First `@auditaur/api` release with the `clickButton` bridge action (right and middle clicks).
 const MIN_BUTTON_CLICK_API_VERSION: &str = "0.12.0";
+/// First `@auditaur/api` release with the `dragTo` bridge action.
+const MIN_DRAG_API_VERSION: &str = "0.13.0";
 
 /// Matches nothing, so the probe exercises the bridge's not-found reply.
 const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
@@ -743,12 +745,16 @@ fn explain(error: String) -> String {
 
 /// Like [`explain`], but names the release an action newer than drill support needs.
 fn explain_action(action: &str, error: String) -> String {
-    if action == "clickButton" && error.contains("unsupported drive bridge action") {
-        format!(
-            "{error}\n`click` with `button` needs @auditaur/api {MIN_BUTTON_CLICK_API_VERSION} or newer in the app"
-        )
-    } else {
-        explain(error)
+    let needs = match action {
+        "clickButton" => Some(("`click` with `button`", MIN_BUTTON_CLICK_API_VERSION)),
+        "dragTo" => Some(("`drag`", MIN_DRAG_API_VERSION)),
+        _ => None,
+    };
+    match needs {
+        Some((step, version)) if error.contains("unsupported drive bridge action") => {
+            format!("{error}\n{step} needs @auditaur/api {version} or newer in the app")
+        }
+        _ => explain(error),
     }
 }
 
@@ -858,6 +864,17 @@ impl BridgeDriver {
             ),
             StepKind::Dblclick(target) => self.act(ctx, "dblclick", target, None, Vec::new()),
             StepKind::Hover(target) => self.act(ctx, "hover", target, None, Vec::new()),
+            StepKind::Drag { source, to } => {
+                // Wait for the drop target first so a timeout names the element that held it up.
+                self.poll(ctx, to, true, true)
+                    .map_err(|error| match error {
+                        StepResult::TimedOut(_) => {
+                            timed_out(format!("drag: timed out waiting for `{to}` to be visible"))
+                        }
+                        other => other,
+                    })?;
+                self.act(ctx, "dragTo", source, Some(bridge_selector(to)), Vec::new())
+            }
             StepKind::Check(target) => self.act(ctx, "check", target, None, Vec::new()),
             StepKind::Uncheck(target) => self.act(ctx, "uncheck", target, None, Vec::new()),
             StepKind::Fill { target, value } => {
@@ -1253,6 +1270,7 @@ impl BridgeDriver {
         // Name the step as written, not the bridge action.
         let shown = match (action, value.as_deref()) {
             ("clickButton", Some(button)) => format!("{button}-click"),
+            ("dragTo", _) => "drag".to_string(),
             _ => action.to_string(),
         };
         loop {
