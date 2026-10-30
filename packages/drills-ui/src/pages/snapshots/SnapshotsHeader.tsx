@@ -39,7 +39,7 @@ export function SnapshotsHeader({ state, loadError, busy, locked, select, reload
       {run && state && (
         <>
           <div className="row snapshots-summary-row">
-            <SnapshotsSummary run={run} items={items} />
+            <SnapshotsSummary run={run} items={items} screenshots={state?.screenshots?.length ?? 0} />
             <span className="spacer" />
             <span id="open-in"><OpenInLinks caption="Open this run in" links={runLinks(run.runId, "snapshots")} /></span>
           </div>

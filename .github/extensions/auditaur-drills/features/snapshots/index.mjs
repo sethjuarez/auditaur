@@ -41,7 +41,7 @@ export default {
     actions: [
         {
             name: "get_snapshots",
-            description: "The routed run's snapshot results: baseline path, status (changed, missing, accepted, unstable, unreadable, noActual), message, and attachment paths.",
+            description: "The routed run's snapshot mismatches (matched snapshot steps are not listed): baseline path, status (changed, missing, accepted, unstable, unreadable, noActual), message, and attachment paths; plus its named screenshots.",
             readOnly: true,
             handler: async (state) => snapshotsSummary(await snapshotsView(state)),
         },

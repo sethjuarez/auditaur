@@ -23,12 +23,23 @@ export interface SnapshotItem {
   status: SnapshotStatus;
 }
 
+// A named `screenshot` step's image. It has no baseline, so it is shown, never reviewed.
+export interface SavedScreenshot {
+  id: string;
+  suite: string;
+  test: string;
+  stepIndex: number;
+  step: string;
+  file: SnapshotFile;
+}
+
 export interface SnapshotsState {
   workspace: string;
   runs: { runId: string; status: string }[];
   pinned: string | null;
   run: { runId: string; status: string; startedAt?: string } | null;
   items: SnapshotItem[];
+  screenshots?: SavedScreenshot[];
   ui: { mode: CompareMode; split: number };
 }
 
