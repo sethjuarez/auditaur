@@ -246,6 +246,8 @@ Each suite launches the app once; its tests, retries included, share that instan
 
 If the app exits or restarts mid-suite, the suite's remaining tests stop rather than running against a different instance.
 
+Closing the app ends its whole process tree. On Windows, WebView2's browser and GPU processes can take a minute or more to exit and release the app's data folder, and an app launched before then fails with "The requested resource is in use". So the next launch waits up to 120 s for them and notes the wait at the top of its app log. If they're still running after that, the suite fails and names the process.
+
 ## Snapshots
 
 `toMatchAriaSnapshot` compares the element's accessibility tree as YAML. `toHaveScreenshot` compares pixels, using `mask`, `threshold`, `maxDiffPixels`, and `maxDiffPixelRatio`. Name a snapshot by giving it a string (`"toHaveScreenshot": "home"`), or use `true` to get an auto-numbered name.

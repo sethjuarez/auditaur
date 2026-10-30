@@ -185,6 +185,14 @@ pub fn test(options: TestOptions) -> Result<i32> {
             cancel: Some(Arc::clone(&cancel)),
         },
     );
+    // Leave nothing running: wait for any app process that was still exiting when its suite ended.
+    // The watcher stays up so a cancel request (Ctrl+C or the canvas) still cuts this short.
+    let cancelled = || cancel.load(std::sync::atomic::Ordering::SeqCst);
+    if let Err(error) =
+        crate::process_tree::wait_for_lingering(crate::process_tree::LINGER_TIMEOUT, &cancelled)
+    {
+        eprintln!("warning: {error:#}");
+    }
     watcher.stop();
     let stopped = stopped?;
     let report = writer.finish(stopped.is_some())?;
