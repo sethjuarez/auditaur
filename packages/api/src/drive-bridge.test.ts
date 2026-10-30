@@ -184,8 +184,6 @@ describe('drive bridge selector operations', () => {
   });
 
   it('declares no functions inside blocks, which bundlers lower to TDZ-prone `let`', () => {
-    const file = fileURLToPath(new URL('./drive-bridge.ts', import.meta.url));
-    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true);
     const offenders: string[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isFunctionDeclaration(node) && (ts.isBlock(node.parent) || ts.isCaseClause(node.parent) || ts.isDefaultClause(node.parent))) {
@@ -196,7 +194,10 @@ describe('drive bridge selector operations', () => {
       }
       ts.forEachChild(node, visit);
     };
-    visit(source);
+    for (const module of ['./drive-bridge.ts', './keyboard.ts', './locator.ts', './drill-dialogs.ts']) {
+      const file = fileURLToPath(new URL(module, import.meta.url));
+      visit(ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true));
+    }
     expect(offenders).toEqual([]);
   });
 
@@ -276,8 +277,12 @@ describe('drive bridge selector operations', () => {
     await expect(executeDriveBridgeRequest(request('press', '#button', 'Enter'))).resolves.toEqual({
       ok: true,
       visibleOnly: false,
+      key: 'Enter',
+      code: 'Enter',
+      defaultPrevented: false,
+      defaultAction: 'none',
     });
-    expect(button.dispatched).toEqual(['keydown', 'keyup']);
+    expect(button.dispatched).toEqual(['keydown', 'keypress', 'keyup']);
   });
 
   it('hovers, selects options, and toggles checked inputs', async () => {
