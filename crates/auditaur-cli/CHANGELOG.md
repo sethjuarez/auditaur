@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.29](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.28...auditaur-cli-v0.4.29) - 2026-10-30
+
+### Added
+
+- *(drill)* add a drag step that drags one element onto another ([#170](https://github.com/sethjuarez/auditaur/pull/170))
+
 ## [0.4.28](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.27...auditaur-cli-v0.4.28) - 2026-10-30
 
 ### Added
