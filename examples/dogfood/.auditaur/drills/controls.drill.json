@@ -58,6 +58,33 @@
       ]
     },
     {
+      "name": "left- and double-clicks like a real mouse",
+      "steps": [
+        {
+          "evaluate": "(() => { window.__left = []; if (window.__leftInstalled) return; window.__leftInstalled = true; const el = document.querySelector('#drive-hover-target'); for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'dblclick']) el.addEventListener(type, (event) => window.__left.push(type + ':' + event.button + ':' + event.detail + (type === 'click' ? ':' + event.constructor.name : ''))); })()"
+        },
+        { "click": { "role": "button", "name": "Hover target", "exact": true } },
+        {
+          "expectValue": "window.__left",
+          "toEqual": ["pointerdown:0:0", "mousedown:0:1", "pointerup:0:0", "mouseup:0:1", "click:0:1:PointerEvent"]
+        },
+        { "evaluate": "window.__left = []" },
+        { "dblclick": { "role": "button", "name": "Hover target", "exact": true } },
+        {
+          "expectValue": "window.__left",
+          "toEqual": [
+            "pointerdown:0:0", "mousedown:0:1", "pointerup:0:0", "mouseup:0:1", "click:0:1:PointerEvent",
+            "pointerdown:0:0", "mousedown:0:2", "pointerup:0:0", "mouseup:0:2", "click:0:2:PointerEvent", "dblclick:0:2"
+          ]
+        },
+        { "evaluate": "document.querySelector('#drive-checkbox').checked = false" },
+        { "click": "#drive-checkbox" },
+        { "expect": "#drive-checkbox", "toBeChecked": true },
+        { "click": "#drive-checkbox" },
+        { "expect": "#drive-checkbox", "toBeChecked": true, "not": true }
+      ]
+    },
+    {
       "name": "fires blur even when the window is in the background",
       "tags": ["@windows"],
       "steps": [

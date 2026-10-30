@@ -252,7 +252,7 @@ describe('drive bridge selector operations', () => {
       ok: true,
       visibleOnly: false,
     });
-    expect(button.clicked).toBe(true);
+    expect(button.dispatched.slice(-5)).toEqual(['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']);
 
     await expect(executeDriveBridgeRequest(request('fill', '#input', 'hello'))).resolves.toEqual({
       ok: true,
