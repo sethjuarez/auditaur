@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/sethjuarez/auditaur/compare/api-v0.7.1...api-v0.8.0) (2026-10-30)
+
+
+### Features
+
+* **api:** redact payload summaries; add redactKeys, payloadSummaries, redactPayload ([#102](https://github.com/sethjuarez/auditaur/issues/102)) ([6cd9cd0](https://github.com/sethjuarez/auditaur/commit/6cd9cd027028b9e4982cd9d96a7792b3f6df55ce))
+
 ## [0.7.1](https://github.com/sethjuarez/auditaur/compare/api-v0.7.0...api-v0.7.1) (2026-10-29)
 
 
