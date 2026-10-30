@@ -583,6 +583,11 @@ fn run_steps_check_exit_code_and_output_in_order() {
         message("exit")
     );
     assert!(message("exit").contains("it broke"), "{}", message("exit"));
+    assert!(
+        message("exit").contains("stdout: out of fail"),
+        "{}",
+        message("exit")
+    );
     assert_eq!(test(&ran, "expected-exit").status, Status::Passed);
     assert!(
         message("output").contains("stdout to contain"),
