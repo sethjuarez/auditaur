@@ -1333,11 +1333,20 @@ fn parse_step(ctx: &mut Ctx, value: &Value, path: &str) -> Option<Step> {
         _ => &[],
     };
     allowed.extend_from_slice(extra);
+    // Reported below with a pointer to the right key.
+    allowed.push("expectTimeoutMs");
     if action == "expect" {
         allowed.extend_from_slice(MATCHER_KEYS);
         allowed.extend_from_slice(SCREENSHOT_OPTION_KEYS);
     }
     check_keys(ctx, map, path, &allowed, &format!("with `{action}`"));
+    if map.contains_key("expectTimeoutMs") {
+        // A common slip: the suite's default retry window, written on one step.
+        ctx.err(
+            &join(path, "expectTimeoutMs"),
+            "`expectTimeoutMs` is a suite setting; set this step's retry window with `timeoutMs`",
+        );
+    }
 
     let timeout_ms = get_u64(ctx, map, "timeoutMs", path, 1);
     let custom_name = get_string(ctx, map, "name", path);
@@ -2621,7 +2630,8 @@ mod tests {
                 { "expectValue": "1", "toEqual": 1, "toMatch": "x" },
                 { "expectValue": "1", "toMatch": "(" },
                 { "expectValue": " ", "toEqual": 1 },
-                { "expectValue": "1", "toEqual": 1, "count": 1 }
+                { "expectValue": "1", "toEqual": 1, "count": 1 },
+                { "expectValue": "1", "toEqual": 1, "expectTimeoutMs": 9000 }
             ] }] }"##,
         );
         for needle in [
@@ -2630,12 +2640,19 @@ mod tests {
             "invalid regular expression",
             "expectValue: must not be empty",
             "`count` is not valid with `expectValue`",
+            "steps[5].expectTimeoutMs: `expectTimeoutMs` is a suite setting; set this step's retry window with `timeoutMs`",
         ] {
             assert!(
                 issues.iter().any(|m| m.contains(needle)),
                 "{needle}: {issues:?}"
             );
         }
+        assert!(
+            !issues
+                .iter()
+                .any(|m| m.contains("`expectTimeoutMs` is not valid")),
+            "{issues:?}"
+        );
     }
 
     #[test]
