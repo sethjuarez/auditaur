@@ -192,7 +192,7 @@ A missing baseline is written and the test still fails, so review the new baseli
 
 ## Run folders
 
-Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes the redacted end of it.
+Each run is recorded under `.auditaur/drill-runs/<runId>/`. Auditaur gitignores the folder and prunes it to the 20 newest runs, never deleting a run that is still in progress. Each launched app's stdout and stderr go to `app-<n>.log` in the run (not redacted); a launch failure quotes its end and attaches the last 64K characters to the launch step.
 
 ```text
 run.json                         run report, updated as the run progresses
@@ -201,7 +201,7 @@ tests/<testId>/attempt-<n>/      attempt.json, plus screenshots, ARIA snapshots,
 drill-test.log                   console output, for runs started by the MCP drill_test tool
 ```
 
-Failed steps attach `step-<i>-failure.png` and `step-<i>-failure-dom.json`. With `--trace`, other steps attach `step-<i>-trace.png` and `step-<i>-trace-dom.json`; capture time is not counted in step durations. `on-first-retry` traces only the first retry, so passing runs stay cheap.
+Failed steps attach `step-<i>-failure.png`, `step-<i>-failure-dom.json`, `step-<i>-failure-aria.yml`, the last 64K characters of app output (`step-<i>-failure-app-output.log`), and `step-<i>-failure-evidence.json`, which lists what was captured and why anything is missing. Evidence is captured even when the app crashed, so its output survives. With `--trace`, other steps attach `step-<i>-trace.png` and `step-<i>-trace-dom.json`; capture time is not counted in step durations. `on-first-retry` traces only the first retry, so passing runs stay cheap.
 
 The format is versioned by [`drill-run.schema.json`](/schemas/drill-run.schema.json). `drill show`, MCP tools, and canvases read it without recomputing anything.
 

@@ -129,6 +129,7 @@ pub fn test(options: TestOptions) -> Result<i32> {
         cancel: Arc::clone(&cancel),
         log_dir: None,
         launches: 0,
+        failed_launch_log: None,
     };
 
     let filters = &options.filters;

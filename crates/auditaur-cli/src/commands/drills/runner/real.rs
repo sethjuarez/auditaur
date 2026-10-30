@@ -15,10 +15,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use auditaur_collector::exporter_sqlite::SqliteStore;
-use auditaur_core::{
-    redaction::redact_json,
-    storage::{RelatedTelemetry, RelatedTelemetryQuery},
-};
+use auditaur_core::storage::{RelatedTelemetry, RelatedTelemetryQuery};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
@@ -29,7 +26,7 @@ use super::{
         SnapshotTarget, Tolerance,
     },
     telemetry::{self, Judgement},
-    AppDriver, HookResult, Host, StepCtx, StepResult,
+    AppDriver, HookResult, Host, RunWriter, StepCtx, StepResult,
 };
 use crate::{
     commands::{
@@ -59,6 +56,8 @@ const SLICE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 const RELOAD_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 /// How much of the app's output a launch failure quotes; the full log stays in the run.
 const LAUNCH_OUTPUT_SHOWN: usize = 2_000;
+/// How much of the app's output failure evidence keeps; the full log stays in the run.
+const EVIDENCE_OUTPUT_KEPT: usize = 64 * 1024;
 
 /// How each suite gets its app.
 #[derive(Debug, Clone)]
@@ -83,6 +82,8 @@ pub struct RealHost {
     pub log_dir: Option<PathBuf>,
     /// Launches so far, numbering the logs.
     pub launches: usize,
+    /// The log of the launch that just failed, for [`Host::capture_launch_failure`].
+    pub failed_launch_log: Option<PathBuf>,
 }
 
 impl Host for RealHost {
@@ -91,6 +92,7 @@ impl Host for RealHost {
         suite: &DrillSuite,
         env: &[(String, String)],
     ) -> Result<Box<dyn AppDriver>> {
+        self.failed_launch_log = None;
         let (command, mut environment) = match &self.source {
             LaunchSource::Attach => {
                 if !env.is_empty() {
@@ -114,6 +116,14 @@ impl Host for RealHost {
         // Fresh port variables from the config win over the suite's.
         environment.splice(0..0, env.iter().cloned());
         self.spawn(&command, &environment)
+    }
+
+    fn capture_launch_failure(&mut self, writer: &mut RunWriter) {
+        if let Some(log) = self.failed_launch_log.take() {
+            let name = log.file_stem().unwrap_or_default().to_string_lossy();
+            let file = format!("launch-{name}-output.log");
+            let _ = attach_output(writer, &log, "app output", &file);
+        }
     }
 
     fn run_hook(
@@ -154,7 +164,7 @@ impl RealHost {
             )
         })?;
         check_drill_support(&session)?;
-        Ok(Box::new(BridgeDriver::new(session, None)))
+        Ok(Box::new(BridgeDriver::new(session, None, None)))
     }
 
     fn spawn(
@@ -182,11 +192,15 @@ impl RealHost {
             Ok(session)
         });
         match session {
-            Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child)))),
+            Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child), log))),
             Err(error) => {
                 let _ = drill::cleanup_child_tree(&mut child);
                 match log {
-                    Some(log) => Err(anyhow!("{error:#}\n{}", output_tail(&log))),
+                    Some(log) => {
+                        let error = anyhow!("{error:#}\n{}", output_tail(&log));
+                        self.failed_launch_log = Some(log);
+                        Err(error)
+                    }
                     None => Err(error),
                 }
             }
@@ -268,6 +282,8 @@ pub struct BridgeDriver {
     session: BridgeSession,
     /// The spawned app process; `None` when attached to a running app.
     child: Option<Child>,
+    /// Where the spawned app's output goes, in the run directory.
+    log: Option<PathBuf>,
     /// The app's telemetry store, opened on first use.
     store: Option<SqliteStore>,
     /// Cleared once the bridge says it has no `flush` action.
@@ -275,10 +291,11 @@ pub struct BridgeDriver {
 }
 
 impl BridgeDriver {
-    fn new(session: BridgeSession, child: Option<Child>) -> Self {
+    fn new(session: BridgeSession, child: Option<Child>, log: Option<PathBuf>) -> Self {
         Self {
             session,
             child,
+            log,
             store: None,
             can_flush: true,
         }
@@ -295,6 +312,9 @@ impl AppDriver for BridgeDriver {
     fn app_info(&self) -> Value {
         let mut info = self.session.app_info();
         info["launched"] = json!(self.child.is_some());
+        if let Some(name) = self.log.as_deref().and_then(Path::file_name) {
+            info["appLog"] = json!(name.to_string_lossy());
+        }
         info
     }
 
@@ -306,11 +326,39 @@ impl AppDriver for BridgeDriver {
     }
 
     fn capture_failure(&mut self, ctx: &mut StepCtx<'_>) {
-        self.capture(ctx, "failure");
+        let mut evidence = Evidence::default();
+        let exited = self.exited();
+        match &exited {
+            Some(reason) => evidence.skip("bridge", format!("{reason}; nothing to capture")),
+            None => self.capture(ctx, "failure", &mut evidence, true),
+        }
+        let index = ctx.step_index;
+        if let Some(log) = self.log.clone() {
+            let file = format!("step-{index}-failure-app-output.log");
+            let saved = attach_output(ctx.writer, &log, "failure app output", &file);
+            evidence.note("app output", saved);
+        } else {
+            evidence.skip(
+                "app output",
+                "no app log: the drill did not launch the app".to_string(),
+            );
+        }
+        let manifest = json!({
+            "captured": evidence.captured,
+            "missing": evidence.missing,
+            "appExited": exited,
+            "appLog": self.log.as_deref().and_then(Path::file_name).map(|name| name.to_string_lossy()),
+        });
+        if let Ok(bytes) = serde_json::to_vec_pretty(&manifest) {
+            let file = format!("step-{index}-failure-evidence.json");
+            let _ = ctx
+                .writer
+                .attach("failure evidence", "application/json", &file, &bytes);
+        }
     }
 
     fn capture_step(&mut self, ctx: &mut StepCtx<'_>) {
-        self.capture(ctx, "trace");
+        self.capture(ctx, "trace", &mut Evidence::default(), false);
     }
 
     fn telemetry(&mut self, since_unix_nanos: i64, live: bool) -> Option<Value> {
@@ -395,25 +443,73 @@ fn about(target: &Locator, error: String) -> String {
     }
 }
 
-/// The redacted end of a launch log, for a launch failure message.
+/// The end of a launch log, for a launch failure message.
 fn output_tail(log: &Path) -> String {
-    let text = match fs::read(log) {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+    let (text, cut) = match read_tail(log, LAUNCH_OUTPUT_SHOWN) {
+        Ok(tail) => tail,
         Err(error) => return format!("could not read app output `{}`: {error}", log.display()),
     };
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() && !cut {
         return format!("the app printed nothing (`{}`)", log.display());
     }
-    let start = text
+    let ellipsis = if cut { "…" } else { "" };
+    format!("app output (`{}`):\n{ellipsis}{text}", log.display())
+}
+
+/// The last `max_chars` characters of a log, reading at most the bytes they can take, and
+/// whether earlier output was left out.
+fn read_tail(log: &Path, max_chars: usize) -> std::io::Result<(String, bool)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(log)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub((max_chars * 4) as u64);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    // The app may still be writing; read no further than the window.
+    file.take(len - start).read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let from = text
         .char_indices()
         .rev()
-        .nth(LAUNCH_OUTPUT_SHOWN - 1)
+        .nth(max_chars - 1)
         .map_or(0, |(at, _)| at);
-    let shown = redact_json(&Value::String(text[start..].to_string()), &[]).value;
-    let shown = shown.as_str().unwrap_or_default();
-    let ellipsis = if start > 0 { "…" } else { "" };
-    format!("app output (`{}`):\n{ellipsis}{shown}", log.display())
+    Ok((text[from..].to_string(), start > 0 || from > 0))
+}
+
+/// Save the end of the app's output as an attachment of the running step.
+fn attach_output(writer: &mut RunWriter, log: &Path, name: &str, file: &str) -> Result<()> {
+    let (text, cut) = read_tail(log, EVIDENCE_OUTPUT_KEPT)?;
+    let log_name = log.file_name().unwrap_or_default().to_string_lossy();
+    let head = if cut {
+        format!("… earlier output is in {log_name}\n")
+    } else {
+        String::new()
+    };
+    let body = format!("{head}{text}");
+    writer
+        .attach(name, "text/plain", file, body.as_bytes())
+        .map(drop)
+}
+
+/// What failure capture saved, and why anything is missing.
+#[derive(Default)]
+struct Evidence {
+    captured: Vec<String>,
+    missing: serde_json::Map<String, Value>,
+}
+
+impl Evidence {
+    fn note<T>(&mut self, name: &str, result: Result<T>) {
+        match result {
+            Ok(_) => self.captured.push(name.to_string()),
+            Err(error) => self.skip(name, format!("{error:#}")),
+        }
+    }
+
+    fn skip(&mut self, name: &str, reason: String) {
+        self.missing.insert(name.to_string(), json!(reason));
+    }
 }
 
 /// First `@auditaur/api` release whose drive bridge understands `locator:` selectors and the
@@ -476,33 +572,51 @@ fn explain(error: String) -> String {
 }
 
 impl BridgeDriver {
-    /// Attach a screenshot and DOM snapshot to the current step, named `<kind> screenshot` and
-    /// `<kind> dom`. Best effort.
-    fn capture(&mut self, ctx: &mut StepCtx<'_>, kind: &str) {
+    /// Attach a screenshot, DOM snapshot, and (with `aria`) aria snapshot to the current step,
+    /// named `<kind> screenshot`, `<kind> dom`, and `<kind> aria`. Best effort; `evidence`
+    /// records what was saved and why anything wasn't.
+    fn capture(&mut self, ctx: &mut StepCtx<'_>, kind: &str, evidence: &mut Evidence, aria: bool) {
         let index = ctx.step_index;
         let step_id = Some(format!("step-{index}"));
-        if let Ok(png) =
-            self.session
-                .screenshot_png(None, ctx.test_id.clone(), step_id, CAPTURE_TIMEOUT)
-        {
-            let _ = ctx.writer.attach(
-                &format!("{kind} screenshot"),
-                "image/png",
-                &format!("step-{index}-{kind}.png"),
-                &png,
-            );
+        let shot = self
+            .session
+            .screenshot_png(None, ctx.test_id.clone(), step_id, CAPTURE_TIMEOUT)
+            .and_then(|png| {
+                let file = format!("step-{index}-{kind}.png");
+                ctx.writer
+                    .attach(&format!("{kind} screenshot"), "image/png", &file, &png)
+            });
+        evidence.note("screenshot", shot);
+        let dom = self.payload(ctx, "snapshot").and_then(|payload| {
+            let file = format!("step-{index}-{kind}-dom.json");
+            let bytes = serde_json::to_vec_pretty(&payload)?;
+            ctx.writer
+                .attach(&format!("{kind} dom"), "application/json", &file, &bytes)
+        });
+        evidence.note("dom", dom);
+        if aria {
+            let aria = self.payload(ctx, "ariaSnapshot").and_then(|payload| {
+                let text = payload
+                    .get("snapshot")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("bridge `ariaSnapshot` reply had no `snapshot`"))?;
+                let file = format!("step-{index}-{kind}-aria.yml");
+                ctx.writer
+                    .attach(&format!("{kind} aria"), "text/yaml", &file, text.as_bytes())
+            });
+            evidence.note("aria", aria);
         }
-        if let Ok(reply) = self.request(ctx, "snapshot", None, None, CAPTURE_TIMEOUT) {
-            if reply.ok {
-                if let Ok(bytes) = serde_json::to_vec_pretty(&reply.payload) {
-                    let _ = ctx.writer.attach(
-                        &format!("{kind} dom"),
-                        "application/json",
-                        &format!("step-{index}-{kind}-dom.json"),
-                        &bytes,
-                    );
-                }
-            }
+    }
+
+    /// The payload of a page-wide bridge request made for evidence.
+    fn payload(&self, ctx: &StepCtx<'_>, action: &str) -> Result<Value> {
+        let reply = self.request(ctx, action, None, None, CAPTURE_TIMEOUT)?;
+        if reply.ok {
+            Ok(reply.payload)
+        } else {
+            Err(anyhow!(reply
+                .error
+                .unwrap_or_else(|| format!("bridge refused `{action}`"))))
         }
     }
 
@@ -1589,6 +1703,7 @@ mod launch_tests {
             cancel: Arc::new(AtomicBool::new(false)),
             log_dir: Some(dir.path().to_path_buf()),
             launches: 0,
+            failed_launch_log: None,
         };
 
         let Err(error) = host.spawn(&command, &[]) else {
@@ -1610,6 +1725,55 @@ mod launch_tests {
         assert!(tail.contains("…") && tail.ends_with("END"), "{tail}");
         fs::write(&log, "  \n").unwrap();
         assert!(output_tail(&log).contains("printed nothing"));
+    }
+
+    #[test]
+    fn read_tail_reads_only_the_end_and_keeps_whole_characters() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let log = dir.path().join("app-1.log");
+        fs::write(&log, "short").unwrap();
+        assert_eq!(read_tail(&log, 10).unwrap(), ("short".to_string(), false));
+        // Multi-byte characters straddling the read window decode cleanly.
+        fs::write(&log, format!("{}tail", "€".repeat(100))).unwrap();
+        let (text, cut) = read_tail(&log, 6).unwrap();
+        assert_eq!(text, "€€tail");
+        assert!(cut);
+        assert_eq!(read_tail(&log, 104).unwrap().1, false);
+    }
+
+    #[test]
+    fn a_failed_launch_remembers_its_log_until_the_next_launch() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let command: Vec<String> = if cfg!(windows) {
+            ["cmd", "/c", "exit 3"]
+        } else {
+            ["sh", "-c", "exit 3"]
+        }
+        .map(String::from)
+        .to_vec();
+        let mut host = RealHost {
+            app: "auditaur-launch-log-test-no-such-app".into(),
+            source: LaunchSource::Command(command.clone()),
+            require_frontend: false,
+            ready_timeout: Duration::from_secs(30),
+            workspace_root: dir.path().to_path_buf(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            log_dir: Some(dir.path().to_path_buf()),
+            launches: 0,
+            failed_launch_log: None,
+        };
+        assert!(host.spawn(&command, &[]).is_err());
+        assert_eq!(host.failed_launch_log, Some(dir.path().join("app-1.log")));
+        // A config error before spawning must not reuse the old log.
+        host.source = LaunchSource::Config(dir.path().join("missing.json"));
+        let suite = crate::commands::drills::model::parse_str(
+            Path::new("s.drill.json"),
+            r##"{ "tests": [{ "name": "t", "steps": [{ "click": "#a" }] }] }"##,
+        )
+        .suite
+        .unwrap();
+        assert!(host.launch(&suite, &[]).is_err());
+        assert_eq!(host.failed_launch_log, None);
     }
 }
 
