@@ -12,7 +12,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use auditaur_core::storage::{RelatedTelemetry, TauriEventQuery, TauriIpcQuery};
+use auditaur_core::{
+    model::{SpanRecord, TauriIpcCall, TelemetrySource},
+    storage::{RelatedTelemetry, SpanQuery, TauriEventQuery, TauriIpcQuery},
+};
 use serde::Serialize;
 
 use super::run::{self, RunReport, Status};
@@ -130,19 +133,18 @@ pub fn build(run_dir: &Path, report: &RunReport, seen: &Seen) -> Coverage {
                 }
             };
             recorded = true;
-            for call in &telemetry.tauri_ipc_calls {
-                let item =
-                    commands
-                        .entry(call.command.clone())
-                        .or_insert_with(|| CommandCoverage {
-                            command: call.command.clone(),
-                            ..Default::default()
-                        });
+            for (command, failed) in command_calls(&telemetry.tauri_ipc_calls, &telemetry.spans) {
+                let item = commands
+                    .entry(command.to_string())
+                    .or_insert_with(|| CommandCoverage {
+                        command: command.to_string(),
+                        ..Default::default()
+                    });
                 item.calls += 1;
-                if is_failed_ipc_status(&call.status) {
+                if failed {
                     item.failed += 1;
                 }
-                if test_commands.insert(call.command.clone()) {
+                if test_commands.insert(command.to_string()) {
                     item.tests.push(test.id.clone());
                 }
             }
@@ -252,6 +254,56 @@ fn read_telemetry(
     Ok(Some(telemetry))
 }
 
+/// Every command call as `(command, failed)`: the frontend's recorded IPC calls, plus backend
+/// command spans (named by `tauri.command`) that no recorded call made, such as commands an
+/// app invokes without `@auditaur/api`'s instrumented `invoke`.
+fn command_calls<'a>(
+    calls: &'a [TauriIpcCall],
+    spans: &'a [SpanRecord],
+) -> impl Iterator<Item = (&'a str, bool)> {
+    // A backend span continues the frontend invoke span whose traceparent it read. Spans that
+    // read none (propagation off, older plugins) pair with a same-named call nothing continued.
+    let backend: Vec<(&SpanRecord, &str)> = spans
+        .iter()
+        .filter(|span| span.source == TelemetrySource::Backend)
+        .filter_map(|span| Some((span, span.attributes.get("tauri.command")?.as_str()?)))
+        .collect();
+    let continued: BTreeSet<(&str, &str)> = backend
+        .iter()
+        .filter_map(|(span, _)| Some((span.trace_id.as_str(), span.parent_span_id.as_deref()?)))
+        .collect();
+    let invoked: BTreeSet<(&str, &str)> = calls
+        .iter()
+        .filter_map(|call| Some((call.trace_id.as_deref()?, call.span_id.as_deref()?)))
+        .collect();
+    let mut unpaired: BTreeMap<&str, usize> = BTreeMap::new();
+    for call in calls {
+        let linked = call
+            .trace_id
+            .as_deref()
+            .zip(call.span_id.as_deref())
+            .is_some_and(|key| continued.contains(&key));
+        if !linked {
+            *unpaired.entry(call.command.as_str()).or_default() += 1;
+        }
+    }
+    let backend = backend.into_iter().filter_map(move |(span, command)| {
+        let parent = span.parent_span_id.as_deref();
+        if parent.is_some_and(|parent| invoked.contains(&(span.trace_id.as_str(), parent))) {
+            return None;
+        }
+        if let Some(count) = unpaired.get_mut(command).filter(|count| **count > 0) {
+            *count -= 1;
+            return None;
+        }
+        Some((command, span.status_code.as_deref() == Some("ERROR")))
+    });
+    calls
+        .iter()
+        .map(|call| (call.command.as_str(), is_failed_ipc_status(&call.status)))
+        .chain(backend)
+}
+
 /// Tally commands and events recorded in each store. A store that cannot be
 /// read is reported in its summary rather than failing the whole command.
 pub fn read_seen(dbs: &[PathBuf]) -> (Seen, Vec<SourceSummary>) {
@@ -288,10 +340,15 @@ fn tally_store(db: &Path, seen: &mut Seen, summary: &mut SourceSummary) -> Resul
         trace_id: None,
         limit: Some(usize::MAX),
     })?;
+    let spans = store.list_spans(&SpanQuery {
+        session_id: None,
+        trace_id: None,
+        limit: Some(usize::MAX),
+    })?;
     summary.ipc_calls = calls.len();
     summary.events = events.len();
-    for call in calls {
-        *seen.commands.entry(call.command).or_default() += 1;
+    for (command, _) in command_calls(&calls, &spans) {
+        *seen.commands.entry(command.to_string()).or_default() += 1;
     }
     for event in events {
         *seen.events.entry(event.event_name).or_default() += 1;
@@ -542,6 +599,56 @@ mod tests {
         );
         assert_eq!(coverage.tests[1].commands, vec!["load", "save"]);
         assert_eq!(coverage.tests[2].telemetry, "none");
+    }
+
+    #[test]
+    fn backend_command_spans_count_once_unless_an_invoke_made_them() {
+        let call: TauriIpcCall = serde_json::from_value(json!({
+            "sessionId": "s", "timestampUnixNanos": 1, "durationMs": null,
+            "command": "load", "status": "OK", "errorMessage": null,
+            "traceId": "t1", "spanId": "f1", "windowLabel": null, "argsJson": null,
+            "argsRedacted": false, "resultSummary": null,
+        }))
+        .unwrap();
+        let span = |command: &str, parent: Option<&str>, source: &str, status: Option<&str>| {
+            serde_json::from_value::<SpanRecord>(json!({
+                "sessionId": "s", "traceId": "t1", "spanId": "b", "parentSpanId": parent,
+                "name": command, "kind": null, "startTimeUnixNanos": 1, "endTimeUnixNanos": 2,
+                "statusCode": status, "statusMessage": null, "scopeName": null,
+                "scopeVersion": null, "attributes": { "tauri.command": command },
+                "source": source,
+            }))
+            .unwrap()
+        };
+        let spans = vec![
+            // Continues the recorded invoke: already counted by the call.
+            span("load", Some("f1"), "backend", Some("OK")),
+            // Invoked without the instrumented `invoke`.
+            span("save_chat_session", None, "backend", Some("ERROR")),
+            // The frontend's own invoke span.
+            span("load", None, "frontend", Some("OK")),
+            // Propagation off: pairs with the `save` call nothing continued.
+            span("save", None, "backend", Some("OK")),
+        ];
+        let save: TauriIpcCall = serde_json::from_value(json!({
+            "sessionId": "s", "timestampUnixNanos": 1, "durationMs": null,
+            "command": "save", "status": "OK", "errorMessage": null,
+            "traceId": "t2", "spanId": "f2", "windowLabel": null, "argsJson": null,
+            "argsRedacted": false, "resultSummary": null,
+        }))
+        .unwrap();
+
+        let recorded = [call, save];
+        let calls: Vec<_> = command_calls(&recorded, &spans).collect();
+
+        assert_eq!(
+            calls,
+            vec![
+                ("load", false),
+                ("save", false),
+                ("save_chat_session", true)
+            ]
+        );
     }
 
     #[test]
