@@ -12,14 +12,15 @@ interface AppStore {
   sessions?: number;
 }
 
-const toItem = (store: AppStore): ChecklistItem => ({
+const toItem = (store: AppStore, ours: boolean): ChecklistItem => ({
   value: store.db,
   label: store.serviceName ?? "app",
   detail: store.sessionId ? store.sessionId + ((store.sessions ?? 1) > 1 ? ` +${(store.sessions ?? 1) - 1}` : "") : store.db,
-  badge: store.status,
+  badge: ours ? "this run's app" : store.status,
 });
 
-export function useAppStores(open: boolean, inUse: string[]) {
+// The run's own app first (stores arrive newest first, which is kept within each group).
+export function useAppStores(open: boolean, inUse: string[], apps: string[]) {
   const [found, setFound] = useState<AppStore[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,8 +44,15 @@ export function useAppStores(open: boolean, inUse: string[]) {
     };
   }, [open]);
 
-  if (!found) return { items: null, error };
+  if (!found) return { items: null, suggested: [] as string[], error };
   const known = new Set(found.map((store) => store.db));
   const extra = inUse.filter((db) => !known.has(db)).map((db) => ({ db, serviceName: "chosen store" }));
-  return { items: [...found, ...extra].map(toItem), error };
+  const ours = (store: AppStore) => Boolean(store.serviceName && apps.includes(store.serviceName));
+  const all = [...found, ...extra];
+  const ordered = [...all.filter(ours), ...all.filter((store) => !ours(store))];
+  return {
+    items: ordered.map((store) => toItem(store, ours(store))),
+    suggested: all.filter(ours).map((store) => store.db),
+    error,
+  };
 }

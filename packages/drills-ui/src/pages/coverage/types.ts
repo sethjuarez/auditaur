@@ -36,11 +36,15 @@ export interface Coverage {
 
 export type CoverageTab = "commands" | "events" | "tests" | "map";
 
+// Without a readable store to compare with, counts are out of only what the run touched.
+export const hasBaseline = (coverage: Coverage) => coverage.sources.some((source) => !source.error);
+
 export interface CoverageState {
   pinned: string | null;
   runs: { runId: string; status: string }[];
   dbs: string[];
-  run: { runId: string; status: string } | null;
+  // `apps`: the service names the run's suites launched.
+  run: { runId: string; status: string; apps?: string[] } | null;
   coverage: Coverage | null;
   error: string | null;
   ui: { tab: CoverageTab; missedOnly: boolean };

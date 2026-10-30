@@ -10,16 +10,18 @@ import { useAppStores } from "./useAppStores";
 
 interface Props {
   dbs: string[];
+  // Service names the shown run launched; their stores are suggested.
+  apps: string[];
   busy: boolean;
   apply: (dbs: string[]) => void;
 }
 
 const same = (a: ReadonlySet<string>, b: string[]) => a.size === b.length && b.every((db) => a.has(db));
 
-export function StorePicker({ dbs, busy, apply }: Props) {
+export function StorePicker({ dbs, apps, busy, apply }: Props) {
   const [open, setOpen] = useState(false);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(dbs));
-  const stores = useAppStores(open, dbs);
+  const stores = useAppStores(open, dbs, apps);
   const inUse = dbs.join("\n");
 
   // Opening, or the agent changing the stores, starts again from what is in use.
@@ -48,6 +50,14 @@ export function StorePicker({ dbs, busy, apply }: Props) {
           Pick the stores of app sessions whose commands and events count as the app's surface. Anything they recorded that no test exercised is listed as unexercised.
         </p>
         <div id="store-error">{stores.error && <Notice tone="error" title={`Could not list app stores: ${stores.error}`} />}</div>
+        {stores.suggested.length > 0 && !stores.suggested.every((db) => chosen.has(db)) && (
+          <div className="row coverage-stores-suggest">
+            <Button id="pick-run-app" size="small" disabled={busy} onClick={() => setChosen(new Set([...chosen, ...stores.suggested]))}>
+              {`Choose this run's app (${plural(stores.suggested.length, "store")})`}
+            </Button>
+            <span className="muted">{apps.join(", ")}</span>
+          </div>
+        )}
         {!stores.items ? (
           <div id="store-rows" className="coverage-stores-loading"><Spinner size="small" srText="Loading app stores" /></div>
         ) : stores.items.length ? (

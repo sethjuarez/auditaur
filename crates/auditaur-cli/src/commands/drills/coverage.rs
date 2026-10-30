@@ -343,10 +343,20 @@ fn print_coverage(coverage: &Coverage) {
             ),
         }
     }
+    // Without a readable store, the totals are only what the run touched: "5 of 5" would claim
+    // full coverage of a surface nothing listed.
+    let baseline = coverage.sources.iter().any(|source| source.error.is_none());
+    let tally = |exercised: usize, total: usize| match baseline {
+        true => format!("{exercised} of {total} exercised"),
+        false => format!("{exercised} touched"),
+    };
+    if !baseline {
+        println!("  no baseline: pass --db <app store> to list what no test exercised");
+    }
     println!();
     println!(
-        "Commands  {} of {} exercised",
-        totals.commands_exercised, totals.commands
+        "Commands  {}",
+        tally(totals.commands_exercised, totals.commands)
     );
     for command in &coverage.commands {
         let failed = match command.failed {
@@ -362,10 +372,7 @@ fn print_coverage(coverage: &Coverage) {
         );
     }
     println!();
-    println!(
-        "Events  {} of {} exercised",
-        totals.events_exercised, totals.events
-    );
+    println!("Events  {}", tally(totals.events_exercised, totals.events));
     for event in &coverage.events {
         let directions: Vec<&str> = event.directions.iter().map(String::as_str).collect();
         println!(
