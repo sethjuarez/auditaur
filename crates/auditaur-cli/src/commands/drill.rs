@@ -2446,6 +2446,56 @@ pub(crate) fn expand_drill_env(text: &str, env: &[(String, String)]) -> (String,
     (out, expanded)
 }
 
+/// Expand `${NAME}` in a step `field` the app receives (`fill`/`type` values, `paste` contents
+/// and file paths, dialog answers). Unlike [`expand_drill_env`], an unknown name that looks like
+/// a variable fails, so a literal `${X}` never reaches the app by accident. `$${` writes a
+/// literal `${`; other `${…}` text (`${a.b}`, `${X:-d}`) passes through. Values are inserted
+/// as-is, never expanded again.
+pub(crate) fn expand_drill_env_strict(
+    field: &str,
+    text: &str,
+    env: &[(String, String)],
+) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('$') {
+        out.push_str(&rest[..start]);
+        let at = &rest[start..];
+        if let Some(after) = at.strip_prefix("$${") {
+            out.push_str("${");
+            rest = after;
+            continue;
+        }
+        if let Some((name, after)) = at
+            .strip_prefix("${")
+            .and_then(|body| body.find('}').map(|end| (&body[..end], &body[end + 1..])))
+        {
+            if let Some((_, value)) = env.iter().rev().find(|(key, _)| key == name) {
+                out.push_str(value);
+                rest = after;
+                continue;
+            }
+            if is_variable_name(name) {
+                return Err(format!(
+                    "{field} uses ${{{name}}}, which is not in the drill env (suite `env` or a setup hook's env file); write $${{{name}}} for a literal ${{{name}}}"
+                ));
+            }
+        }
+        out.push('$');
+        rest = &at[1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn is_variable_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn execute_hook(hook: &ResolvedDrillHook, lifecycle: DrillHookLifecycle) -> DrillHookReport {
     let started = Instant::now();
     let timeout = Duration::from_millis(hook.timeout_ms);
@@ -3788,6 +3838,30 @@ mod tests {
                 (literal.to_string(), false)
             );
         }
+    }
+
+    #[test]
+    fn strict_expansion_fails_unknown_names_and_escapes_with_double_dollar() {
+        let env = [
+            ("A".to_string(), "1".to_string()),
+            ("B".to_string(), "literal ${Y}".to_string()),
+            ("A".to_string(), "2".to_string()),
+        ];
+        let ok = |text: &str| expand_drill_env_strict("`value`", text, &env).unwrap();
+        assert_eq!(ok("${A}/${A}x"), "2/2x");
+        assert_eq!(ok("${B}"), "literal ${Y}");
+        assert_eq!(ok("$${A}"), "${A}");
+        assert_eq!(ok("$$${A}"), "$${A}");
+        assert_eq!(ok("$${A}${A}"), "${A}2");
+        assert_eq!(ok("$${NOPE} costs $5 $"), "${NOPE} costs $5 $");
+        for literal in ["${a.b}", "${X:-d}", "${{ v }}", "${1X}", "${}", "${A", "$A"] {
+            assert_eq!(ok(literal), literal);
+        }
+        let error = expand_drill_env_strict("`value`", "x ${TMP_DIR}/y", &env).unwrap_err();
+        assert_eq!(
+            error,
+            "`value` uses ${TMP_DIR}, which is not in the drill env (suite `env` or a setup hook's env file); write $${TMP_DIR} for a literal ${TMP_DIR}"
+        );
     }
 
     #[test]

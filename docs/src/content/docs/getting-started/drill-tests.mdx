@@ -129,7 +129,7 @@ If the dragged element is inside `draggable="true"` and its `dragstart` isn't ca
 { "paste": { "files": ["fixtures/logo.png", "${RUN_DIR}/report.pdf"] }, "target": { "testId": "drop-zone" } }
 ```
 
-`files` paths are relative to the workspace, and `${NAME}` expands from the drill env. Each file's `type` comes from its extension, and is empty for an unknown one, as in the browser. Files travel to the app base64-encoded, so their total is capped at 5 MiB. The system clipboard is never touched, and the step doesn't check it. Needs @auditaur/api 0.14.0 and CLI 0.4.30 or newer.
+`files` paths are relative to the workspace. `${NAME}` in text, html, and `files` expands from the [drill env](#drill-env-in-step-values). Each file's `type` comes from its extension, and is empty for an unknown one, as in the browser. Files travel to the app base64-encoded, so their total is capped at 5 MiB. The system clipboard is never touched, and the step doesn't check it. Needs @auditaur/api 0.14.0 and CLI 0.4.30 or newer.
 
 ### Keyboard input
 
@@ -207,7 +207,7 @@ Native file and message dialogs would block an unattended run, so a `dialog` ste
 | `ask`, `confirm` | `true` or `false` |
 | `message` | the clicked button's label (default `"Ok"`) |
 
-Answers are used in order. `respond` strings expand `${NAME}` from the drill env; an unknown name fails the step. `expectOptions` matches the options the app passed like Playwright's `toMatchObject` (listed keys only; arrays element by element): `title`, `filters`, `defaultPath`, …, and for `ask`, `confirm`, and `message`, also `message`. The test fails if a dialog opens with nothing queued, opens a different kind or options than the next answer, or if an answer is never used. A `check dialogs` step attaches what the app asked for, redacted.
+Answers are used in order. `respond` strings expand `${NAME}` from the [drill env](#drill-env-in-step-values); an unknown name fails the step. `expectOptions` matches the options the app passed like Playwright's `toMatchObject` (listed keys only; arrays element by element): `title`, `filters`, `defaultPath`, …, and for `ask`, `confirm`, and `message`, also `message`. The test fails if a dialog opens with nothing queued, opens a different kind or options than the next answer, or if an answer is never used. A `check dialogs` step attaches what the app asked for, redacted.
 
 The app must open dialogs through `withDrillDialogs` from `@auditaur/api` 0.11.0 or later. Tauri's internal invoke can't be patched, so the wrapper replaces the plugin module:
 
@@ -284,6 +284,24 @@ Setup hooks can add computed values, such as a temp fixture path, by appending `
 // scripts/make-fixture.mjs
 fs.appendFileSync(process.env.AUDITAUR_DRILL_ENV_FILE, `APP_PROJECT=${dir}\n`);
 ```
+
+### Drill env in step values
+
+Values the app receives expand `${NAME}` from the drill env (suite `env` plus env-file values): `fill` and `type` `value`, `paste` text, html, and `files`, and dialog `respond` strings.
+
+```json
+{ "fill": { "label": "Clone into" }, "value": "${CLONE_DIR}/repo" },
+{ "type": ".editor", "value": "const s = `$${name}`;" }
+```
+
+| Text | Becomes |
+| --- | --- |
+| `${NAME}`, with `NAME` in the drill env | its value, inserted as-is (never expanded again) |
+| `${NAME}`, with `NAME` not in the drill env | a step failure that names it, since a literal never reaches the app by accident |
+| `$${NAME}` | a literal `${NAME}` |
+| other `${…}`, like `${a.b}` or `${X:-d}` | itself |
+
+`NAME` is letters, digits, and `_`, not starting with a digit. Hook and `run` `args`/`cwd` keep their own rule: an unknown `${NAME}` passes through to the command. Needs CLI 0.4.31 or newer; older CLIs send `fill`, `type`, and `paste` text unexpanded.
 
 ### A suite is one app launch
 
