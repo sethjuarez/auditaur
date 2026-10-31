@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(drill)* expand ${NAME} in fill, type, and paste values ([#183](https://github.com/sethjuarez/auditaur/pull/183))
 
+### Changed
+
+- *(drill)* A `fill`, `type`, or `paste` value with a literal `${NAME}` that isn't in the drill env now fails the step; write `$${NAME}` for a literal. In dialog `respond` and `paste` files, `$${NAME}` is now a literal `${NAME}` instead of `$` plus its value.
+
 ## [0.4.30](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.29...auditaur-cli-v0.4.30) - 2026-10-30
 
 ### Added
