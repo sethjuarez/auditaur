@@ -72,6 +72,9 @@ struct AgentConfig {
     default_drill: Option<String>,
     #[serde(default)]
     drills: BTreeMap<String, DrillConfig>,
+    /// Settings for `drill test`.
+    #[serde(default)]
+    drill_test: DrillTestConfig,
     /// Read by `drill coverage` (see `drills::surface`); accepted here so the config validates.
     #[serde(default)]
     #[allow(dead_code)]
@@ -84,6 +87,14 @@ struct CoverageConfig {
     #[serde(default)]
     #[allow(dead_code)]
     commands: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrillTestConfig {
+    /// `background` or `foreground`; see `drill test --window`.
+    #[serde(default)]
+    window: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -524,6 +535,8 @@ pub(crate) struct LaunchConfig {
     pub environment: Vec<(String, String)>,
     pub require_frontend: bool,
     pub timeout_seconds: Option<u64>,
+    /// `drillTest.window`, unvalidated.
+    pub window: Option<String>,
 }
 
 /// Read launch settings from `.auditaur/config.json`; `None` when the file is absent.
@@ -545,6 +558,7 @@ pub(crate) fn load_launch_config(path: &Path) -> Result<Option<LaunchConfig>> {
         environment: port_environment(&config.ports, &ports),
         require_frontend: config.readiness.frontend,
         timeout_seconds: config.readiness.timeout_seconds,
+        window: config.drill_test.window.clone(),
     }))
 }
 

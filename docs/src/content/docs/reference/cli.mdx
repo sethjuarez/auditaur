@@ -27,7 +27,7 @@ cargo run -p auditaur-cli -- debug [--app <name>] [--session-id <id>] [--instanc
 cargo run -p auditaur-cli -- drill run --app <name> [--require-frontend] [--require-drive-bridge] [--timeout-seconds <n>] [--interval-ms <ms>] [--report <path>] [--selector <css>] [--expect-text <text>] [--script <path>] [--json] -- <command> [args...]
 cargo run -p auditaur-cli -- drill list [<filter>...] [--grep <regex>] [--grep-invert <regex>] [--tag <tag>] [--json]
 cargo run -p auditaur-cli -- drill validate [<path>...] [--json]
-cargo run -p auditaur-cli -- drill test [<filter>...] [--grep <regex>] [--grep-invert <regex>] [--tag <tag>] [--app <name>] [--attach] [--require-frontend] [--timeout-seconds <n>] [--retries <n>] [-x | --max-failures <n>] [--last-failed] [--update-snapshots[=none|missing|changed|all]] [--junit <file>] [--json] [-- <command> [args...]]
+cargo run -p auditaur-cli -- drill test [<filter>...] [--grep <regex>] [--grep-invert <regex>] [--tag <tag>] [--app <name>] [--attach] [--require-frontend] [--timeout-seconds <n>] [--retries <n>] [-x | --max-failures <n>] [--last-failed] [--update-snapshots[=none|missing|changed|all]] [--trace <mode>] [--window background|foreground] [--junit <file>] [--json] [-- <command> [args...]]
 cargo run -p auditaur-cli -- drill runs [--json]
 cargo run -p auditaur-cli -- drill show [<run-id>|latest] [--json]
 cargo run -p auditaur-cli -- drill coverage [<run-id>|latest] [--db <telemetry.sqlite>]... [--commands <path>]... [--json]

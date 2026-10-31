@@ -15,6 +15,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use auditaur_collector::exporter_sqlite::SqliteStore;
+use auditaur_core::drive_bridge::{WINDOW_ACTION, WINDOW_BACKGROUND_CAPABILITY, WINDOW_MODE_ENV};
 use auditaur_core::storage::{RelatedTelemetry, RelatedTelemetryQuery};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -71,11 +72,77 @@ pub enum LaunchSource {
     Attach,
 }
 
+/// How a launched app's windows treat the user's focus (`drill test --window`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum WindowMode {
+    /// Hand the foreground back to the user's window as the app starts; gates bring it forward.
+    #[default]
+    Background,
+    /// Leave the app's windows alone; they take the foreground as they normally would.
+    Foreground,
+}
+
+impl WindowMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Foreground => "foreground",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "background" => Some(Self::Background),
+            "foreground" => Some(Self::Foreground),
+            _ => None,
+        }
+    }
+}
+
+/// The requested window mode and whether the user chose it (flag, env, or config).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowRequest {
+    pub mode: WindowMode,
+    pub explicit: bool,
+}
+
+/// First `tauri-plugin-auditaur` release that keeps drilled windows in the background.
+const MIN_WINDOW_PLUGIN_VERSION: &str = "0.4.32";
+
+/// What the window mode came to for one launch, recorded in the run as `app.window`.
+#[derive(Debug, Clone)]
+struct WindowOutcome {
+    requested: WindowMode,
+    effective: WindowMode,
+    note: Option<String>,
+    /// The plugin's `status` reply: what happened to each window at startup.
+    status: Value,
+}
+
+impl WindowOutcome {
+    fn background(&self) -> bool {
+        self.effective == WindowMode::Background
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "requested": self.requested.as_str(),
+            "effective": self.effective.as_str(),
+            "note": self.note,
+            "status": self.status,
+        })
+    }
+}
+
 pub struct RealHost {
     pub app: String,
     pub source: LaunchSource,
     pub require_frontend: bool,
     pub ready_timeout: Duration,
+    /// How launched apps' windows treat the user's focus; ignored when attaching.
+    pub window: WindowRequest,
+    /// Set once the default background mode was reported unavailable, so it's said once.
+    pub window_warned: bool,
     pub workspace_root: PathBuf,
     /// Set by Ctrl+C or `cancel.request`; stops the readiness wait early.
     pub cancel: Arc<AtomicBool>,
@@ -117,6 +184,11 @@ impl Host for RealHost {
         };
         // Fresh port variables from the config win over the suite's.
         environment.splice(0..0, env.iter().cloned());
+        // Last, so it wins over a suite or config setting the same variable.
+        environment.push((
+            WINDOW_MODE_ENV.to_string(),
+            self.window.mode.as_str().to_string(),
+        ));
         self.spawn(&command, &environment, progress)
     }
 
@@ -144,6 +216,64 @@ impl Host for RealHost {
 }
 
 impl RealHost {
+    /// Check the launched app honors the window mode, and collect what it did at startup.
+    fn window_outcome(
+        &mut self,
+        session: &BridgeSession,
+        app: &DiscoveredApp,
+    ) -> Result<WindowOutcome> {
+        let mut outcome = WindowOutcome {
+            requested: self.window.mode,
+            effective: self.window.mode,
+            note: None,
+            status: Value::Null,
+        };
+        let capable = app
+            .capabilities
+            .iter()
+            .any(|capability| capability == WINDOW_BACKGROUND_CAPABILITY);
+        if !capable && self.window.mode == WindowMode::Foreground {
+            return Ok(outcome);
+        }
+        if !capable {
+            let note = if !cfg!(windows) {
+                "background window mode is not supported on this OS yet, so the app's windows may take focus".to_string()
+            } else if self.window.explicit {
+                return Err(anyhow!(
+                    "background window mode needs tauri-plugin-auditaur {MIN_WINDOW_PLUGIN_VERSION} or newer in the app; upgrade it, or pass `--window foreground`"
+                ));
+            } else {
+                format!(
+                    "this app's tauri-plugin-auditaur predates background window mode, so its windows may take focus; upgrade it to {MIN_WINDOW_PLUGIN_VERSION} or newer, or pass `--window foreground`"
+                )
+            };
+            if !std::mem::replace(&mut self.window_warned, true) {
+                eprintln!("warning: {note}");
+            }
+            outcome.effective = WindowMode::Foreground;
+            outcome.note = Some(note);
+            return Ok(outcome);
+        }
+        let note = match window_command(session, "status") {
+            Ok(status) => {
+                let note = window_status_note(&status, self.window.mode);
+                outcome.effective = status
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .and_then(WindowMode::parse)
+                    .unwrap_or(WindowMode::Foreground);
+                outcome.status = status;
+                note
+            }
+            Err(error) => Some(format!("could not read the app's window status: {error:#}")),
+        };
+        if let Some(note) = &note {
+            eprintln!("warning: {note}");
+        }
+        outcome.note = note;
+        Ok(outcome)
+    }
+
     fn check_cancel(&self) -> Result<()> {
         if self.cancel.load(Ordering::SeqCst) {
             return Err(anyhow!("cancelled while waiting for the app"));
@@ -200,11 +330,17 @@ impl RealHost {
         );
         let session = ready.and_then(|app| {
             let session = BridgeSession::connect(&drill::drive_selector(&app))?;
+            // Before the probe: the app stops handing the foreground back at its first request.
+            let window = self.window_outcome(&session, &app)?;
             check_drill_support(&session)?;
-            Ok(session)
+            Ok((session, window))
         });
         match session {
-            Ok(session) => Ok(Box::new(BridgeDriver::new(session, Some(child), log))),
+            Ok((session, window)) => {
+                let mut driver = BridgeDriver::new(session, Some(child), log);
+                driver.window = Some(window);
+                Ok(Box::new(driver))
+            }
             Err(error) => {
                 let _ = drill::cleanup_child_tree(&mut child);
                 let hint = if Instant::now() >= deadline {
@@ -311,6 +447,8 @@ pub struct BridgeDriver {
     can_flush: bool,
     /// Set once the bridge is known to honor `within` (older ones ignore it and search the page).
     within_supported: bool,
+    /// The window mode this launch ended up in; `None` when attached.
+    window: Option<WindowOutcome>,
 }
 
 impl BridgeDriver {
@@ -322,6 +460,7 @@ impl BridgeDriver {
             store: None,
             can_flush: true,
             within_supported: false,
+            window: None,
         }
     }
 
@@ -380,6 +519,9 @@ impl AppDriver for BridgeDriver {
         info["launched"] = json!(self.child.is_some());
         if let Some(name) = self.log.as_deref().and_then(Path::file_name) {
             info["appLog"] = json!(name.to_string_lossy());
+        }
+        if let Some(window) = &self.window {
+            info["window"] = window.to_json();
         }
         info
     }
@@ -754,6 +896,60 @@ const MIN_CLEAR_STORAGE_API_VERSION: &str = MIN_WITHIN_API_VERSION;
 /// Matches nothing, so the probe exercises the bridge's not-found reply.
 const MISSING_PROBE: &str = "[data-auditaur-drill-probe-missing]";
 
+/// Send a `status`, `front`, or `back` window request, answered by the plugin itself.
+fn window_command(session: &BridgeSession, command: &str) -> Result<Value> {
+    let reply = session.request(
+        WINDOW_ACTION,
+        None,
+        Some(command.to_string()),
+        Vec::new(),
+        false,
+        None,
+        None,
+        CAPTURE_TIMEOUT,
+    )?;
+    if reply.ok {
+        Ok(reply.payload)
+    } else {
+        Err(anyhow!(reply.error.unwrap_or_else(|| format!(
+            "the app refused window `{command}`"
+        ))))
+    }
+}
+
+/// A warning when the app didn't get the window mode or a window kept the foreground.
+fn window_status_note(status: &Value, requested: WindowMode) -> Option<String> {
+    let requested = requested.as_str();
+    if status.get("mode").and_then(Value::as_str) != Some(requested) {
+        return Some(format!(
+            "the app did not receive {WINDOW_MODE_ENV}={requested}; check the launch command passes the environment through"
+        ));
+    }
+    let kept: Vec<String> = status
+        .get("events")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|event| event.get("restored") != Some(&Value::Bool(true)))
+        .map(|event| {
+            format!(
+                "`{}`: {}",
+                event.get("window").and_then(Value::as_str).unwrap_or("?"),
+                event
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown reason")
+            )
+        })
+        .collect();
+    (!kept.is_empty()).then(|| {
+        format!(
+            "could not give the foreground back from the app's window ({}); it was put behind other windows instead",
+            kept.join("; ")
+        )
+    })
+}
+
 /// Fail the launch, not step 1, when the app's bridge predates drill locators. Only a known
 /// stale-bridge reply fails; anything else is left for the steps to report.
 fn check_drill_support(session: &BridgeSession) -> Result<()> {
@@ -873,6 +1069,23 @@ impl BridgeDriver {
 
     /// Wait for a human (or agent) through the gate queue; see [`drill::run_test_gate`].
     fn gate(&mut self, ctx: &mut StepCtx<'_>, gate: &Value) -> StepOutcome {
+        // A person has to act in the app: bring it forward, then hand the foreground back.
+        let background = self.window.as_ref().is_some_and(WindowOutcome::background);
+        if background {
+            if let Err(error) = window_command(&self.session, "front") {
+                eprintln!("warning: could not bring the app to the front for the gate: {error:#}");
+            }
+        }
+        let outcome = self.wait_for_gate(ctx, gate);
+        if background {
+            if let Err(error) = window_command(&self.session, "back") {
+                eprintln!("warning: could not hand the foreground back after the gate: {error:#}");
+            }
+        }
+        outcome
+    }
+
+    fn wait_for_gate(&mut self, ctx: &mut StepCtx<'_>, gate: &Value) -> StepOutcome {
         let target = self.session.gate_target();
         let cancel = ctx.cancel.clone();
         let child = &mut self.child;
@@ -2103,6 +2316,8 @@ mod launch_tests {
             source: LaunchSource::Command(command.clone()),
             require_frontend: false,
             ready_timeout: Duration::from_secs(30),
+            window: WindowRequest::default(),
+            window_warned: false,
             workspace_root: dir.path().to_path_buf(),
             cancel: Arc::new(AtomicBool::new(false)),
             log_dir: Some(dir.path().to_path_buf()),
@@ -2139,6 +2354,8 @@ mod launch_tests {
             source: LaunchSource::Command(command.clone()),
             require_frontend: false,
             ready_timeout: Duration::from_secs(2),
+            window: WindowRequest::default(),
+            window_warned: false,
             workspace_root: dir.path().to_path_buf(),
             cancel: Arc::new(AtomicBool::new(false)),
             log_dir: Some(dir.path().to_path_buf()),
@@ -2195,6 +2412,23 @@ mod launch_tests {
     }
 
     #[test]
+    fn window_status_warns_when_the_app_kept_the_foreground_or_missed_the_mode() {
+        let restored =
+            json!({"mode": "background", "events": [{"window": "main", "restored": true}]});
+        assert_eq!(window_status_note(&restored, WindowMode::Background), None);
+        let kept = json!({"mode": "background", "events": [
+            {"window": "main", "restored": false, "error": "Windows refused to give the foreground back"}
+        ]});
+        let note = window_status_note(&kept, WindowMode::Background).unwrap();
+        assert!(note.contains("`main`: Windows refused"), "{note}");
+        let missed = json!({"mode": "foreground", "events": []});
+        assert_eq!(window_status_note(&missed, WindowMode::Foreground), None);
+        assert!(window_status_note(&missed, WindowMode::Background)
+            .unwrap()
+            .contains("did not receive AUDITAUR_DRILL_WINDOW=background"));
+    }
+
+    #[test]
     fn last_line_cuts_long_lines() {
         let line = last_line(&"é".repeat(PROGRESS_LINE_MAX + 5)).unwrap();
         assert_eq!(line.chars().count(), PROGRESS_LINE_MAX + 1);
@@ -2242,6 +2476,8 @@ mod launch_tests {
             source: LaunchSource::Command(command.clone()),
             require_frontend: false,
             ready_timeout: Duration::from_secs(30),
+            window: WindowRequest::default(),
+            window_warned: false,
             workspace_root: dir.path().to_path_buf(),
             cancel: Arc::new(AtomicBool::new(false)),
             log_dir: Some(dir.path().to_path_buf()),

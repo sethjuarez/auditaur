@@ -16,7 +16,7 @@ use super::{
     default_roots, discover_or_empty, format_ms, format_totals, junit, load, print_issues, run,
     runner::{
         self,
-        real::{LaunchSource, RealHost},
+        real::{LaunchSource, RealHost, WindowMode, WindowRequest},
         Reporter, RunnerOptions, Stopped, TestDone,
     },
     select, Filters, Selected, DEFAULT_DRILLS_DIR,
@@ -39,6 +39,8 @@ pub struct TestOptions {
     pub timeout_seconds: Option<u64>,
     pub update_snapshots: runner::snapshot::UpdateMode,
     pub trace: runner::TraceMode,
+    /// `--window`; else `AUDITAUR_DRILL_WINDOW`, then the config, then background.
+    pub window: Option<WindowMode>,
     /// Stop starting tests after this many failures (`-x` is 1).
     pub max_failures: Option<usize>,
     /// Only run tests that failed or did not run in the latest run.
@@ -112,6 +114,12 @@ pub fn test(options: TestOptions) -> Result<i32> {
         .timeout_seconds
         .or_else(|| config.as_ref().and_then(|config| config.timeout_seconds))
         .unwrap_or(DEFAULT_READY_TIMEOUT_SECONDS);
+    let window = resolve_window(
+        options.window,
+        std::env::var(auditaur_core::drive_bridge::WINDOW_MODE_ENV).ok(),
+        config.as_ref().and_then(|config| config.window.as_deref()),
+        &options.config,
+    )?;
     let cancel = Arc::new(AtomicBool::new(false));
     let mut host = RealHost {
         app,
@@ -121,6 +129,8 @@ pub fn test(options: TestOptions) -> Result<i32> {
                 .as_ref()
                 .is_some_and(|config| config.require_frontend),
         ready_timeout: Duration::from_secs(timeout_seconds),
+        window,
+        window_warned: false,
         workspace_root: workspace.clone(),
         cancel: Arc::clone(&cancel),
         log_dir: None,
@@ -261,6 +271,43 @@ fn misplaced_update_value(options: &TestOptions) -> Option<&str> {
 
 fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// The window mode: `--window`, else the environment variable, else `drillTest.window`, else
+/// background.
+pub(crate) fn resolve_window(
+    flag: Option<WindowMode>,
+    env: Option<String>,
+    config: Option<&str>,
+    config_path: &std::path::Path,
+) -> Result<WindowRequest> {
+    if let Some(mode) = flag {
+        return Ok(WindowRequest {
+            mode,
+            explicit: true,
+        });
+    }
+    let parse = |value: &str, source: String| {
+        WindowMode::parse(value)
+            .map(|mode| WindowRequest {
+                mode,
+                explicit: true,
+            })
+            .ok_or_else(|| anyhow!("{source} is `{value}`; expected `background` or `foreground`"))
+    };
+    if let Some(value) = env.filter(|value| !value.trim().is_empty()) {
+        return parse(
+            &value,
+            auditaur_core::drive_bridge::WINDOW_MODE_ENV.to_string(),
+        );
+    }
+    if let Some(value) = config {
+        return parse(
+            value,
+            format!("`drillTest.window` in `{}`", config_path.display()),
+        );
+    }
+    Ok(WindowRequest::default())
 }
 
 /// Ids of tests that failed or never finished in the newest finished run. Runs still in
@@ -442,5 +489,72 @@ impl Reporter for LineReporter {
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::{resolve_window, WindowMode, WindowRequest};
+    use std::path::Path;
+
+    fn resolve(
+        flag: Option<WindowMode>,
+        env: Option<&str>,
+        config: Option<&str>,
+    ) -> anyhow::Result<WindowRequest> {
+        resolve_window(
+            flag,
+            env.map(str::to_owned),
+            config,
+            Path::new("config.json"),
+        )
+    }
+
+    #[test]
+    fn the_flag_wins_then_the_environment_then_the_config_then_background() {
+        let explicit = |mode| WindowRequest {
+            mode,
+            explicit: true,
+        };
+        assert_eq!(
+            resolve(
+                Some(WindowMode::Foreground),
+                Some("background"),
+                Some("background")
+            )
+            .unwrap(),
+            explicit(WindowMode::Foreground)
+        );
+        assert_eq!(
+            resolve(None, Some("Foreground"), Some("background")).unwrap(),
+            explicit(WindowMode::Foreground)
+        );
+        assert_eq!(
+            resolve(None, Some(" "), Some("foreground")).unwrap(),
+            explicit(WindowMode::Foreground)
+        );
+        assert_eq!(
+            resolve(None, None, None).unwrap(),
+            WindowRequest {
+                mode: WindowMode::Background,
+                explicit: false
+            }
+        );
+    }
+
+    #[test]
+    fn an_unknown_mode_names_where_it_came_from() {
+        let error = resolve(None, Some("minimized"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("AUDITAUR_DRILL_WINDOW is `minimized`"),
+            "{error}"
+        );
+        let error = resolve(None, None, Some("hidden")).unwrap_err().to_string();
+        assert!(
+            error.contains("`drillTest.window` in `config.json`"),
+            "{error}"
+        );
     }
 }

@@ -8,6 +8,7 @@ pub mod ipc;
 pub mod state;
 pub mod test_helpers;
 pub mod tracing;
+mod window_mode;
 
 pub use auditaur_core::AuditaurConfig;
 use auditaur_core::{
@@ -85,9 +86,11 @@ impl Builder {
             ])
             .on_window_ready(|window| {
                 record_window_ready(&window);
+                window_mode::window_activated(&window, "created");
                 register_window_lifecycle(window);
             })
             .setup(move |app, _api| {
+                window_mode::init(app);
                 let app_identifier = Some(app.config().identifier.clone());
                 let state = state::AuditaurState::initialize(
                     config.clone(),
@@ -157,6 +160,9 @@ fn register_window_lifecycle<R: Runtime>(window: Window<R>) {
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
             focus::forget(listener_window.label());
+        }
+        if matches!(event, WindowEvent::Focused(true)) {
+            window_mode::window_activated(&listener_window, "focused");
         }
         record_window_event(&listener_window, event)
     });
