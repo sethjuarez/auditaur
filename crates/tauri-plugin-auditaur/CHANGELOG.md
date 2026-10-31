@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.33](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.32...tauri-plugin-auditaur-v0.4.33) - 2026-10-31
+
+### Fixed
+
+- *(drill)* hand the foreground back after a gate ([#187](https://github.com/sethjuarez/auditaur/pull/187))
+
+### Changed
+
+- Windows: the `auditaur.window` `front`/`back` actions now run on the UI thread with a 5s timeout, so Windows lets the app give the foreground back after a gate. Each action is recorded in the window status `events` (`trigger: gate-front`/`gate-back`) with `unixMs`. `back` is skipped when focus already moved away from the app. Pair with CLI 0.4.33.
+
 ## [0.4.32](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.31...tauri-plugin-auditaur-v0.4.32) - 2026-10-31
 
 ### Added

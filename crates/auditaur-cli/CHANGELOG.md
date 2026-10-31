@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.33](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.32...auditaur-cli-v0.4.33) - 2026-10-31
+
+### Fixed
+
+- *(drill)* hand the foreground back after a gate ([#187](https://github.com/sethjuarez/auditaur/pull/187))
+
+### Changed
+
+- *(drill)* After a `@human` gate passes or times out, the app now reliably hands the foreground back (the hand-back runs on the app's UI thread). Gate raise and hand-back are recorded in run.json under `app.window.status.events` (`trigger: gate-front`/`gate-back`, `raised`/`restored`/`skipped`/`error`, `unixMs`), and a failed hand-back adds a warning note. The hand-back is skipped when focus already moved away, such as to the Drills canvas. Needs tauri-plugin-auditaur 0.4.33; with 0.4.32 the old behavior remains (a live warning, no gate events). No `@auditaur/api` change.
+
 ## [0.4.32](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.31...auditaur-cli-v0.4.32) - 2026-10-31
 
 ### Added
