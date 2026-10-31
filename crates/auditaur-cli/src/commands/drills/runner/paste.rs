@@ -7,32 +7,29 @@ use std::path::Path;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Map, Value};
 
-use super::dialogs::unexpanded;
-use crate::commands::drill::expand_drill_env;
+use crate::commands::drill::expand_drill_env_strict;
 use crate::commands::drills::model::PasteStep;
 
 /// Pasted files travel through the bridge base64-encoded, so their total size is capped.
 pub const MAX_PASTE_BYTES: u64 = 5 * 1024 * 1024;
 
-/// The bridge payload: `{ text?, html?, files?: [{ name, type, base64 }] }`. File paths expand
-/// `${NAME}` from `env` and resolve against the current directory (the workspace).
+/// The bridge payload: `{ text?, html?, files?: [{ name, type, base64 }] }`. `${NAME}` in the
+/// text, html, and file paths expands from `env`; file paths resolve against the current
+/// directory (the workspace).
 pub fn payload(paste: &PasteStep, env: &[(String, String)]) -> Result<String, String> {
     let mut payload = Map::new();
     if let Some(text) = &paste.text {
+        let text = expand_drill_env_strict("`paste` text", text, env)?;
         payload.insert("text".into(), json!(text));
     }
     if let Some(html) = &paste.html {
+        let html = expand_drill_env_strict("`paste` html", html, env)?;
         payload.insert("html".into(), json!(html));
     }
     let mut total = 0u64;
     let mut files = Vec::new();
     for file in &paste.files {
-        let (path, _) = expand_drill_env(file, env);
-        if let Some(name) = unexpanded(&path) {
-            return Err(format!(
-                "`{file}` uses ${{{name}}}, which is not in the drill env (suite `env` or a setup hook's env file)"
-            ));
-        }
+        let path = expand_drill_env_strict(&format!("`{file}`"), file, env)?;
         let mut bytes = Vec::new();
         fs::File::open(&path)
             .and_then(|file| {
@@ -123,6 +120,25 @@ mod tests {
                 "files": [{ "name": "Logo.PNG", "type": "image/png", "base64": "cG5nIQ==" }],
             })
         );
+    }
+
+    #[test]
+    fn text_and_html_expand_from_the_env_and_fail_on_unknown_names() {
+        let env = vec![("TMP".to_string(), "C:\\t".to_string())];
+        let paste = PasteStep {
+            text: Some("${TMP}\\a $${TMP}".into()),
+            html: Some("<b>${TMP}</b>".into()),
+            files: Vec::new(),
+            target: None,
+        };
+        let payload: Value = serde_json::from_str(&payload(&paste, &env).unwrap()).unwrap();
+        assert_eq!(
+            payload,
+            json!({ "text": "C:\\t\\a ${TMP}", "html": "<b>C:\\t</b>" })
+        );
+
+        let error = super::payload(&paste, &[]).unwrap_err();
+        assert!(error.starts_with("`paste` text uses ${TMP}"), "{error}");
     }
 
     #[test]

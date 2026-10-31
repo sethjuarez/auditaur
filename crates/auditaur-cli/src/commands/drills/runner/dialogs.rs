@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::{AppDriver, StepCtx, StepResult};
-use crate::commands::drill::expand_drill_env;
+use crate::commands::drill::expand_drill_env_strict;
 use crate::commands::drills::{
     model::{DialogStep, DrillSuite, Step, StepKind},
     run::ErrorInfo,
@@ -72,11 +72,7 @@ impl DialogStubs {
         let fail = |message: String| StepResult::Failed(ErrorInfo::new(message));
         let respond = match expand(&dialog.respond, env) {
             Ok(respond) => respond,
-            Err(name) => {
-                return fail(format!(
-                    "`respond` uses ${{{name}}}, which is not in the drill env (suite `env` or a setup hook's env file)"
-                ))
-            }
+            Err(problem) => return fail(problem),
         };
         let mut entry = json!({
             "id": format!("step {}", ctx.step_index + 1),
@@ -238,13 +234,7 @@ fn describe_logged(entry: &Value) -> Option<String> {
 /// Expand `${NAME}` in the answer's strings; an unknown name is an error, never a literal path.
 fn expand(value: &Value, env: &[(String, String)]) -> Result<Value, String> {
     match value {
-        Value::String(text) => {
-            let (expanded, _) = expand_drill_env(text, env);
-            match unexpanded(&expanded) {
-                Some(name) => Err(name),
-                None => Ok(Value::String(expanded)),
-            }
-        }
+        Value::String(text) => expand_drill_env_strict("`respond`", text, env).map(Value::String),
         Value::Array(items) => items
             .iter()
             .map(|item| expand(item, env))
@@ -252,13 +242,6 @@ fn expand(value: &Value, env: &[(String, String)]) -> Result<Value, String> {
             .map(Value::Array),
         other => Ok(other.clone()),
     }
-}
-
-/// The first `${NAME}` left after expansion, which names a variable the drill env lacks.
-pub(super) fn unexpanded(text: &str) -> Option<String> {
-    let start = text.find("${")? + 2;
-    let end = text[start..].find('}')?;
-    Some(text[start..start + end].to_string())
 }
 
 fn millis(duration: Duration) -> u64 {
@@ -279,7 +262,7 @@ mod tests {
         assert_eq!(expand(&json!(true), &env).unwrap(), json!(true));
         assert_eq!(
             expand(&json!("${RUN_DIR}/out.docx"), &env).unwrap_err(),
-            "RUN_DIR"
+            "`respond` uses ${RUN_DIR}, which is not in the drill env (suite `env` or a setup hook's env file); write $${RUN_DIR} for a literal ${RUN_DIR}"
         );
     }
 

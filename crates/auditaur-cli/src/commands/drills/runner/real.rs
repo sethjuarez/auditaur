@@ -942,10 +942,14 @@ impl BridgeDriver {
             StepKind::Check(target) => self.act(ctx, "check", target, None, Vec::new()),
             StepKind::Uncheck(target) => self.act(ctx, "uncheck", target, None, Vec::new()),
             StepKind::Fill { target, value } => {
-                self.act(ctx, "fill", target, Some(value.clone()), Vec::new())
+                let value = drill::expand_drill_env_strict("`fill` value", value, ctx.env)
+                    .map_err(failed)?;
+                self.act(ctx, "fill", target, Some(value), Vec::new())
             }
             StepKind::Type { target, value } => {
-                self.act(ctx, "type", target, Some(value.clone()), Vec::new())
+                let value = drill::expand_drill_env_strict("`type` value", value, ctx.env)
+                    .map_err(failed)?;
+                self.act(ctx, "type", target, Some(value), Vec::new())
             }
             StepKind::Select { target, values } => self.act(
                 ctx,
