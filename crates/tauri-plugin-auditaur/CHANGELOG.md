@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.32](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.31...tauri-plugin-auditaur-v0.4.32) - 2026-10-31
+
+### Added
+
+- *(drill)* keep drilled app windows in the background ([#185](https://github.com/sethjuarez/auditaur/pull/185))
+### Changed
+
+- Windows: while the app starts, hands the foreground back to the user's previous window when `AUDITAUR_DRILL_WINDOW=background` (the `drill test` default with CLI 0.4.32). Advertises the `window_background` capability and answers the native `auditaur.window` bridge action. macOS and Linux report background mode as unsupported for now.
+
 ## [0.4.28](https://github.com/sethjuarez/auditaur/compare/tauri-plugin-auditaur-v0.4.27...tauri-plugin-auditaur-v0.4.28) - 2026-10-30
 
 ### Fixed
