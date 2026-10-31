@@ -113,6 +113,11 @@ pub trait AppDriver {
     ) -> std::result::Result<Value, String> {
         Err(format!("this app driver cannot send `{action}`"))
     }
+    /// Bring [`AppDriver::app_info`] up to date before the app closes; `true` when it changed,
+    /// so the run records it again. Best effort.
+    fn refresh_app_info(&mut self) -> bool {
+        false
+    }
     fn close(&mut self) -> Result<()>;
 }
 
@@ -969,6 +974,10 @@ impl SuiteRun<'_, '_> {
     }
 
     fn close(&mut self, driver: &mut dyn AppDriver) -> Result<()> {
+        if driver.refresh_app_info() {
+            // Best effort: the app details are evidence, never a reason to fail the close.
+            let _ = self.writer.set_suite_app(driver.app_info());
+        }
         self.writer
             .step_started(Phase::AfterAll, "close app", "close")?;
         match driver.close() {

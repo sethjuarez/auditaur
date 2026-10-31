@@ -631,6 +631,30 @@ impl AppDriver for BridgeDriver {
         Err(error)
     }
 
+    fn refresh_app_info(&mut self) -> bool {
+        // Only launches whose app answered `status` at startup; gates add events since.
+        if self
+            .window
+            .as_ref()
+            .is_none_or(|window| window.status.is_null())
+            || self.exited().is_some()
+        {
+            return false;
+        }
+        let Ok(status) = window_command(&self.session, "status") else {
+            return false;
+        };
+        let Some(window) = self.window.as_mut() else {
+            return false;
+        };
+        if status == window.status {
+            return false;
+        }
+        window.note = window_status_note(&status, window.requested);
+        window.status = status;
+        true
+    }
+
     fn close(&mut self) -> Result<()> {
         // Keep the handle until cleanup succeeds so `Drop` can retry.
         if let Some(child) = self.child.as_mut() {
@@ -906,7 +930,7 @@ fn window_command(session: &BridgeSession, command: &str) -> Result<Value> {
         false,
         None,
         None,
-        CAPTURE_TIMEOUT,
+        WINDOW_TIMEOUT,
     )?;
     if reply.ok {
         Ok(reply.payload)
@@ -917,6 +941,9 @@ fn window_command(session: &BridgeSession, command: &str) -> Result<Value> {
     }
 }
 
+/// The plugin gives its UI thread 5s for `front` and `back`; leave room for the bridge too.
+const WINDOW_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A warning when the app didn't get the window mode or a window kept the foreground.
 fn window_status_note(status: &Value, requested: WindowMode) -> Option<String> {
     let requested = requested.as_str();
@@ -925,27 +952,34 @@ fn window_status_note(status: &Value, requested: WindowMode) -> Option<String> {
             "the app did not receive {WINDOW_MODE_ENV}={requested}; check the launch command passes the environment through"
         ));
     }
-    let kept: Vec<String> = status
+    let missed: Vec<String> = status
         .get("events")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|event| event.get("restored") != Some(&Value::Bool(true)))
+        // Skipped hand-backs (focus already moved on) carry neither key and are fine.
+        .filter(|event| {
+            event.get("restored") == Some(&Value::Bool(false))
+                || event.get("raised") == Some(&Value::Bool(false))
+        })
         .map(|event| {
-            format!(
-                "`{}`: {}",
-                event.get("window").and_then(Value::as_str).unwrap_or("?"),
-                event
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown reason")
-            )
+            let window = event.get("window").and_then(Value::as_str).unwrap_or("?");
+            let error = event
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown reason");
+            match event.get("trigger").and_then(Value::as_str) {
+                Some(trigger @ ("gate-front" | "gate-back")) => {
+                    format!("`{window}` ({trigger}): {error}")
+                }
+                _ => format!("`{window}`: {error}"),
+            }
         })
         .collect();
-    (!kept.is_empty()).then(|| {
+    (!missed.is_empty()).then(|| {
         format!(
-            "could not give the foreground back from the app's window ({}); it was put behind other windows instead",
-            kept.join("; ")
+            "the app's window did not move as asked ({}); a window left in the foreground was put behind other windows",
+            missed.join("; ")
         )
     })
 }
@@ -2426,6 +2460,20 @@ mod launch_tests {
         assert!(window_status_note(&missed, WindowMode::Background)
             .unwrap()
             .contains("did not receive AUDITAUR_DRILL_WINDOW=background"));
+        let gates = json!({"mode": "background", "events": [
+            {"window": "main", "trigger": "gate-front", "raised": true},
+            {"window": "main", "trigger": "gate-back", "skipped": "focus already moved away"},
+            {"window": "main", "trigger": "gate-back", "restored": true}
+        ]});
+        assert_eq!(window_status_note(&gates, WindowMode::Background), None);
+        let refused = json!({"mode": "background", "events": [
+            {"window": "main", "trigger": "gate-back", "restored": false, "error": "Windows refused to give the foreground back"}
+        ]});
+        let note = window_status_note(&refused, WindowMode::Background).unwrap();
+        assert!(
+            note.contains("`main` (gate-back): Windows refused"),
+            "{note}"
+        );
     }
 
     #[test]
