@@ -90,12 +90,12 @@ Drills drive the app with synthetic events, so it doesn't need the OS focus. By 
 | `AUDITAUR_DRILL_WINDOW` | Environment variable. |
 | `"drillTest": { "window": "foreground" }` | `.auditaur/config.json`. |
 
-- A `gate` step brings the app to the front while it waits, then hands the foreground back.
+- A `gate` step brings the app to the front while it waits, then hands the foreground back, whether the gate passed or timed out. If you answered somewhere else, such as the Drills canvas, focus has already left the app and nothing is handed back.
 - Only the app's startup windows are handed back, once each. A later `set_focus` from the app, or your own click, is left alone.
 - It's best effort: the window can flash briefly before Windows returns the focus. To avoid even that, set `"focus": false` on the app's window config.
 - Don't minimize the app's window: WebView2 stops rendering it.
 - `--window` doesn't apply to `--attach`.
-- `run.json` records the outcome under `app.window`, and the run warns if a window kept the foreground.
+- `run.json` records every hand-back and gate raise under `app.window.status.events` (`trigger`, `restored`, `skipped`, `error`, `unixMs`), and the run warns if one failed. Gate events need 0.4.33.
 
 Windows only for now. On macOS and Linux, background mode is reported as unsupported and the app runs in the foreground. Needs CLI 0.4.32 and `tauri-plugin-auditaur` 0.4.32 or newer. With an older plugin, the default background mode warns and runs in the foreground; an explicit `background` fails.
 

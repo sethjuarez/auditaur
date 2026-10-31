@@ -9,16 +9,18 @@
 //! CLI reports background mode as unsupported.
 //!
 //! The CLI also sends [`WINDOW_ACTION`] drive requests, answered here without reaching the JS
-//! bridge: `status` reports what happened at startup, `front` brings the window forward for a
-//! human gate, and `back` hands the foreground back afterwards.
+//! bridge: `status` reports the window events so far (startup hand-backs and gate raises and
+//! hand-backs), `front` brings the window forward for a human gate, and `back` hands the
+//! foreground back afterwards. Both run on the UI thread, which owns the foreground.
 //!
 //! [`WINDOW_BACKGROUND_CAPABILITY`]: auditaur_core::drive_bridge::WINDOW_BACKGROUND_CAPABILITY
 
 use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex, OnceLock,
+    mpsc, Mutex, OnceLock,
 };
+use std::time::Duration;
 
 use auditaur_core::drive_bridge::{
     DriveBridgeRequest, DriveBridgeResponse, WINDOW_ACTION, WINDOW_MODE_ENV,
@@ -33,7 +35,7 @@ struct ModeState {
     prior: Option<isize>,
     /// Windows already handed back, by label.
     handled: HashSet<String>,
-    /// What happened to each window that took the foreground at startup.
+    /// What happened to windows: startup hand-backs and gate raises and hand-backs.
     events: Vec<Value>,
     /// The foreground window before the last `front`.
     before_front: Option<isize>,
@@ -107,7 +109,39 @@ pub(crate) fn window_activated<R: Runtime>(window: &Window<R>, trigger: &str) {
     } else {
         ::tracing::warn!(window = %label, outcome = %outcome, "Auditaur could not hand the foreground back from the drilled window");
     }
-    with_state(|state| state.events.push(outcome));
+    record(outcome);
+}
+
+/// Keep what happened to a window for `status`, stamped with when it happened.
+fn record(mut event: Value) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    event["unixMs"] = json!(now);
+    with_state(|state| state.events.push(event));
+}
+
+/// How long `front` and `back` wait for the app's UI thread.
+const MAIN_THREAD_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run `f` on the app's UI thread and wait for it. Windows lets only the thread that owns the
+/// foreground give it away, so `SetForegroundWindow` from the poll command's worker is refused.
+/// Never call this from the UI thread itself: it would wait on itself until the timeout.
+fn on_main_thread<R: Runtime, T: Send + 'static>(
+    app: &AppHandle<R>,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(f());
+    })
+    .map_err(|error| format!("could not reach the app's UI thread: {error}"))?;
+    rx.recv_timeout(MAIN_THREAD_TIMEOUT).map_err(|_| {
+        format!(
+            "the app's UI thread did not answer within {}s",
+            MAIN_THREAD_TIMEOUT.as_secs()
+        )
+    })
 }
 
 /// `Some(prior)` the first time `label` needs handing back in background mode.
@@ -158,25 +192,51 @@ fn handle_command<R: Runtime>(
         })),
         "front" => {
             let window = resolve(app, label)?;
-            let before = platform::foreground().filter(|&hwnd| platform::foreign(hwnd));
-            with_state(|state| state.before_front = before);
-            let _ = window.unminimize();
-            let _ = window.show();
-            window
-                .set_focus()
-                .map_err(|error| format!("could not bring the window to the front: {error}"))?;
-            Ok(json!({ "window": window.label() }))
+            let label = window.label().to_owned();
+            // Stored on the UI thread, so a late run (after a timeout) can still be handed back:
+            // `back` queues behind it.
+            let result = on_main_thread(app, move || {
+                let before = platform::foreground().filter(|&hwnd| platform::foreign(hwnd));
+                with_state(|state| state.before_front = before);
+                let _ = window.unminimize();
+                let _ = window.show();
+                window
+                    .set_focus()
+                    .map_err(|error| format!("could not bring the window to the front: {error}"))
+            })
+            .and_then(|focused| focused);
+            record(json!({
+                "window": label,
+                "trigger": "gate-front",
+                "raised": result.is_ok(),
+                "error": result.as_ref().err(),
+            }));
+            result.map(|()| json!({ "window": label }))
         }
         "back" => {
             let window = resolve(app, label)?;
-            let Some(hwnd) = platform::webview_hwnd(&window) else {
-                return Ok(json!({ "skipped": "not supported on this platform" }));
+            let label = window.label().to_owned();
+            let result = on_main_thread(app, move || {
+                let before = with_state(|state| state.before_front.take());
+                let Some(hwnd) = platform::webview_hwnd(&window) else {
+                    return json!({ "skipped": "not supported on this platform" });
+                };
+                if platform::foreground() != Some(hwnd) {
+                    return json!({
+                        "skipped": "focus already moved away from the app, such as to the Drills canvas"
+                    });
+                }
+                platform::hand_back(hwnd, before)
+            });
+            let mut event = match &result {
+                Ok(outcome) => outcome.clone(),
+                Err(error) => json!({ "restored": false, "error": error }),
             };
-            if platform::foreground() != Some(hwnd) {
-                return Ok(json!({ "skipped": "the app no longer has the foreground" }));
-            }
-            let before = with_state(|state| state.before_front.take());
-            Ok(platform::hand_back(hwnd, before))
+            event["window"] = json!(label);
+            event["trigger"] = json!("gate-back");
+            record(event.clone());
+            // The event, so a failure reaches the CLI through its `error`.
+            result.map(|_| event)
         }
         other => Err(format!(
             "unknown `{WINDOW_ACTION}` command `{other}`; expected status, front, or back"
@@ -310,8 +370,9 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::{claim, handle, ModeState};
+    use super::{claim, handle, record, with_state, ModeState};
     use auditaur_core::drive_bridge::{DriveBridgeRequest, WINDOW_ACTION};
+    use serde_json::json;
 
     #[test]
     fn each_window_is_handed_back_once_and_only_in_background_mode() {
@@ -351,5 +412,16 @@ mod tests {
         let response = handle(&request(WINDOW_ACTION, Some("status"))).unwrap();
         assert_eq!(response.request_id, "r1");
         assert_eq!(response.action, WINDOW_ACTION);
+    }
+
+    #[test]
+    fn recorded_events_are_timestamped() {
+        record(json!({ "window": "recorded", "trigger": "gate-back", "restored": true }));
+        let events = with_state(|state| state.events.clone());
+        let event = events
+            .iter()
+            .find(|event| event["window"] == "recorded")
+            .expect("the event is kept");
+        assert!(event["unixMs"].as_u64().is_some_and(|ms| ms > 0));
     }
 }
