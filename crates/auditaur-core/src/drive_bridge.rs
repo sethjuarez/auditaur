@@ -10,6 +10,13 @@ pub const DRIVE_BRIDGE_RESPONSES_DIR: &str = "responses";
 pub const DRIVE_BRIDGE_STATUS_FILE: &str = "status.json";
 pub const DRIVE_BRIDGE_STALE_FILE_NANOS: i64 = 60_000_000_000;
 pub const DRIVE_BRIDGE_REQUEST_EVENT: &str = "auditaur://drive-bridge/request";
+/// Discovery capability of a plugin that keeps a drilled app's window in the background.
+pub const WINDOW_BACKGROUND_CAPABILITY: &str = "window_background";
+/// App environment variable `auditaur drill test` sets to `background` or `foreground`.
+pub const WINDOW_MODE_ENV: &str = "AUDITAUR_DRILL_WINDOW";
+/// Drive request the plugin answers natively (never reaching the JS bridge); its `value` is
+/// `status`, `front`, or `back`.
+pub const WINDOW_ACTION: &str = "auditaur.window";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

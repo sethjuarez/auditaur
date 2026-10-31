@@ -686,6 +686,11 @@ enum DrillCommand {
         /// Record a screenshot and DOM after each step, for the trace canvas.
         #[arg(long, value_enum, default_value = "off")]
         trace: commands::drills::runner::TraceMode,
+        /// Whether a launched app's windows may take focus: `background` (default) hands the
+        /// foreground back to your window as the app starts; `foreground` leaves it alone.
+        /// Defaults to `AUDITAUR_DRILL_WINDOW`, then `drillTest.window` in the config.
+        #[arg(long, value_enum, conflicts_with = "attach")]
+        window: Option<commands::drills::runner::real::WindowMode>,
         #[arg(long)]
         json: bool,
         /// Launch command; defaults to the config `start` command.
@@ -1172,6 +1177,7 @@ fn inner_main() -> Result<()> {
                 junit,
                 update_snapshots,
                 trace,
+                window,
                 json,
                 command,
             }) => {
@@ -1191,6 +1197,7 @@ fn inner_main() -> Result<()> {
                     timeout_seconds,
                     update_snapshots,
                     trace,
+                    window,
                     max_failures: if exit_first {
                         Some(1)
                     } else {

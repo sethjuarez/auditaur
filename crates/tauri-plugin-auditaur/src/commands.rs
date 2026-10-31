@@ -76,7 +76,12 @@ pub async fn poll_drive_bridge_request(
     window_label: Option<String>,
 ) -> Result<Option<auditaur_core::drive_bridge::DriveBridgeRequest>, AuditaurError> {
     let request = state.poll_drive_bridge_request(window_label.clone())?;
+    if let Some(response) = request.as_ref().and_then(crate::window_mode::handle) {
+        state.complete_drive_bridge_request(response)?;
+        return Ok(None);
+    }
     if request.is_some() {
+        crate::window_mode::started();
         // Before the first action, make the page behave as focused (see `focus`).
         let _ = tauri::async_runtime::spawn_blocking(move || {
             crate::focus::emulate_for_drive(window_label.as_deref())

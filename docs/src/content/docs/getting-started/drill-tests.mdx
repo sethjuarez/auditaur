@@ -70,6 +70,7 @@ In the test file, `"only": true` focuses tests, and `skip` and `fixme` (each tak
 | `-x`, `--max-failures <n>` | Stop starting new tests after N failures. Cleanup still runs. |
 | `-u, --update-snapshots[=mode]` | `none`, `missing` (default), `changed` (bare `-u`), or `all`. The value needs `=`. |
 | `--trace <mode>` | `off` (default), `on`, or `on-first-retry`. Captures a screenshot and DOM snapshot after every step. |
+| `--window <mode>` | `background` (default) or `foreground`. See [Window focus](#window-focus). |
 | `--require-frontend` | Treat a launched app as ready only once its frontend reports telemetry. |
 | `--timeout-seconds <n>` | Seconds to wait for a launched app to be ready (default 180). |
 | `--junit <file>` | Also write JUnit XML for CI. |
@@ -78,6 +79,25 @@ In the test file, `"only": true` focuses tests, and `skip` and `fixme` (each tak
 Ctrl+C stops the current test, still runs cleanup, and exits `130`. A second Ctrl+C exits immediately.
 
 Exit codes: `0` all passed (flaky tests count as passed), `1` a test failed or did not run, `2` invalid drill files, `130` interrupted.
+
+### Window focus
+
+Drills drive the app with synthetic events, so it doesn't need the OS focus. By default a launched app runs in the **background**: when its window first takes the foreground, Auditaur hands it back to the window you were using and puts the app's window just behind it. The app stays visible, rendering, and capturable.
+
+| Setting | Where |
+| --- | --- |
+| `--window background\|foreground` | Flag; wins over the others. |
+| `AUDITAUR_DRILL_WINDOW` | Environment variable. |
+| `"drillTest": { "window": "foreground" }` | `.auditaur/config.json`. |
+
+- A `gate` step brings the app to the front while it waits, then hands the foreground back.
+- Only the app's startup windows are handed back, once each. A later `set_focus` from the app, or your own click, is left alone.
+- It's best effort: the window can flash briefly before Windows returns the focus. To avoid even that, set `"focus": false` on the app's window config.
+- Don't minimize the app's window: WebView2 stops rendering it.
+- `--window` doesn't apply to `--attach`.
+- `run.json` records the outcome under `app.window`, and the run warns if a window kept the foreground.
+
+Windows only for now. On macOS and Linux, background mode is reported as unsupported and the app runs in the foreground. Needs CLI 0.4.32 and `tauri-plugin-auditaur` 0.4.32 or newer. With an older plugin, the default background mode warns and runs in the foreground; an explicit `background` fails.
 
 ## Steps
 
@@ -189,7 +209,7 @@ A `gate` step pauses the test until a person acts. It takes the same object as a
     ] } }
 ```
 
-Custom `choices` replace the default Continue, so include one with `"outcome": "continue"` or the test can't proceed. Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait is off the test clock, as with Playwright's `page.pause()`: the gate's own `timeoutMs` (default 5 minutes) or a step `timeoutMs` bounds it, and the test's remaining budget is unchanged when it resumes.
+Custom `choices` replace the default Continue, so include one with `"outcome": "continue"` or the test can't proceed. In background [window mode](#window-focus), the app comes to the front while the gate waits. Answer it from the Progress page of the `auditaur-drills` canvas, the `respond_human_gate` MCP tool, or a response file; `drill test` never reads the terminal. A `skip` answer ends the test as skipped (in `beforeAll`, every test in the suite), `retry` keeps waiting, and `abort` fails it. The wait is off the test clock, as with Playwright's `page.pause()`: the gate's own `timeoutMs` (default 5 minutes) or a step `timeoutMs` bounds it, and the test's remaining budget is unchanged when it resumes.
 
 ### Native dialogs
 

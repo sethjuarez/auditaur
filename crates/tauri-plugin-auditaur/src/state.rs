@@ -23,7 +23,7 @@ use auditaur_core::{
         DriveBridgeRequest, DriveBridgeResponse, DriveBridgeStatus, DRIVE_BRIDGE_CAPABILITY,
         DRIVE_BRIDGE_DIR, DRIVE_BRIDGE_IN_FLIGHT_DIR, DRIVE_BRIDGE_PROTOCOL_VERSION,
         DRIVE_BRIDGE_REQUESTS_DIR, DRIVE_BRIDGE_RESPONSES_DIR, DRIVE_BRIDGE_STALE_FILE_NANOS,
-        DRIVE_BRIDGE_STATUS_FILE,
+        DRIVE_BRIDGE_STATUS_FILE, WINDOW_BACKGROUND_CAPABILITY,
     },
     model::{FrontendError, LogRecord, Session, TelemetrySource},
     AuditaurConfig,
@@ -160,15 +160,19 @@ impl AuditaurState {
             pid,
             started_at,
             database_path: database_path.to_string_lossy().to_string(),
-            capabilities: vec![
-                "logs".to_string(),
-                "traces".to_string(),
-                "frontend_errors".to_string(),
-                "ipc".to_string(),
-                "events".to_string(),
-                "windows".to_string(),
-                DRIVE_BRIDGE_CAPABILITY.to_string(),
-            ],
+            capabilities: [
+                "logs",
+                "traces",
+                "frontend_errors",
+                "ipc",
+                "events",
+                "windows",
+                DRIVE_BRIDGE_CAPABILITY,
+            ]
+            .into_iter()
+            .chain(crate::window_mode::supported().then_some(WINDOW_BACKGROUND_CAPABILITY))
+            .map(str::to_string)
+            .collect(),
             last_heartbeat_at: now_rfc3339()?,
         };
         write_discovery(&discovery_path, &discovery)?;
