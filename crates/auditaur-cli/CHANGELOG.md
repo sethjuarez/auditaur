@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.31](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.30...auditaur-cli-v0.4.31) - 2026-10-31
+
+### Added
+
+- *(drill)* expand ${NAME} in fill, type, and paste values ([#183](https://github.com/sethjuarez/auditaur/pull/183))
+
 ## [0.4.30](https://github.com/sethjuarez/auditaur/compare/auditaur-cli-v0.4.29...auditaur-cli-v0.4.30) - 2026-10-30
 
 ### Added
